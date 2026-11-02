@@ -1,0 +1,154 @@
+name: Release
+
+# Tag-triggered only (GitHub Free plan: 2,000 private minutes/month, macOS ×10 → the macOS job runs last, once
+# Linux and Windows succeeded). Unsigned installers in v1. Uploads to Beacon's bucket (contract §7.1):
+#   time-track-clients/desktop/<version>/<file>, then time-track-clients/desktop/channel/stable.json LAST.
+# Steps whose secrets are missing are skipped with a notice.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BEACON_URL: ${{ vars.BEACON_URL }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.flags.outputs.version }}
+      updater: ${{ steps.flags.outputs.updater }}
+      s3: ${{ steps.flags.outputs.s3 }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: flags
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
+          TIME_TRACK_S3_ENDPOINT: ${{ secrets.TIME_TRACK_S3_ENDPOINT }}
+          TIME_TRACK_S3_BUCKET: ${{ secrets.TIME_TRACK_S3_BUCKET }}
+          TIME_TRACK_S3_ACCESS_KEY_ID: ${{ secrets.TIME_TRACK_S3_ACCESS_KEY_ID }}
+          TIME_TRACK_S3_SECRET_ACCESS_KEY: ${{ secrets.TIME_TRACK_S3_SECRET_ACCESS_KEY }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != package.json $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          have() { for v in "$@"; do [ -n "${!v}" ] || return 1; done; }
+          flag() { if have "${@:3}"; then echo "$1=true" >> "$GITHUB_OUTPUT"; else echo "$1=false" >> "$GITHUB_OUTPUT"; echo "::notice title=Skipped::$2 (missing: ${*:3})"; fi; }
+          flag updater "Updater artifacts not signed: installers only, no auto-update for this release" TAURI_SIGNING_PRIVATE_KEY TAURI_UPDATER_PUBKEY
+          flag s3 "S3 upload skipped: bundles stay as workflow artifacts" TIME_TRACK_S3_ENDPOINT TIME_TRACK_S3_BUCKET TIME_TRACK_S3_ACCESS_KEY_ID TIME_TRACK_S3_SECRET_ACCESS_KEY
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-22.04
+            args: --bundles deb,appimage
+            bundle: src-tauri/target/release/bundle
+          - os: windows
+            runner: windows-latest
+            args: --bundles msi,nsis
+            bundle: src-tauri/target/release/bundle
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps: &build-steps
+      - uses: actions/checkout@v7
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
+            libssl-dev libxss-dev libx11-dev libdbus-1-dev patchelf
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      # Runner's rustup, no third-party toolchain action and no shared cache in the job that holds the signing key.
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          if [ "$RUNNER_OS" = macOS ]; then rustup target add aarch64-apple-darwin x86_64-apple-darwin; fi
+      - run: pnpm install --frozen-lockfile
+      - name: Release config (updater signing only when the key exists)
+        shell: bash
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
+        run: |
+          if [ "${{ needs.prepare.outputs.updater }}" = true ]; then
+            node -e 'console.log(JSON.stringify({bundle:{createUpdaterArtifacts:true},plugins:{updater:{pubkey:process.env.TAURI_UPDATER_PUBKEY,requireSignedVersion:true}}}))' > "$RUNNER_TEMP/tauri.release.json"
+          else
+            echo '{"bundle":{"createUpdaterArtifacts":false}}' > "$RUNNER_TEMP/tauri.release.json"
+          fi
+      - name: Build
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build ${{ matrix.args }} --config "$RUNNER_TEMP/tauri.release.json"
+      - name: Collect bundles and stable.json entries
+        shell: bash
+        run: scripts/release/collect-desktop.sh ${{ matrix.os }} "${{ needs.prepare.outputs.version }}" out "${{ matrix.bundle }}" "${{ needs.prepare.outputs.updater }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.os }}
+          path: out/
+          retention-days: 30
+
+  # Last: macOS minutes count ×10, so it only runs after Linux and Windows succeeded.
+  build-macos:
+    needs: [prepare, build]
+    strategy:
+      matrix:
+        include:
+          - os: darwin
+            runner: macos-latest
+            args: --target universal-apple-darwin --bundles app,dmg
+            bundle: src-tauri/target/universal-apple-darwin/release/bundle
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps: *build-steps
+
+  publish:
+    needs: [prepare, build, build-macos]
+    runs-on: ubuntu-latest
+    env:
+      TIME_TRACK_S3_ENDPOINT: ${{ secrets.TIME_TRACK_S3_ENDPOINT }}
+      TIME_TRACK_S3_BUCKET: ${{ secrets.TIME_TRACK_S3_BUCKET }}
+      TIME_TRACK_S3_ACCESS_KEY_ID: ${{ secrets.TIME_TRACK_S3_ACCESS_KEY_ID }}
+      TIME_TRACK_S3_SECRET_ACCESS_KEY: ${{ secrets.TIME_TRACK_S3_SECRET_ACCESS_KEY }}
+      TIME_TRACK_S3_REGION: ${{ secrets.TIME_TRACK_S3_REGION }}
+      MIN_SUPPORTED_VERSION: ${{ vars.TIME_TRACK_MIN_SUPPORTED_VERSION }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-*
+          path: out
+          merge-multiple: true
+      - name: stable.json
+        run: |
+          node scripts/release/channel.mjs stable --version "${{ needs.prepare.outputs.version }}" --changelog CHANGELOG.md \
+            ${MIN_SUPPORTED_VERSION:+--min "$MIN_SUPPORTED_VERSION"} out/*.jsonl > stable.json
+          cat stable.json
+      - name: Upload to Beacon's bucket (files first, stable.json last)
+        if: needs.prepare.outputs.s3 == 'true'
+        run: |
+          for key in $(node -e 'for (const f of require("./stable.json").files) console.log(f.key)' | sort -u); do
+            scripts/release/s3-put.sh "out/$(basename "$key")" "$key"
+          done
+          scripts/release/s3-put.sh stable.json time-track-clients/desktop/channel/stable.json application/json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-stable-json
+          path: stable.json

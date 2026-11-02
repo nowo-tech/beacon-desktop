@@ -1,0 +1,15 @@
+name: Feature request
+description: Suggest an improvement.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What do you need and why?
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Does it collect or send any new data?
+      description: The apps never monitor activity (RGPD / LOPDGDD arts. 87–91, art. 34.9 ET). New data needs an opt-in with dated consent.
