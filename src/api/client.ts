@@ -167,7 +167,12 @@ export class TimeTrackApi {
 
   async me(): Promise<Me> {
     const data = await this.json<Me>('me');
-    return { ...data, scopes: data.scopes ?? [], workingHours: data.workingHours ?? null };
+    return {
+      ...data,
+      scopes: data.scopes ?? [],
+      workingHours: data.workingHours ?? null,
+      minSupportedVersion: typeof data.minSupportedVersion === 'string' ? data.minSupportedVersion : null,
+    };
   }
 
   async tasks(query: TaskQuery = {}): Promise<Task[]> {

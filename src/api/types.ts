@@ -41,6 +41,8 @@ export interface Me {
   displayName?: string | null;
   scopes: Scope[];
   workingHours?: WorkingHours | null;
+  /** Oldest client version the server still supports for this client type (TimeTrack 1.9.1+; absent before). */
+  minSupportedVersion?: string | null;
 }
 
 export interface Task {

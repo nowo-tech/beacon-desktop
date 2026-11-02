@@ -7,7 +7,8 @@ import { IdleMonitor, clampPeriod } from '../../src/lib/idle';
 import { createTranslator } from '../../src/lib/i18n';
 import { OfflineQueue } from '../../src/lib/queue';
 import { emptyState, hasConsent, loadLocal, recordConsent, saveLocal } from '../../src/lib/settings';
-import { compareVersions, updateRequired } from '../../src/lib/version';
+import { compareVersions, isVersion, updateRequired } from '../../src/lib/version';
+import { appsPage, safeVerificationUri } from '../../src/lib/urls';
 import { withinWorkingHours } from '../../src/lib/workingHours';
 import { nodeFetch, startMock } from './helpers';
 
@@ -53,6 +54,34 @@ describe('version', () => {
     expect(updateRequired('0.2.0', '0.2.0')).toBe(false);
     expect(updateRequired('0.1.0', null)).toBe(false);
     expect(updateRequired('0.1.0', '')).toBe(false);
+    expect([isVersion('1.2.3'), isVersion('1.2.3-rc.1'), isVersion('1.2'), isVersion(null), isVersion('9.9.9; rm')]).toEqual([true, true, false, false, false]);
+  });
+});
+
+describe('verification URI (same host only)', () => {
+  const server = 'https://beacon.example.com';
+  it('accepts https on the server host', () => {
+    expect(safeVerificationUri('https://beacon.example.com/account/time-apps/connect?code=BCDF-GHJK', server)).toBe(
+      'https://beacon.example.com/account/time-apps/connect?code=BCDF-GHJK',
+    );
+    expect(safeVerificationUri('http://127.0.0.1:8787/device', 'http://127.0.0.1:8787')).toBe('http://127.0.0.1:8787/device');
+  });
+  it('rejects other hosts, http, credentials, other schemes and garbage', () => {
+    for (const uri of [
+      'https://beacon.example.com.evil.net/device',
+      'https://evil.example.com/device',
+      'http://beacon.example.com/device',
+      'https://u:p@beacon.example.com/device',
+      'javascript:alert(1)',
+      'file:///etc/passwd',
+      'https://beacon.example.com:8443/device',
+      'not a url',
+      '',
+      undefined,
+    ]) {
+      expect(safeVerificationUri(uri, server)).toBeNull();
+    }
+    expect(appsPage('https://beacon.example.com/')).toBe('https://beacon.example.com/dashboard/tasks/time/apps');
   });
 });
 

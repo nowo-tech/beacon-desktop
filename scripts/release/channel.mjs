@@ -48,6 +48,23 @@ export function channelKey(app) {
   return `${PREFIX}/${app}/channel/stable.json`;
 }
 
+/** Compares MAJOR.MINOR.PATCH[-pre] versions (pre-release sorts first). */
+export function compareVersions(a, b) {
+  const parse = (v) => {
+    const [core, pre] = v.split('-', 2);
+    return { parts: core.split('.').map(Number), pre: pre ?? null };
+  };
+  const x = parse(a);
+  const y = parse(b);
+  for (let i = 0; i < 3; i++) {
+    if (x.parts[i] !== y.parts[i]) return x.parts[i] > y.parts[i] ? 1 : -1;
+  }
+  if (x.pre === y.pre) return 0;
+  if (x.pre === null) return 1;
+  if (y.pre === null) return -1;
+  return x.pre < y.pre ? -1 : 1;
+}
+
 export function sha256(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
 }
@@ -105,7 +122,12 @@ export function buildStable({ version, notes = '', pubDate = new Date(), minSupp
   }
   const stable = { version, pub_date: pubDate.toISOString().replace(/\.\d{3}Z$/, 'Z'), notes };
   if (minSupportedVersion !== undefined && minSupportedVersion !== '') {
-    stable.min_supported_version = assertVersion(minSupportedVersion);
+    assertVersion(minSupportedVersion);
+    // A minimum above the version being published would block every client with no update to install.
+    if (compareVersions(minSupportedVersion, version) > 0) {
+      throw new Error(`min_supported_version ${minSupportedVersion} is above the published version ${version}`);
+    }
+    stable.min_supported_version = minSupportedVersion;
   }
   stable.files = files;
   return stable;

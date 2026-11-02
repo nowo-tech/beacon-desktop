@@ -55,6 +55,10 @@ function freshState() {
       latencyMs: 0,
       // Beacon updater answer: null = 204 (up to date), else {version, notes, pub_date, url, signature, min_supported_version?}.
       update: null,
+      // Oldest supported client version: `minSupportedVersion` on GET me, `X-Min-Supported-Version` on the updater.
+      minSupportedVersion: null,
+      // Overrides the verification URI returned by device/code (tests of the desktop's same-host check).
+      verificationUri: null,
     },
   };
 }
@@ -90,7 +94,7 @@ export function createMockServer(options = {}) {
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Expose-Headers', 'Retry-After, Content-Disposition');
+      res.setHeader('Access-Control-Expose-Headers', 'Retry-After, Content-Disposition, X-Min-Supported-Version');
       res.setHeader('Access-Control-Max-Age', '600');
     }
   }
@@ -215,6 +219,7 @@ export function createMockServer(options = {}) {
           displayName: user.displayName,
           scopes: session.scopes,
           workingHours: state.config.workingHours,
+          ...(state.config.minSupportedVersion ? { minSupportedVersion: state.config.minSupportedVersion } : {}),
         });
       }
       case 'GET tasks': {
@@ -340,8 +345,8 @@ export function createMockServer(options = {}) {
           userCode: shown,
           expiresIn: 600,
           interval: state.config.deviceInterval,
-          verificationUri: `http://${host}/device`,
-          verificationUriComplete: `http://${host}/device?code=${shown}`,
+          verificationUri: state.config.verificationUri ?? `http://${host}/device`,
+          verificationUriComplete: `${state.config.verificationUri ?? `http://${host}/device`}?code=${shown}`,
         });
       }
       case 'POST device/token': {
@@ -372,10 +377,11 @@ export function createMockServer(options = {}) {
         if (match) {
           if (!auth(req, res)) return;
           const update = state.config.update;
+          const min = state.config.minSupportedVersion ? { 'X-Min-Supported-Version': state.config.minSupportedVersion } : {};
           if (!update || update.version === match[3]) {
-            return send(res, 204);
+            return send(res, 204, undefined, min);
           }
-          return send(res, 200, update);
+          return send(res, 200, update, min);
         }
         return error(res, 404, 'not_found', 'Unknown endpoint.');
       }

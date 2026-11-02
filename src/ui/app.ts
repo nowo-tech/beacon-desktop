@@ -6,7 +6,8 @@ import { IdleMonitor, clampPeriod, type IdlePeriod } from '../lib/idle';
 import { OfflineQueue } from '../lib/queue';
 import { type Feature, type LocalState, hasConsent, loadLocal, recordConsent, saveLocal } from '../lib/settings';
 import { elapsedSeconds, formatElapsed } from '../lib/time';
-import { updateRequired } from '../lib/version';
+import { appsPage, safeVerificationUri } from '../lib/urls';
+import { compareVersions, isVersion, updateRequired } from '../lib/version';
 import { withinWorkingHours } from '../lib/workingHours';
 import type { Platform } from '../platform';
 import { h } from './dom';
@@ -47,7 +48,14 @@ export class DesktopApp {
   me: Me | null = null;
   device: DeviceCode | null = null;
   idle: IdlePeriod | null = null;
-  update: { version: string; min?: string | null } | null = null;
+  update: { version: string; min: string | null; installable: boolean } | null = null;
+  /** Non-blocking update message (no automatic update possible, or it failed): shown with a Beacon download link. */
+  updateMessage: string | null = null;
+  /** "Remind me later" on the update-required screen: hidden until the next launch. */
+  updateDismissed = false;
+  /** Verification URI that failed the same-host check: shown as text, never opened. */
+  deviceUntrusted: string | null = null;
+  private deviceUrl: string | null = null;
   error: string | null = null;
   notice: string | null = null;
   offline = false;
@@ -136,9 +144,12 @@ export class DesktopApp {
           sleep: this.deps.sleep,
           signal: this.abort?.signal,
           onCode: async (code) => {
+            const uri = code.verificationUriComplete ?? code.verificationUri;
             this.device = code;
+            this.deviceUrl = safeVerificationUri(uri, normalized);
+            this.deviceUntrusted = this.deviceUrl === null ? uri : null;
             this.show('device');
-            await this.platform.openUrl(code.verificationUriComplete ?? code.verificationUri);
+            if (this.deviceUrl !== null) await this.platform.openUrl(this.deviceUrl);
           },
         });
         await this.platform.secretSet(login.token);
@@ -308,19 +319,58 @@ export class DesktopApp {
       await this.signedOut(this.t('sessionExpired'));
       return;
     }
-    if (result.status !== 'available') return;
-    this.update = { version: result.version, min: result.min_supported_version };
-    if (updateRequired(this.version, result.min_supported_version)) {
+    if (result.status === 'error') return;
+    // Validate the server's minimum before ever blocking (audit CN D1).
+    const min = isVersion(result.min_supported_version) ? result.min_supported_version : null;
+    const below = min !== null && updateRequired(this.version, min);
+    if (result.status === 'up_to_date') {
+      this.update = null;
+      this.updateMessage = below ? this.t('updateUnavailable', { min }) : null;
+      this.render();
+      return;
+    }
+    const installable = result.installable !== false && isVersion(result.version);
+    this.update = { version: result.version, min, installable };
+    const satisfiable = below && isVersion(result.version) && compareVersions(min, result.version) <= 0;
+    this.updateMessage = !installable
+      ? this.t('updateManual', { version: result.version })
+      : below && !satisfiable
+        ? this.t('updateUnavailable', { min })
+        : null;
+    if (below && satisfiable && installable && !this.updateDismissed) {
       this.show('update-required');
     } else {
+      if (this.view === 'update-required') this.view = 'main';
       this.render();
     }
   }
 
+  /** Never traps the user: a failed download / verification becomes a non-blocking message with a Beacon link. */
   async installUpdate(): Promise<void> {
     const session = this.state.session;
     if (session === null || this.token === null) return;
-    await this.guard(() => this.platform.installUpdate(session.server, this.token ?? ''));
+    this.busy = true;
+    this.render();
+    try {
+      await this.platform.installUpdate(session.server, this.token);
+    } catch (error) {
+      this.updateDismissed = true;
+      this.updateMessage = this.t('updateFailed', { message: error instanceof Error ? error.message : String(error) });
+      this.view = 'main';
+    } finally {
+      this.busy = false;
+      this.render();
+    }
+  }
+
+  remindLater(): void {
+    this.updateDismissed = true;
+    this.show('main');
+  }
+
+  openApps(): void {
+    const session = this.state.session;
+    if (session !== null) void this.platform.openUrl(appsPage(session.server));
   }
 
   // ---- settings ---------------------------------------------------------------------------------------------------
@@ -433,14 +483,16 @@ export class DesktopApp {
   private renderDevice(): HTMLElement {
     const t = this.t;
     const code = this.device;
-    const uri = code?.verificationUriComplete ?? code?.verificationUri ?? '';
+    const safe = this.deviceUrl;
     return h(
       'main',
       { id: 'device' },
       h('h2', {}, t('deviceTitle')),
       h('p', { class: 'user-code', id: 'user-code' }, code?.userCode ?? ''),
-      h('p', { class: 'help' }, t('deviceHelp', { uri: code?.verificationUri ?? '' })),
-      h('button', { class: 'link', id: 'open-again', on: { click: () => void this.platform.openUrl(uri) } }, t('openAgain')),
+      safe !== null
+        ? h('p', { class: 'help' }, t('deviceHelp', { uri: code?.verificationUri ?? '' }))
+        : h('p', { class: 'error', id: 'device-untrusted' }, t('deviceUntrusted'), ' ', h('code', {}, this.deviceUntrusted ?? '')),
+      safe !== null && h('button', { class: 'link', id: 'open-again', on: { click: () => void this.platform.openUrl(safe) } }, t('openAgain')),
       h('p', { class: 'muted' }, t('waiting')),
       h('button', { class: 'danger', id: 'cancel-device', on: { click: () => this.cancelDevice() } }, t('cancel')),
     );
@@ -492,11 +544,20 @@ export class DesktopApp {
       'main',
       {},
       update !== null &&
+        update.installable &&
+        this.updateMessage === null &&
         h(
           'section',
           { class: 'card update', id: 'update' },
           h('span', {}, t('updateAvailable', { version: update.version })),
           h('button', { class: 'primary small', id: 'install-update', on: { click: () => void this.installUpdate() } }, t('installUpdate')),
+        ),
+      this.updateMessage !== null &&
+        h(
+          'section',
+          { class: 'card update', id: 'update-message' },
+          h('span', {}, this.updateMessage),
+          h('button', { class: 'secondary small', id: 'download-beacon', on: { click: () => this.openApps() } }, t('downloadFromBeacon')),
         ),
       this.idle !== null && this.renderIdle(this.idle),
       card,
@@ -587,6 +648,9 @@ export class DesktopApp {
       h('h2', {}, t('updateRequiredTitle')),
       h('p', {}, t('updateRequiredText', { current: this.version, min: this.update?.min ?? '' })),
       h('button', { class: 'primary', id: 'install-required', attrs: { disabled: this.busy }, on: { click: () => void this.installUpdate() } }, t('installUpdate')),
+      h('button', { class: 'secondary', id: 'download-required', on: { click: () => this.openApps() } }, t('downloadFromBeacon')),
+      h('button', { class: 'link', id: 'remind-later', on: { click: () => this.remindLater() } }, t('updateLater')),
+      h('button', { class: 'danger', id: 'logout-required', on: { click: () => void this.logout() } }, t('logout')),
     );
   }
 }

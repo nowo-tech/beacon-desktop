@@ -11,7 +11,8 @@ import type { Platform, UpdateCheck } from './platform';
 export function tauriPlatform(): Platform {
   return {
     kind: 'tauri',
-    fetch: tauriFetch as typeof fetch,
+    // No redirects: the Bearer token stays bound to the configured server (audit CN D8).
+    fetch: ((input: RequestInfo | URL, init?: RequestInit) => tauriFetch(input, { ...init, maxRedirections: 0 })) as typeof fetch,
     appVersion: () => getVersion(),
     hostName: async () => (navigator.platform.toLowerCase().includes('mac') ? 'Mac' : navigator.platform.toLowerCase().includes('win') ? 'Windows PC' : 'Linux PC'),
     secretGet: () => invoke<string | null>('secret_get'),

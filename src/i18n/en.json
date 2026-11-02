@@ -62,5 +62,11 @@
   "errorInvalidUrl": "Enter a valid server URL.",
   "errorTaskForbidden": "You cannot track time on this task.",
   "errorTimerRunning": "A timer is already running.",
-  "errorScope": "This connection is not allowed to do that."
+  "errorScope": "This connection is not allowed to do that.",
+  "updateLater": "Remind me later",
+  "downloadFromBeacon": "Download from Beacon",
+  "updateFailed": "The automatic update failed: {message}. Download the new version from Beacon.",
+  "updateUnavailable": "Your server asks for version {min} or later, but no compatible update is offered automatically. Download it from Beacon.",
+  "updateManual": "Automatic updates are not available in this build. Download version {version} from Beacon.",
+  "deviceUntrusted": "The server sent a sign-in address on another site, so it was not opened. Open it yourself only if you trust it:"
 }

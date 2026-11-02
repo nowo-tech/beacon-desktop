@@ -208,7 +208,7 @@ describe('desktop app', () => {
     expect(ui.platform.hooks.notifications).toHaveLength(0);
   });
 
-  it('handles updates: 204, available, required (blocking), 401 = sign in again', async () => {
+  it('handles updates: 204, available, 401 = sign in again', async () => {
     const ui = await signedIn();
     await ui.app.checkUpdates();
     expect(ui.app.update).toBeNull();
@@ -217,11 +217,6 @@ describe('desktop app', () => {
     expect(ui.$('#update').textContent).toContain('Version 0.2.0 is available.');
     ui.click('#install-update');
     await tick();
-    await env.control('config', { update: { version: '0.3.0', notes: '', pub_date: '', url: 'u', signature: 's', min_supported_version: '0.2.0' } });
-    await ui.app.checkUpdates();
-    expect(ui.app.view).toBe('update-required');
-    expect(ui.$('#update-required').textContent).toContain('Version 0.2.0 or later is required.');
-    await ui.app.installUpdate();
     await env.control('config', { failNext: { status: 500, error: 'x' } });
     await ui.app.checkUpdates();
     await env.control('token/revoke', {});
@@ -231,6 +226,84 @@ describe('desktop app', () => {
     expect(await ui.platform.secretGet()).toBeNull();
     await ui.app.checkUpdates();
     await ui.app.installUpdate();
+  });
+
+  it('update required never traps: remind later, download from Beacon, sign out', async () => {
+    const ui = await signedIn();
+    await env.control('config', { minSupportedVersion: '0.2.0', update: { version: '0.3.0', notes: '', pub_date: '', url: 'u', signature: 's' } });
+    await ui.app.checkUpdates();
+    expect(ui.app.view).toBe('update-required');
+    expect(ui.$('#update-required').textContent).toContain('Version 0.2.0 or later is required.');
+    ui.click('#download-required');
+    expect(ui.platform.hooks.opened.at(-1)).toBe(`${env.url}/dashboard/tasks/time/apps`);
+    ui.click('#remind-later');
+    expect(ui.app.view).toBe('main');
+    await ui.app.checkUpdates();
+    expect(ui.app.view).toBe('main');
+    ui.app.updateDismissed = false;
+    await ui.app.checkUpdates();
+    ui.click('#logout-required');
+    await tick();
+    expect(ui.app.view).toBe('login');
+  });
+
+  it('a failed download or verification is non-blocking with a Beacon link', async () => {
+    const ui = await signedIn();
+    await env.control('config', { update: { version: '0.3.0', notes: '', pub_date: '', url: 'u', signature: 's', min_supported_version: '0.2.0' } });
+    await ui.app.checkUpdates();
+    expect(ui.app.view).toBe('update-required');
+    ui.platform.hooks.installError = 'signature verification failed';
+    ui.click('#install-required');
+    await tick();
+    expect(ui.app.view).toBe('main');
+    expect(ui.$('#update-message').textContent).toContain('The automatic update failed: signature verification failed.');
+    ui.click('#download-beacon');
+    expect(ui.platform.hooks.opened.at(-1)).toBe(`${env.url}/dashboard/tasks/time/apps`);
+    await ui.app.checkUpdates();
+    expect(ui.app.view).toBe('main');
+  });
+
+  it('does not block on an unsatisfiable, invalid or uninstallable minimum', async () => {
+    const ui = await signedIn();
+    // Minimum above the version the channel offers.
+    await env.control('config', { update: { version: '0.3.0', notes: '', pub_date: '', url: 'u', signature: 's', min_supported_version: '0.9.0' } });
+    await ui.app.checkUpdates();
+    expect(ui.app.view).toBe('main');
+    expect(ui.$('#update-message').textContent).toContain('version 0.9.0 or later');
+    // 204 with X-Min-Supported-Version above the running version: nothing to install.
+    await env.control('config', { update: null, minSupportedVersion: '0.5.0' });
+    await ui.app.checkUpdates();
+    expect(ui.app.view).toBe('main');
+    expect(ui.$('#update-message').textContent).toContain('version 0.5.0 or later');
+    // Invalid minimum is ignored.
+    await env.control('config', { minSupportedVersion: null, update: { version: '0.3.0', notes: '', pub_date: '', url: 'u', signature: 's', min_supported_version: 'latest' } });
+    await ui.app.checkUpdates();
+    expect(ui.app.view).toBe('main');
+    expect(ui.$('#update')).not.toBeNull();
+    // Build without the updater public key.
+    ui.platform.hooks.installable = false;
+    await env.control('config', { update: { version: '0.3.0', notes: '', pub_date: '', url: 'u', signature: 's', min_supported_version: '0.2.0' } });
+    await ui.app.checkUpdates();
+    expect(ui.app.view).toBe('main');
+    expect(ui.$('#update-message').textContent).toContain('Automatic updates are not available in this build. Download version 0.3.0');
+    // Up to date again clears the message.
+    await env.control('config', { update: null, minSupportedVersion: null });
+    await ui.app.checkUpdates();
+    expect(ui.$('#update-message')).toBeNull();
+  });
+
+  it('opens the verification page only on the server host; shows other hosts as text', async () => {
+    await env.control('config', { verificationUri: 'https://evil.example.com/device' });
+    const ui = mount();
+    await ui.app.init();
+    const done = ui.app.connect(env.url);
+    await tick();
+    expect(ui.platform.hooks.opened).toEqual([]);
+    expect(ui.$('#open-again')).toBeNull();
+    expect(ui.$('#device-untrusted').textContent).toContain('https://evil.example.com/device?code=');
+    await env.control('device/approve', { userCode: ui.$('#user-code').textContent });
+    await done;
+    expect(ui.app.view).toBe('main');
   });
 
   it('resumes a stored session, signs out on 401 and shows settings, privacy and Spanish', async () => {

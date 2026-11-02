@@ -62,5 +62,11 @@
   "errorInvalidUrl": "Introduce una URL de servidor válida.",
   "errorTaskForbidden": "No puedes registrar tiempo en esta tarea.",
   "errorTimerRunning": "Ya hay un temporizador en marcha.",
-  "errorScope": "Esta conexión no tiene permiso para hacer eso."
+  "errorScope": "Esta conexión no tiene permiso para hacer eso.",
+  "updateLater": "Recordármelo más tarde",
+  "downloadFromBeacon": "Descargar desde Beacon",
+  "updateFailed": "La actualización automática ha fallado: {message}. Descarga la nueva versión desde Beacon.",
+  "updateUnavailable": "Tu servidor pide la versión {min} o posterior, pero no se ofrece ninguna actualización automática compatible. Descárgala desde Beacon.",
+  "updateManual": "Esta compilación no admite actualizaciones automáticas. Descarga la versión {version} desde Beacon.",
+  "deviceUntrusted": "El servidor ha enviado una dirección de inicio de sesión de otro sitio, así que no se ha abierto. Ábrela tú solo si confías en ella:"
 }

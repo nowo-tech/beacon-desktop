@@ -3,9 +3,16 @@
  * in a plain browser (development, e2e) by the in-memory fallback below.
  */
 export type UpdateCheck =
-  | { status: 'up_to_date' }
+  | { status: 'up_to_date'; min_supported_version?: string | null }
   | { status: 'unauthorized' }
-  | { status: 'available'; version: string; notes?: string | null; min_supported_version?: string | null }
+  | {
+      status: 'available';
+      version: string;
+      notes?: string | null;
+      min_supported_version?: string | null;
+      /** False when the build has no updater public key (cannot verify, so never block). */
+      installable?: boolean;
+    }
   | { status: 'error'; message: string };
 
 export interface Platform {
@@ -35,6 +42,8 @@ export interface BrowserHooks {
   opened: string[];
   notifications: string[];
   tray: { text: string; running: boolean };
+  installable: boolean;
+  installError: string | null;
   emit(event: 'tray-stop' | 'shortcut'): void;
 }
 
@@ -47,6 +56,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     opened: [],
     notifications: [],
     tray: { text: '', running: false },
+    installable: true,
+    installError: null,
     emit: (event) => (handlers[event] ?? []).forEach((handler) => handler()),
   };
   return {
@@ -68,12 +79,16 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
       const response = await fetchImpl(`${server}/api/time-track/updates/desktop/linux/x86_64/${version}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (response.status === 204) return { status: 'up_to_date' };
+      const headerMin = response.headers.get('X-Min-Supported-Version');
+      if (response.status === 204) return { status: 'up_to_date', min_supported_version: headerMin };
       if (response.status === 401) return { status: 'unauthorized' };
       if (response.status !== 200) return { status: 'error', message: `HTTP ${response.status}` };
-      return { status: 'available', ...((await response.json()) as { version: string }) };
+      const body = (await response.json()) as { version: string; notes?: string; min_supported_version?: string };
+      return { status: 'available', installable: hooks.installable, ...body, min_supported_version: body.min_supported_version ?? headerMin };
     },
-    installUpdate: async () => undefined,
+    installUpdate: async () => {
+      if (hooks.installError !== null) throw new Error(hooks.installError);
+    },
     on: (event, handler) => void (handlers[event] ??= []).push(handler),
   };
 }

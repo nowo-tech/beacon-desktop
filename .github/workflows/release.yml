@@ -72,12 +72,13 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
+      # Runner's rustup, no third-party toolchain action and no shared cache in the job that holds the signing key.
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          if [ "$RUNNER_OS" = macOS ]; then rustup target add aarch64-apple-darwin x86_64-apple-darwin; fi
       - run: pnpm install --frozen-lockfile
       - name: Release config (updater signing only when the key exists)
         shell: bash
@@ -85,7 +86,7 @@ jobs:
           TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
         run: |
           if [ "${{ needs.prepare.outputs.updater }}" = true ]; then
-            node -e 'console.log(JSON.stringify({bundle:{createUpdaterArtifacts:true},plugins:{updater:{pubkey:process.env.TAURI_UPDATER_PUBKEY}}}))' > "$RUNNER_TEMP/tauri.release.json"
+            node -e 'console.log(JSON.stringify({bundle:{createUpdaterArtifacts:true},plugins:{updater:{pubkey:process.env.TAURI_UPDATER_PUBKEY,requireSignedVersion:true}}}))' > "$RUNNER_TEMP/tauri.release.json"
           else
             echo '{"bundle":{"createUpdaterArtifacts":false}}' > "$RUNNER_TEMP/tauri.release.json"
           fi

@@ -1,3 +1,9 @@
+const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+export function isVersion(value: unknown): value is string {
+  return typeof value === 'string' && SEMVER.test(value);
+}
+
 /** Compares `MAJOR.MINOR.PATCH[-pre]` versions; a pre-release sorts before its release. */
 export function compareVersions(a: string, b: string): number {
   const parse = (v: string) => {

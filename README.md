@@ -37,7 +37,10 @@ Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile 
 - Optional, off by default, with dated consent: idle detection (local only; you choose keep / discard / split, only the
   decision is sent), notifications (never outside `me.workingHours`), start at login.
 - Auto-update through Beacon (`/api/time-track/updates/desktop/{target}/{arch}/{version}`, your token as Bearer);
-  a blocking "update required" screen when the server's `min_supported_version` is newer than the app.
+  an "update required" screen when the server's `min_supported_version` (body or `X-Min-Supported-Version` header) is
+  newer than the app and an update satisfying it is offered; it always keeps *Remind me later*, *Download from Beacon*
+  and *Sign out*. The Bearer token is never sent to the artifact host (pre-signed URL on another origin); the device
+  verification page is opened only when it is https on the server's host.
 - "What we collect" screen.
 
 ## Development

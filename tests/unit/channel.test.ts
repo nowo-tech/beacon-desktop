@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildStable, channelKey, describeFile, notesFromChangelog, objectKey, parseFragments } from '../../scripts/release/channel.mjs';
+import { buildStable, channelKey, compareVersions, describeFile, notesFromChangelog, objectKey, parseFragments } from '../../scripts/release/channel.mjs';
 
 describe('release channel', () => {
   it('builds keys and file entries', () => {
@@ -33,6 +33,10 @@ describe('release channel', () => {
     expect(Object.keys(stable).at(-1)).toBe('files');
     expect(buildStable({ version: '0.1.0', files: [file] })).not.toHaveProperty('min_supported_version');
     expect(() => buildStable({ version: '0.1.0', files: [] })).toThrow(/at least one/);
+    expect(() => buildStable({ version: '0.1.0', minSupportedVersion: '9.9.9', files: [file] })).toThrow(/above the published version/);
+    expect(() => buildStable({ version: '0.1.0', minSupportedVersion: 'x', files: [file] })).toThrow(/Invalid version/);
+    expect(buildStable({ version: '0.1.0-rc.1', minSupportedVersion: '0.0.9', files: [{ ...file, key: 'time-track-clients/firefox/0.1.0-rc.1/a.xpi' }] }).min_supported_version).toBe('0.0.9');
+    expect([compareVersions('1.0.0-a', '1.0.0'), compareVersions('1.0.0', '1.0.0-a'), compareVersions('1.0.0-b', '1.0.0-a'), compareVersions('1.0.0-a', '1.0.0-b'), compareVersions('1.2.3', '1.2.3')]).toEqual([-1, 1, 1, -1, 0]);
     expect(() => buildStable({ version: '0.2.0', files: [file] })).toThrow(/does not belong/);
     expect(() => buildStable({ version: '0.1.0', files: [file, file] })).toThrow(/Duplicate/);
     expect(parseFragments(`${JSON.stringify(file)}\n\n`)).toEqual([file]);

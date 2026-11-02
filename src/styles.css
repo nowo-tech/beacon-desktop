@@ -78,4 +78,7 @@ select { font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid 
 .feature { border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 8px; }
 .inline { display: flex; align-items: center; gap: 8px; font-weight: 400; }
 .offline { border-left-color: var(--danger); }
-#cancel-device, #install-required { width: 100%; }
+#cancel-device, #install-required, #download-required, #logout-required { width: 100%; margin-top: 6px; }
+#update-required .link { display: block; margin: 6px auto; }
+.secondary.small { padding: 3px 10px; font-size: 13px; }
+code { word-break: break-all; }
