@@ -3,7 +3,6 @@ import { expect, test, type Page } from '@playwright/test';
 
 /** 0.4.0 updater UX against the mock Beacon updater route and the browser platform's mocked Tauri updater. */
 const MOCK = 'http://127.0.0.1:8787';
-const SHOTS = process.env.SCREENSHOTS === '1';
 const UPDATE = { version: '0.5.0', notes: 'Added\n- A calmer update card\n- Check for updates in the tray', pub_date: '2026-11-04T10:00:00Z', url: 'u', signature: 's' };
 
 async function control(path: string, body?: unknown) {
@@ -60,13 +59,11 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.locator('#update-notes-toggle')).toHaveAttribute('aria-expanded', 'true');
     await expect(page.locator('#update-notes')).toContainText('A calmer update card');
     await axe(page, 'update notes');
-    if (SHOTS) await page.screenshot({ path: `docs/images/desktop-update-card-${scheme}.png` });
     await app(page).slowInstall();
     await page.locator('#update-now').click();
     await expect(page.locator('#update-progress-label')).toContainText('Downloading version 0.5.0…');
     await expect(page.locator('#update-progress')).toBeVisible();
     await axe(page, 'update progress');
-    if (SHOTS) await page.screenshot({ path: `docs/images/desktop-update-progress-${scheme}.png` });
     await expect(page.locator('#update-progress-label')).toHaveText('Installing version 0.5.0. TimeTrack will restart.', { timeout: 5_000 });
     await expect.poll(() => app(page).installed()).toBe(1);
   });
@@ -82,7 +79,6 @@ test('a running timer is never interrupted without asking: "After I stop"', asyn
   await expect(page.locator('#update-running')).toContainText('A timer is running on Fix invoice rounding bug.');
   await expect(page.locator('#update-after-stop')).toBeFocused();
   await axe(page, 'update while running');
-  if (SHOTS) await page.screenshot({ path: 'docs/images/desktop-update-running.png' });
   await page.keyboard.press('Enter');
   await expect(page.locator('#update-waiting')).toHaveText('TimeTrack will update when you stop the timer.');
   expect(await app(page).installed()).toBe(0);
@@ -105,7 +101,6 @@ test('forced update (GET me minSupportedVersion): blocking screen with a way out
   await expect(page.locator('#update-required-running')).toContainText('A timer is running on Write onboarding guide.');
   await expect(page.locator('#remind-later')).toBeVisible();
   await axe(page, 'update required');
-  if (SHOTS) await page.screenshot({ path: 'docs/images/desktop-update-required.png' });
   await page.locator('#stop-then-update').click();
   await expect.poll(() => app(page).installed()).toBe(1);
   const entries = Object.values(((await control('state')) as { entries: Record<string, { taskId: string; endedAt: string | null }[]> }).entries).flat();

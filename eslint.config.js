@@ -3,7 +3,7 @@ import tseslint from 'typescript-eslint';
 import globals from 'globals';
 
 export default tseslint.config(
-  { ignores: ['dist/', 'coverage/', 'playwright-report/', 'test-results/', 'src-tauri/target/', 'src-tauri/gen/'] },
+  { ignores: ['dist/', 'coverage/', 'playwright-report/', 'test-results/', 'src-tauri/target/', 'src-tauri/gen/', 'out/'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

@@ -67,6 +67,17 @@ Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile 
   links on the connected server's origin are shown or opened.
 - "What we collect" screen.
 
+### Updates
+
+<img src="docs/images/desktop-update-card-light.png" alt="Update card with What's new, light theme" width="200"> <img src="docs/images/desktop-update-card-dark.png" alt="Update card with What's new, dark theme" width="200"> <img src="docs/images/desktop-update-progress-light.png" alt="Update download progress" width="200">
+
+<img src="docs/images/desktop-update-running.png" alt="Update offered while a timer runs: After I stop" width="200"> <img src="docs/images/desktop-update-required.png" alt="Update required screen with Remind me later" width="200"> <img src="docs/images/desktop-update-progress-dark.png" alt="Update download progress, dark theme" width="200">
+
+Microsoft Store build (`TIMETRACK_CHANNEL=store`): the Store updates the app, so Settings → About and the "update
+required" screen send you to the Store listing instead.
+
+<img src="docs/images/desktop-store-about.png" alt="Settings, About: Updates come from the Microsoft Store" width="200"> <img src="docs/images/desktop-store-update-required.png" alt="Update required in the Store build: Open Microsoft Store" width="200">
+
 ## Development
 
 Requirements: Node 24, pnpm (`corepack enable`), Rust stable and the
@@ -79,6 +90,7 @@ pnpm dev                  # UI in a browser (fake platform) on http://127.0.0.1:
 pnpm tauri dev            # the real app
 pnpm lint && pnpm typecheck && pnpm test:coverage   # unit tests, ≥ 90% coverage
 pnpm exec playwright install chromium && pnpm test:e2e
+pnpm screenshots          # regenerates docs/images/*.png (real UI, fake platform, mock Beacon, placeholder data)
 (cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test)
 ```
 
