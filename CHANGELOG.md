@@ -44,6 +44,9 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 - Beacon look: Beacon design tokens (light and dark), `rem` sizes, inline icons, focus outlines, reduced motion; the
   Beacon mascot on the connect screen, while waiting for the code (CSS pulse of its antenna arcs), in empty states,
   error states (404 / 503 / 429 / 401 illustrations) and About. Images are optimised 1x / 2x WebP in `public/mascot/`.
+- App icon (window, installers, `.icns` / `.ico` / PNG sizes): the Beacon mascot's head on the moss rounded square
+  (owner-approved). The tray keeps the simplified mark (`src-tauri/icons/tray-64.rgba`); sources and the generator are
+  in `scripts/icons/`.
 - Info notices are dismissed automatically; `<html lang>` follows the UI language; consent dates use the app locale.
 - Mock server: `taskExtras`, `notFound` and `deviceExpiresIn` configs.
 
