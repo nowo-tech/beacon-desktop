@@ -3,7 +3,7 @@
 Tray app (Tauri 2) to start, stop and switch your [symfony-beacon](https://github.com/nowo-tech/symfony-beacon) time
 tracking. Talks to the TimeTrackBundle **1.9.0** client API only. Windows, macOS and Linux. English and Spanish.
 
-<img src="docs/images/desktop-device-code.png" alt="Device sign-in code" width="300"> <img src="docs/images/desktop-timer.png" alt="Running timer and task list" width="300">
+<img src="docs/images/desktop-device-code-light.png" alt="Device sign-in code" width="300"> <img src="docs/images/desktop-timer-light.png" alt="Running timer and task list" width="300">
 
 It records only the time you choose to track — see [PRIVACY.md](PRIVACY.md).
 
@@ -66,6 +66,17 @@ Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile 
   "Open in Beacon" icon on each task and on the running timer when the server sends the task's `url`. Only `https:`
   links on the connected server's origin are shown or opened.
 - "What we collect" screen.
+
+### Light and dark theme, mascot moments
+
+Settings → **Theme**: *System* (default, follows the computer's light / dark setting), *Light* or *Dark*; stored on this
+computer and applied to the title bar too. The robot from Beacon shows up in a few friendly moments (sign-in, "You're
+in!", saved, a timer left running for 8 hours, no results, offline, updates) and stays out of the running timer and the
+task list; which pose goes where, and where the art comes from: [public/mascot/README.md](public/mascot/README.md).
+
+<img src="docs/images/desktop-welcome-light.png" alt="You're in! card after signing in, light theme" width="200"> <img src="docs/images/desktop-long-running-dark.png" alt="Still going strong? nudge on a timer running for 9 hours, dark theme" width="200"> <img src="docs/images/desktop-settings-theme-dark.png" alt="Settings with the System, Light and Dark theme switch, dark theme" width="200">
+
+<img src="docs/images/desktop-saved-light.png" alt="Saved notice with the mascot after stopping a timer, light theme" width="200"> <img src="docs/images/desktop-no-results-dark.png" alt="No search results with the reading robot, dark theme" width="200"> <img src="docs/images/desktop-offline-light.png" alt="Working offline card, light theme" width="200">
 
 ### Updates
 
