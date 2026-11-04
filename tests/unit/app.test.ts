@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { browserPlatform } from '../../src/platform';
 import { DesktopApp } from '../../src/ui/app';
 import { nodeFetch, startMock } from './helpers';
@@ -158,16 +158,160 @@ describe('desktop app', () => {
     expect(ui.app.state.activeTimer).toBeNull();
   });
 
-  it('asks about idle time locally (opt-in) and sends only the decision', async () => {
+  it('"Still there?" on a 1.10 server: on by default, asks after the threshold and sends only the decision', async () => {
+    const realNow = Date.now();
+    let now = new Date(realNow - 120_000);
+    const sent: string[] = [];
+    const logged: string[] = [];
+    const recording = ((input: string, init?: RequestInit) => {
+      sent.push(`${input} ${JSON.stringify(init?.headers ?? {})} ${String(init?.body ?? '')}`);
+      return nodeFetch(input, init);
+    }) as typeof fetch;
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation((...args: unknown[]) => void logged.push(args.map(String).join(' '))),
+    );
+    const ui = await signedIn({ now: () => now, fetchImpl: recording });
+    await ui.app.start({ id: 'T-101', title: 'Write onboarding guide' });
+    await env.control('timer/backdate', { seconds: 3600 });
+    await ui.app.refresh();
+    expect(ui.app.idleCheckEnabled()).toBe(true);
+    // A recognisable counter value: it must never leave the device or reach a log.
+    ui.platform.hooks.idleSeconds = 617.25;
+    await ui.app.tick();
+    expect(ui.app.state.idleCheck.phase).toBe('asking');
+    expect(ui.$('#idle-title').textContent).toBe('Still there?');
+    expect(ui.$('#idle-text').textContent).toBe('No activity for 10 min on Write onboarding guide.');
+    expect(ui.$('#live').textContent).toContain('Still there?');
+    expect(document.activeElement?.closest('#idle')).toBeNull();
+    // The person is back but has not answered: the prompt stays and nothing is stopped.
+    now = new Date(realNow - 60_000);
+    ui.platform.hooks.idleSeconds = 1;
+    await ui.app.tick();
+    expect(ui.app.state.idleCheck).toMatchObject({ phase: 'asking', returnedAt: new Date(now.getTime() - 1000).toISOString() });
+
+    ui.click('#idle-meeting');
+    expect(document.activeElement?.id).toBe('idle-note');
+    ui.click('#idle-meeting-cancel');
+    expect(document.activeElement?.id).toBe('idle-meeting');
+    ui.click('#idle-meeting');
+    ui.$<HTMLInputElement>('#idle-note').value = 'Acme call';
+    ui.$<HTMLSelectElement>('#idle-target').value = 'T-103';
+    ui.$<HTMLFormElement>('#idle-meeting-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    for (let i = 0; i < 20 && ui.app.state.idleCheck.phase !== 'watching'; i++) await tick();
+    await tick();
+    expect(ui.app.state.idleCheck.phase).toBe('watching');
+    expect(ui.$('#notice').textContent).toBe('Got it, the time is kept.');
+    const state = (await env.control('state')) as { idleDecisions: { action: string; taskId: string; note: string }[]; requests: { path: string; body: string }[] };
+    expect(state.idleDecisions).toEqual([expect.objectContaining({ action: 'reassign', taskId: 'T-103', then: 'continue', note: 'Acme call' })]);
+    expect(ui.app.state.activeTimer?.taskId).toBe('T-101');
+
+    // Privacy: only the decision. The counter is not in any URL, header, body, log or the app's storage.
+    for (const request of state.requests.filter((r) => r.path.endsWith('discard-idle'))) {
+      expect(Object.keys(JSON.parse(request.body) as object).every((key) => ['from', 'to', 'action', 'taskId', 'then', 'note', 'source'].includes(key))).toBe(true);
+    }
+    const everything = [...sent, ...logged, ...Object.values(localStorage)].join('\n');
+    expect(everything).not.toMatch(/617|idleSeconds|isIdle|lastInput|idleSince/);
+    spies.forEach((spy) => spy.mockRestore());
+    ui.app.destroy();
+  });
+
+  it('no answer: stops at the last input, asks about the gap on return, then offers Resume', async () => {
+    const realNow = Date.now();
+    let now = new Date(realNow - 480_000);
+    const ui = await signedIn({ now: () => now });
+    await ui.app.setFeature('notifications', true);
+    await ui.app.start({ id: 'T-101', title: 'Write onboarding guide' });
+    await env.control('timer/backdate', { seconds: 3600 });
+    await ui.app.refresh();
+    ui.platform.hooks.idleSeconds = 660;
+    await ui.app.tick();
+    const lastInput = now.getTime() - 660_000;
+    expect(ui.platform.hooks.notifications).toEqual(['Still there?: No activity for 10 min on Write onboarding guide.']);
+    now = new Date(realNow - 120_000);
+    ui.platform.hooks.idleSeconds = 660 + 360;
+    await ui.app.tick();
+    expect(ui.app.state.idleCheck.phase).toBe('away');
+    expect(ui.app.state.activeTimer).toBeNull();
+    expect(ui.$('#idle-away').textContent).toContain('Timer paused');
+    const stopped = Object.values(((await env.control('state')) as { entries: Record<string, { endedAt: string }[]> }).entries).flat();
+    expect(Math.abs(Date.parse(stopped[0].endedAt) - lastInput)).toBeLessThan(30_000);
+
+    ui.platform.hooks.idleSeconds = 1;
+    await ui.app.tick();
+    expect(ui.app.state.idleCheck.phase).toBe('gap');
+    expect(ui.$('#gap-text').textContent).toContain('Write onboarding guide');
+    expect(ui.$<HTMLSelectElement>('#gap-task').options.length).toBeGreaterThan(0);
+    ui.click('#gap-keep');
+    for (let i = 0; i < 20 && ui.app.state.idleCheck.phase !== 'resume'; i++) await tick();
+    await tick();
+    expect(ui.app.state.idleCheck.phase).toBe('resume');
+    const entries = Object.values(((await env.control('state')) as { entries: Record<string, { taskId: string; startedAt: string; endedAt: string }[]> }).entries).flat();
+    expect(entries).toHaveLength(2);
+    expect(entries[1].startedAt).toBe(entries[0].endedAt);
+    expect(Math.abs(Date.parse(entries[1].endedAt) - (now.getTime() - 1000))).toBeLessThan(2000);
+    expect(ui.$('#gap-resume-card-title').textContent).toBe('Resume Write onboarding guide?');
+    ui.click('#gap-resume');
+    for (let i = 0; i < 20 && ui.app.state.activeTimer === null; i++) await tick();
+    expect(ui.app.state.activeTimer?.taskId).toBe('T-101');
+    expect(ui.app.state.idleCheck.phase).toBe('watching');
+    ui.app.destroy();
+  });
+
+  it('gap on another task, sleep as idle, pause and discard', async () => {
+    const realNow = Date.now();
+    let now = new Date(realNow - 1_500_000);
+    const ui = await signedIn({ now: () => now });
+    await ui.app.start({ id: 'T-101', title: 'Write onboarding guide' });
+    await env.control('timer/backdate', { seconds: 3600 });
+    await ui.app.refresh();
+    ui.platform.hooks.idleSeconds = 1;
+    await ui.app.tick();
+    // The computer slept 20 min and was woken by a key press: the gap question comes at once.
+    now = new Date(realNow - 60_000);
+    await ui.app.tick();
+    expect(ui.app.state.idleCheck.phase).toBe('gap');
+    ui.$<HTMLSelectElement>('#gap-task').value = 'T-102';
+    ui.click('#gap-reassign');
+    for (let i = 0; i < 20 && ui.app.state.idleCheck.phase !== 'resume'; i++) await tick();
+    await tick();
+    const entries = Object.values(((await env.control('state')) as { entries: Record<string, { taskId: string }[]> }).entries).flat();
+    expect(entries.map((e) => e.taskId)).toEqual(['T-101', 'T-102']);
+    ui.click('#gap-dismiss');
+    expect(ui.app.state.idleCheck.phase).toBe('watching');
+
+    await ui.app.start({ id: 'T-101', title: 'Write onboarding guide' });
+    await env.control('timer/backdate', { seconds: 3600 });
+    await ui.app.refresh();
+    ui.platform.hooks.idleSeconds = 700;
+    await ui.app.tick();
+    ui.click('#idle-discard');
+    for (let i = 0; i < 20 && ui.app.state.idleCheck.phase !== 'watching'; i++) await tick();
+    await tick();
+    expect(ui.app.state.activeTimer?.taskId).toBe('T-101');
+    expect(ui.$('#notice').textContent).toBe('Those minutes were left out. The timer keeps running.');
+    await env.control('timer/backdate', { seconds: 3600 });
+    await ui.app.refresh();
+    await ui.app.tick();
+    ui.click('#idle-pause');
+    for (let i = 0; i < 20 && ui.app.state.activeTimer !== null; i++) await tick();
+    await tick();
+    expect(ui.app.state.activeTimer).toBeNull();
+    expect(ui.app.state.idleCheck.phase).toBe('resume');
+    const decisions = ((await env.control('state')) as { idleDecisions: { action: string }[] }).idleDecisions.map((d) => d.action);
+    expect(decisions).toEqual(['split', 'discard']);
+    ui.app.destroy();
+  });
+
+  it('"Still there?" on a 1.9 server is opt-in; organisation off hides it; the person can only wait longer', async () => {
+    await env.control('config', { apiVersion: '1.9' });
     let now = new Date(Date.now() - 300_000);
     const ui = await signedIn({ now: () => now });
     await ui.app.start({ id: 'T-101', title: 'Write onboarding guide' });
     await env.control('timer/backdate', { seconds: 3600 });
     await ui.app.refresh();
-    ui.platform.hooks.idleSeconds = 1200;
+    ui.platform.hooks.idleSeconds = 1000;
     await ui.app.tick();
-    expect(ui.app.idle).toBeNull();
-
+    expect(ui.app.state.idleCheck.phase).toBe('watching');
     ui.click('#open-settings');
     const toggle = ui.$<HTMLInputElement>('#feature-idleDetection');
     toggle.checked = true;
@@ -177,34 +321,40 @@ describe('desktop app', () => {
     const minutes = ui.$<HTMLSelectElement>('#idle-minutes');
     minutes.value = '15';
     minutes.dispatchEvent(new Event('change'));
-    expect(ui.app.state.settings.idleMinutes).toBe(15);
-    await ui.app.setFeature('notifications', true);
+    expect(ui.app.idleSettings()).toEqual({ thresholdMinutes: 15, answerTimeoutMinutes: 5 });
     ui.click('#back');
-
     await ui.app.tick();
-    now = new Date();
-    ui.platform.hooks.idleSeconds = 2;
+    expect(ui.app.state.idleCheck.phase).toBe('asking');
+    expect(ui.root.querySelector('#idle-target')).toBeNull();
+    // 1.9 cannot add past time: after an automatic stop the gap can only be left out.
+    now = new Date(now.getTime() + 300_000);
     await ui.app.tick();
-    expect(ui.app.idle).not.toBeNull();
-    expect(ui.$('#idle').textContent).toContain('You were away');
-    expect(ui.platform.hooks.notifications).toHaveLength(1);
+    expect(ui.app.state.idleCheck.phase).toBe('away');
+    ui.platform.hooks.idleSeconds = 0;
     await ui.app.tick();
-    ui.click('#idle-split');
+    expect(ui.$('#gap-unsupported').textContent).toContain('cannot add past time');
+    ui.click('#gap-discard');
     await tick();
-    const state = (await env.control('state')) as { idleDecisions: { action: string }[]; requests: { body: string }[] };
-    expect(state.idleDecisions.map((d) => d.action)).toEqual(['split']);
-    expect(state.requests.map((r) => r.body).join()).not.toMatch(/isIdle|idleSeconds/);
-    expect(ui.app.state.activeTimer?.taskId).toBe('T-101');
-
-    ui.app.idle = { from: new Date(Date.now() - 500), to: new Date() };
-    await ui.app.resolveIdle('discard');
-    expect(ui.app.state.activeTimer).toBeNull();
-    ui.app.idle = { from: new Date(Date.now() - 120_000), to: new Date(Date.now() - 60_000) };
-    await ui.app.resolveIdle('keep');
-    expect(ui.app.state.activeTimer).toBeNull();
-    await ui.app.resolveIdle('keep');
+    ui.click('#gap-dismiss');
     await ui.app.setFeature('idleDetection', false);
-    expect(ui.app.state.consents.idleDetection?.granted).toBe(false);
+    expect(ui.app.idleCheckEnabled()).toBe(false);
+
+    await env.control('config', { apiVersion: '1.10', idleCheck: { enabled: false, threshold_minutes: 20, answer_timeout_minutes: 3 } });
+    await ui.app.refresh();
+    ui.app.show('settings');
+    expect(ui.$('#idle-org').textContent).toBe('Turned off by your organisation.');
+    expect(ui.app.idleCheckEnabled()).toBe(false);
+    await env.control('config', { idleCheck: { enabled: true, threshold_minutes: 20, answer_timeout_minutes: 3 } });
+    await ui.app.refresh();
+    ui.app.show('settings');
+    expect(ui.$('#idle-org').textContent).toContain('after 20 minutes');
+    expect([...ui.$<HTMLSelectElement>('#idle-minutes').options].map((o) => o.value)).toEqual(['20', '30', '45', '60']);
+    expect(ui.app.idleSettings()).toEqual({ thresholdMinutes: 20, answerTimeoutMinutes: 3 });
+    const select = ui.$<HTMLSelectElement>('#idle-minutes');
+    select.value = '20';
+    select.dispatchEvent(new Event('change'));
+    expect(ui.app.state.settings.idleMinutes).toBeNull();
+    ui.app.destroy();
   });
 
   it('suppresses notifications outside working hours', async () => {
@@ -213,14 +363,63 @@ describe('desktop app', () => {
     await ui.app.start({ id: 'T-101', title: 'x' });
     await env.control('timer/backdate', { seconds: 3600 });
     await ui.app.refresh();
-    await ui.app.setFeature('idleDetection', true);
     await ui.app.setFeature('notifications', true);
-    ui.platform.hooks.idleSeconds = 1200;
+    ui.platform.hooks.idleSeconds = 700;
     await ui.app.tick();
-    ui.platform.hooks.idleSeconds = 1;
-    await ui.app.tick();
-    expect(ui.app.idle).not.toBeNull();
+    expect(ui.app.state.idleCheck.phase).toBe('asking');
     expect(ui.platform.hooks.notifications).toHaveLength(0);
+  });
+
+  it('shows clamped offline times in plain words and keeps a meeting note for the stop', async () => {
+    const ui = await signedIn({ now: () => new Date(Date.now() + 10 * 60_000) });
+    const online = { value: false };
+    (ui.platform as { fetch: typeof fetch }).fetch = ((input: string, init?: RequestInit) => (online.value ? nodeFetch(input, init) : Promise.reject(new Error('offline')))) as typeof fetch;
+    await ui.app.start({ id: 'T-101', title: 'Write onboarding guide' });
+    expect(ui.app.queue.list()).toEqual([expect.objectContaining({ kind: 'start', taskId: 'T-101' })]);
+    online.value = true;
+    await ui.app.refresh();
+    expect(ui.$('#clamps').textContent).toContain('the requested time');
+    expect(ui.$('#clamps').textContent).toContain('was in the future');
+    ui.click('#clamps-dismiss');
+    expect(ui.root.querySelector('#clamps')).toBeNull();
+    expect(ui.app.clampText({ kind: 'stop', taskTitle: null, requested: '2026-11-04T10:00:00Z', applied: '2026-11-04T09:00:00Z', reason: 'before_start' })).toContain('when it started');
+    expect(ui.app.clampText({ kind: 'start', taskTitle: 'A', requested: '2026-11-04T10:00:00Z', applied: '2026-11-04T09:00:00Z', reason: 'weird' as never })).toContain('instead of');
+
+    ui.app.state.pendingNote = 'Weekly sync';
+    await ui.app.stop();
+    const entries = Object.values(((await env.control('state')) as { entries: Record<string, { metadata: { note?: string } | null }[]> }).entries).flat();
+    expect(entries.at(-1)?.metadata).toEqual({ note: 'Weekly sync' });
+    expect(ui.app.state.pendingNote).toBeNull();
+  });
+
+  it('privacy screen says what is sent and what stays local; clear local data', async () => {
+    const ui = await signedIn();
+    await ui.app.setFeature('autostart', true);
+    ui.app.togglePin({ id: 'T-101', title: 'Write onboarding guide' });
+    (ui.platform as { fetch: typeof fetch }).fetch = (() => Promise.reject(new Error('offline'))) as typeof fetch;
+    await ui.app.start({ id: 'T-102', title: 'Review pull request queue' });
+    ui.app.show('privacy');
+    for (const id of ['privacy-sent', 'privacy-local', 'privacy-never']) expect(ui.root.querySelector(`#${id} li`)).not.toBeNull();
+    expect(ui.$('#privacy-local').textContent).toContain('never stored, logged or sent');
+    ui.click('#clear-local');
+    expect(document.activeElement?.id).toBe('clear-local-yes');
+    expect(ui.$('#clear-local-question').textContent).toContain('1 action(s) have not reached the server');
+    ui.click('#clear-local-no');
+    expect(document.activeElement?.id).toBe('clear-local');
+    ui.click('#clear-local');
+    ui.click('#clear-local-yes');
+    for (let i = 0; i < 20 && ui.app.view !== 'login'; i++) await tick();
+    expect(ui.app.view).toBe('login');
+    expect(ui.$('#notice').textContent).toContain('Local data cleared');
+    expect(localStorage.length).toBe(0);
+    expect(await ui.platform.secretGet()).toBeNull();
+    expect(await ui.platform.autostartEnabled()).toBe(false);
+    expect(ui.app.state.pinned).toEqual([]);
+    ui.app.show('privacy');
+    ui.click('#clear-local');
+    expect(ui.$('#clear-local-question').textContent).toBe('Delete all TimeTrack data on this computer?');
+    await ui.app.clearLocalData();
+    expect(ui.app.view).toBe('login');
   });
 
   it('handles updates: 204, available, 401 = sign in again', async () => {

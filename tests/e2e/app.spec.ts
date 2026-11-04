@@ -52,42 +52,101 @@ test('device sign-in, start, switch, stop, sign out', async ({ page }) => {
   await expect(page.locator('#login-form')).toBeVisible();
 });
 
-test('idle prompt is opt-in and only the decision is sent', async ({ page }) => {
+type Tt = { __timeTrack: { app: AppHandle; hooks: Hooks } };
+const idleTick = (page: Page, seconds: number) =>
+  page.evaluate(async (value) => {
+    const tt = (window as unknown as Tt).__timeTrack;
+    tt.hooks.idleSeconds = value;
+    await tt.app.tick();
+  }, seconds);
+
+test('"Still there?" asks after the threshold and only the decision is sent', async ({ page }) => {
   await signIn(page);
-  await page.locator('#open-settings').click();
-  await page.locator('#feature-idleDetection').check();
-  await expect(page.locator('#consent-idleDetection')).toContainText('Consent given on');
-  await page.locator('#back').click();
   await page.locator('[data-task="T-102"] .row-action').click();
   await expect(page.locator('#timer-task')).toHaveText('Review pull request queue');
   await control('timer/backdate', { seconds: 3600 });
-  await page.evaluate(() => (window as unknown as { __timeTrack: { app: AppHandle } }).__timeTrack.app.refresh());
-  await page.evaluate(async () => {
-    const tt = (window as unknown as { __timeTrack: { app: AppHandle; hooks: Hooks } }).__timeTrack;
-    tt.hooks.idleSeconds = 1500;
-    await tt.app.tick();
-    tt.hooks.idleSeconds = 3;
-    await tt.app.tick();
-  });
-  await expect(page.locator('#idle')).toContainText('You were away');
-  await page.locator('#idle-split').click();
+  await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
+  await idleTick(page, 617);
+  await expect(page.locator('#idle')).toContainText('Still there?');
+  await expect(page.locator('#idle-text')).toHaveText('No activity for 10 min on Review pull request queue.');
+  // Non-blocking: the list stays usable and focus is not taken.
+  await expect(page.locator('#search')).toBeEnabled();
+  await page.locator('#idle-here').focus();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('#idle-meeting')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#idle-note')).toBeFocused();
+  await page.keyboard.type('Planning call');
+  await page.locator('#idle-meeting-save').click();
   await expect(page.locator('#idle')).toHaveCount(0);
-  const state = (await control('state')) as { idleDecisions: { action: string }[]; requests: { body: string }[] };
-  expect(state.idleDecisions.map((d) => d.action)).toEqual(['split']);
-  expect(state.requests.map((r) => r.body).join()).not.toMatch(/isIdle|idleSeconds/);
+  await expect(page.locator('#notice')).toHaveText('Got it, the time is kept.');
+  const state = (await control('state')) as { idleDecisions: { action: string }[]; requests: { body: string; query: string }[] };
+  expect(state.idleDecisions.map((d) => d.action)).toEqual(['keep']);
+  expect(state.requests.map((r) => `${r.query} ${r.body}`).join()).not.toMatch(/617|isIdle|idleSeconds|lastInput/);
+  // The meeting note goes on the entry when it stops.
+  await page.locator('#stop').click();
+  await expect(page.locator('#timer')).toContainText('Not tracking');
+  const entries = Object.values(((await control('state')) as { entries: Record<string, { metadata: { note?: string } | null }[]> }).entries).flat();
+  expect(entries[0].metadata).toEqual({ note: 'Planning call' });
 });
 
-test('offline actions are queued and synced', async ({ page, context }) => {
+test('no answer: the entry ends at the last input, then the gap question and Resume (fake idle clock)', async ({ page }) => {
   await signIn(page);
+  await page.locator('[data-task="T-101"] .row-action').click();
+  await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
+  await control('timer/backdate', { seconds: 3600 });
+  const start = Date.now() - 10 * 60_000;
+  await page.clock.install({ time: start });
+  await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
+  await idleTick(page, 660);
+  await expect(page.locator('#idle')).toBeVisible();
+  const lastInput = (await page.evaluate(() => Date.now())) - 660_000;
+  await page.clock.fastForward('06:00');
+  await idleTick(page, 660 + 360);
+  await expect(page.locator('#idle-away')).toContainText('Timer paused');
+  await expect(page.locator('#timer')).toContainText('Not tracking');
+  const stopped = Object.values(((await control('state')) as { entries: Record<string, { endedAt: string }[]> }).entries).flat();
+  expect(Math.abs(Date.parse(stopped[0].endedAt) - lastInput)).toBeLessThan(30_000);
+  await idleTick(page, 1);
+  await expect(page.locator('#gap')).toContainText('Welcome back');
+  await page.locator('#gap-keep').click();
+  await expect(page.locator('#gap-resume')).toBeFocused();
+  await page.locator('#gap-resume').click();
+  await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
+  const entries = Object.values(((await control('state')) as { entries: Record<string, { startedAt: string; endedAt: string }[]> }).entries).flat();
+  expect(entries).toHaveLength(2);
+  expect(entries[1].startedAt).toBe(entries[0].endedAt);
+});
+
+test('offline actions are queued and replayed with their real times', async ({ page, context }) => {
+  await signIn(page);
+  const startedOffline = Date.now() - 5 * 60_000;
+  await page.clock.install({ time: startedOffline });
   await context.setOffline(true);
   await page.locator('[data-task="T-103"] .row-action').click();
   await expect(page.locator('#offline')).toContainText('1 action(s)');
   await context.setOffline(false);
-  await page.evaluate(() => (window as unknown as { __timeTrack: { app: AppHandle } }).__timeTrack.app.refresh());
+  await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
   await expect(page.locator('#notice')).toHaveText('Back online: 1 action(s) sent.');
   await expect(page.locator('#offline')).toHaveCount(0);
-  const state = (await control('state')) as { timers: Record<string, { taskId: string }> };
-  expect(Object.values(state.timers).map((t) => t.taskId)).toEqual(['T-103']);
+  const state = (await control('state')) as { timers: Record<string, { taskId: string; startedAt: string }> };
+  const [timer] = Object.values(state.timers);
+  expect(timer.taskId).toBe('T-103');
+  expect(Math.abs(Date.parse(timer.startedAt) - startedOffline)).toBeLessThan(5000);
+});
+
+test('privacy screen and clear local data', async ({ page }) => {
+  await signIn(page);
+  await page.locator('#open-settings').click();
+  await page.locator('#open-privacy').click();
+  await expect(page.locator('#privacy-sent')).toContainText('Never the input counter');
+  await expect(page.locator('#privacy-local')).toContainText('never stored, logged or sent');
+  await page.locator('#clear-local').click();
+  await expect(page.locator('#clear-local-yes')).toBeFocused();
+  await page.locator('#clear-local-yes').click();
+  await expect(page.locator('#login-form')).toBeVisible();
+  await expect(page.locator('#notice')).toContainText('Local data cleared');
+  expect(await page.evaluate(() => localStorage.length)).toBe(0);
 });
 
 test('min_supported_version blocks with "update required"', async ({ page }) => {

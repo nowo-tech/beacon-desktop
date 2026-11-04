@@ -1,14 +1,16 @@
 import { ApiError, TimeTrackApi, normalizeServerUrl } from '../api/client';
-import type { DeviceCode, Entry, IdleAction, Me, Task, Timer } from '../api/types';
+import type { DeviceCode, Entry, Me, Task, Timer } from '../api/types';
 import { dashboardUrl, myTimeUrl, sameOriginHttps, taskUrl } from '../lib/beacon';
 import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
 import { type ErrorStage, type ErrorView, describeError } from '../lib/errors';
 import { createTranslator, detectLocale, type Locale, type MessageKey, type Translate } from '../lib/i18n';
-import { IdleMonitor, clampPeriod, type IdlePeriod } from '../lib/idle';
+import { type GapChoice, type IdleCheckState, type IdleChoice, WATCHING, decide, decideGap, observeIdle, promptSpan } from '../lib/idleCheck';
 import { preflight } from '../lib/preflight';
 import { OfflineQueue } from '../lib/queue';
+import { type ClampNote, type QueuedAction, type SyncResult, applyLocally } from '../lib/replay';
+import { type ServerFeatures, effectiveThreshold, serverFeatures, thresholdChoices } from '../lib/serverFeatures';
 import { hostOf, prepareServerUrl, type ServerUrlProblem } from '../lib/serverUrl';
-import { type Feature, type LocalState, DEFAULT_SETTINGS, MAX_PINNED, hasConsent, loadLocal, recordConsent, saveLocal } from '../lib/settings';
+import { type Feature, type LocalState, DEFAULT_SETTINGS, LOCAL_KEYS, MAX_PINNED, emptyState, hasConsent, loadLocal, recordConsent, saveLocal } from '../lib/settings';
 import { computeTotals, formatHoursMinutes, recentTasks, startOfWeek, taskContext, todayByTask, type Totals } from '../lib/summary';
 import { elapsedSeconds, formatElapsed } from '../lib/time';
 import { appsPage, safeVerificationUri } from '../lib/urls';
@@ -53,6 +55,10 @@ const ERROR_ART: Record<string, string> = {
 };
 
 const MAX_TRAY_TASKS = 7;
+/** Two checks further apart than this mean the computer slept in between (checks run every 30 s). */
+const SUSPEND_GAP_MS = 90_000;
+/** Server limit of a note (`NOTE_MAX_LENGTH`). */
+const NOTE_MAX = 500;
 /** Entries pages fetched for the week totals (100 each). */
 const MAX_ENTRY_PAGES = 5;
 
@@ -96,7 +102,12 @@ export class DesktopApp {
   me: Me | null = null;
   device: DeviceCode | null = null;
   deviceState: DeviceState = 'waiting';
-  idle: IdlePeriod | null = null;
+  /** Times the server recorded differently from what was asked (offline replay, idle check): shown until dismissed. */
+  clampNotes: ClampNote[] = [];
+  /** "I was in a meeting" form of the prompt is open. */
+  meetingOpen = false;
+  /** "Clear local data" asks for confirmation first. */
+  confirmClear = false;
   update: { version: string; min: string | null; installable: boolean } | null = null;
   /** Non-blocking update message (no automatic update possible, or it failed): shown with a Beacon download link. */
   updateMessage: string | null = null;
@@ -121,7 +132,7 @@ export class DesktopApp {
   readonly locale: Locale;
   readonly t: Translate;
   readonly queue: OfflineQueue;
-  readonly monitor: IdleMonitor;
+  private lastCheck: Date | null = null;
   private token: string | null = null;
   private abort: AbortController | null = null;
   private deviceUrl: string | null = null;
@@ -157,7 +168,6 @@ export class DesktopApp {
     this.state = loadLocal(this.storage);
     this.serverDraft = this.state.lastServer ?? deps.beaconUrl ?? '';
     this.queue = new OfflineQueue(this.storage);
-    this.monitor = new IdleMonitor(this.state.settings.idleMinutes * 60);
     document.documentElement.lang = this.locale;
     this.header = h('header', { class: 'bar' });
     this.status = h('div', { class: 'messages', id: 'status', attrs: { role: 'status', 'aria-live': 'polite' } });
@@ -321,12 +331,13 @@ export class DesktopApp {
   private async signedOut(notice: string | null): Promise<void> {
     await this.platform.secretDelete();
     this.token = null;
-    this.persist({ session: null, activeTimer: null });
+    this.persist({ session: null, activeTimer: null, idleCheck: WATCHING, pendingNote: null });
     this.queue.clear();
     this.tasks = [];
     this.entries = null;
     this.me = null;
-    this.idle = null;
+    this.clampNotes = [];
+    this.meetingOpen = false;
     this.main = null;
     this.query = '';
     this.error = null;
@@ -344,16 +355,60 @@ export class DesktopApp {
 
   private async load(api: TimeTrackApi): Promise<void> {
     if (this.queue.size > 0) {
-      const result = await this.queue.sync(api, this.now);
-      this.setNotice(this.t('synced', { count: result.synced }));
-      if (result.dropped.length > 0) this.setNotice(this.t('dropped', { count: result.dropped.length }));
+      const me = await api.me();
+      this.setMe(me);
+      this.report(await this.queue.sync(api, this.now, serverFeatures(me)), true);
     }
     const [timer, tasks, me, entries] = await Promise.all([api.timer(), api.tasks({ search: this.query }), api.me(), this.loadEntries(api)]);
     this.offline = false;
     this.tasks = tasks;
-    this.me = me;
+    this.setMe(me);
     this.entries = entries;
     await this.setTimer(timer);
+  }
+
+  private setMe(me: Me): void {
+    this.me = me;
+    this.persist({ features: serverFeatures(me) });
+  }
+
+  /** What the server can do: from `GET me`, else as last seen (offline start), else a 1.9 server. */
+  features(): ServerFeatures {
+    return this.me !== null ? serverFeatures(this.me) : (this.state.features ?? serverFeatures(null));
+  }
+
+  /** Tells the person what the replay did: count, dropped actions and every time the server moved (clamp). */
+  private report(result: SyncResult, announceSynced: boolean): void {
+    if (announceSynced && result.synced > 0) this.setNotice(this.t('synced', { count: result.synced }));
+    if (result.dropped.length > 0) this.setNotice(this.t('dropped', { count: result.dropped.length }));
+    if (result.clamps.length > 0) this.clampNotes = [...this.clampNotes, ...result.clamps].slice(-5);
+  }
+
+  /**
+   * Runs actions through the queue (idle-check decisions, auto-stop, gap answers): sent now when online, else kept and
+   * replayed in order later; the screen shows their effect meanwhile.
+   */
+  private async runActions(actions: QueuedAction[]): Promise<void> {
+    if (actions.length === 0) return;
+    const before = this.state.activeTimer;
+    this.queue.push(...actions);
+    await this.guard(
+      async () => {
+        const result = await this.queue.sync(this.api(), this.now, this.features());
+        this.offline = false;
+        this.report(result, false);
+        if (result.timer !== undefined) await this.setTimer(result.timer);
+      },
+      () => this.setTimer(applyLocally(before, actions)),
+    );
+    if (this.entries !== null) await this.reloadEntries();
+  }
+
+  /** Takes the pending "meeting" note (sent with the stop or switch that closes the entry). */
+  private takeNote(): string | undefined {
+    const note = this.state.pendingNote ?? undefined;
+    if (note !== undefined) this.persist({ pendingNote: null });
+    return note;
   }
 
   /** This week's own entries (newest first), or `null` when the token cannot read entries. Pages until done. */
@@ -387,11 +442,19 @@ export class DesktopApp {
     await this.guard(
       async () => {
         const api = this.api();
-        await this.setTimer(running !== null ? (await api.switchTask(task.id)).timer : await api.start(task.id));
+        await this.setTimer(running !== null ? (await api.switchTask(task.id, this.state.pendingNote ?? undefined)).timer : await api.start(task.id));
+        if (running !== null) this.takeNote();
       },
       () => {
         const at = this.now().toISOString();
-        this.queue.push(running !== null ? { kind: 'switch', taskId: task.id, taskTitle: task.title, at } : { kind: 'start', taskId: task.id, taskTitle: task.title, at });
+        const note = running !== null ? this.takeNote() : undefined;
+        if (note !== undefined) {
+          this.queue.push({ kind: 'stop', at, note }, { kind: 'start', taskId: task.id, taskTitle: task.title, at });
+        } else if (running !== null) {
+          this.queue.push({ kind: 'switch', taskId: task.id, taskTitle: task.title, at });
+        } else {
+          this.queue.push({ kind: 'start', taskId: task.id, taskTitle: task.title, at });
+        }
         return this.setTimer({ id: 'offline', taskId: task.id, taskTitle: task.title, startedAt: at, url: task.url ?? null });
       },
       () => ({ stage: 'action', task: task.title }),
@@ -405,11 +468,13 @@ export class DesktopApp {
     this.persist({ lastTask: this.taskRef(this.timerTask(timer)) });
     await this.guard(
       async () => {
-        await this.api().stop();
+        await this.api().stop(this.state.pendingNote ?? undefined);
+        this.takeNote();
         await this.setTimer(null);
       },
       () => {
-        this.queue.push({ kind: 'stop', at: this.now().toISOString() });
+        const note = this.takeNote();
+        this.queue.push({ kind: 'stop', at: this.now().toISOString(), ...(note !== undefined ? { note } : {}) });
         return this.setTimer(null);
       },
     );
@@ -439,8 +504,10 @@ export class DesktopApp {
   }
 
   private async setTimer(timer: Timer | null): Promise<void> {
-    this.persist({ activeTimer: timer });
-    if (timer === null) this.monitor.reset();
+    const previous = this.state.activeTimer;
+    // A different entry (stopped or started elsewhere): a pending "meeting" note no longer applies.
+    const changed = previous !== null && (timer === null || timer.taskId !== previous.taskId);
+    this.persist({ activeTimer: timer, ...(changed && this.state.pendingNote !== null ? { pendingNote: null } : {}) });
     await this.updateTray();
   }
 
@@ -589,41 +656,98 @@ export class DesktopApp {
     return true;
   }
 
-  // ---- idle (local only) -----------------------------------------------------------------------------------------
+  // ---- "Still there?" (local only) -------------------------------------------------------------------------------
 
-  /** Called every ~30 s: tray refresh and the local idle check (opt-in). */
+  /**
+   * Whether the check runs: the organisation's switch on a 1.10 server (`features.idle_check`, on by default there);
+   * on a 1.9 server, which says nothing, the person's own opt-in.
+   */
+  idleCheckEnabled(): boolean {
+    const features = this.features();
+    return this.state.session !== null && (features.idleCheck ?? hasConsent(this.state, 'idleDetection'));
+  }
+
+  idleSettings(): { thresholdMinutes: number; answerTimeoutMinutes: number } {
+    const features = this.features();
+    return { thresholdMinutes: effectiveThreshold(features, this.state.settings.idleMinutes), answerTimeoutMinutes: features.answerTimeoutMinutes };
+  }
+
+  /**
+   * Called every 30 s: tray refresh and the "Still there?" check. The OS "seconds since last input" value is read
+   * here and used only for this decision: it is not stored, logged or sent.
+   */
   async tick(): Promise<void> {
     await this.updateTray();
+    const now = this.now();
+    const suspendedSince = this.lastCheck !== null && now.getTime() - this.lastCheck.getTime() > SUSPEND_GAP_MS ? this.lastCheck : null;
+    this.lastCheck = now;
+    const current = this.state.idleCheck;
+    if (!this.idleCheckEnabled()) {
+      if (current.phase === 'asking') this.setIdleCheck(WATCHING);
+      return;
+    }
     const timer = this.state.activeTimer;
-    if (timer === null || this.idle !== null || !hasConsent(this.state, 'idleDetection')) return;
-    this.monitor.thresholdSeconds = this.state.settings.idleMinutes * 60;
-    const period = this.monitor.observe(await this.platform.idleSeconds(), this.now());
-    const clamped = period !== null ? clampPeriod(period, timer.startedAt, this.now()) : null;
-    if (clamped === null) return;
-    this.idle = clamped;
+    if (timer === null && current.phase === 'watching') return;
+    const lastInputAt = new Date(now.getTime() - (await this.platform.idleSeconds()) * 1000);
+    const step = observeIdle(current, timer, { now, lastInputAt, suspendedSince }, this.idleSettings());
+    if (step.state !== current) this.setIdleCheck(step.state);
+    if (step.effect === 'autoStop') await this.runActions(step.actions);
+    if (step.effect === 'ask' || step.effect === 'askGap' || (step.effect === 'autoStop' && step.state.phase === 'gap')) await this.promptShown(step.state);
+  }
+
+  private setIdleCheck(state: IdleCheckState): void {
+    if (state.phase !== 'asking') this.meetingOpen = false;
+    this.persist({ idleCheck: state });
     this.render();
+  }
+
+  /** A calm, polite announcement (no focus change, no sound) and, if allowed, a system notification. */
+  private async promptShown(state: IdleCheckState): Promise<void> {
+    if (state.phase !== 'asking' && state.phase !== 'gap') return;
+    const minutes = state.phase === 'asking' ? this.idleSettings().thresholdMinutes : this.minutesBetween(state.from, state.to);
+    const text = state.phase === 'asking' ? this.t('stillThereText', { minutes, task: state.taskTitle }) : this.t('gapTitle');
+    this.announce(`${this.t('stillThereTitle')} ${text}`);
     if (hasConsent(this.state, 'notifications') && withinWorkingHours(this.me?.workingHours, this.now())) {
-      await this.platform.notify(this.t('idleTitle'), this.t('idleNotification'));
+      await this.platform.notify(this.t('stillThereTitle'), text);
     }
   }
 
-  /** The user's decision about the idle period: the only idle-related data that reaches the server. */
-  async resolveIdle(action: IdleAction): Promise<void> {
-    const period = this.idle;
-    if (period === null) return;
-    this.idle = null;
-    await this.guard(async () => {
-      try {
-        const change = await this.api().discardIdle(period.from, period.to, action);
-        await this.setTimer(change.timer);
-      } catch (error) {
-        if (error instanceof ApiError && error.code === 'no_active_timer') {
-          await this.setTimer(null);
-          return;
-        }
-        throw error;
-      }
-    });
+  private minutesBetween(from: string, to: string | Date): number {
+    return Math.max(1, Math.round(((typeof to === 'string' ? Date.parse(to) : to.getTime()) - Date.parse(from)) / 60_000));
+  }
+
+  /** The person's answer to "Still there?": the only idle-related data that reaches the server. */
+  async answerIdle(choice: IdleChoice): Promise<void> {
+    const state = this.state.idleCheck;
+    if (state.phase !== 'asking') return;
+    const decision = decide(state, choice, this.now());
+    this.persist({ pendingNote: decision.pendingNote ?? this.state.pendingNote });
+    this.setIdleCheck(decision.state);
+    await this.runActions(decision.actions);
+    this.setNotice(this.t(choice.kind === 'pause' ? 'idlePaused' : choice.kind === 'discard' ? 'idleDiscarded' : 'idleKept'));
+  }
+
+  /** The answer about the time away after an automatic stop. */
+  async answerGap(choice: GapChoice): Promise<void> {
+    const state = this.state.idleCheck;
+    if (state.phase !== 'gap') return;
+    const decision = decideGap(state, choice);
+    this.setIdleCheck(decision.state);
+    await this.runActions(decision.actions);
+    this.main?.root.querySelector<HTMLButtonElement>('#gap-resume')?.focus();
+  }
+
+  /** "Resume" after the gap question, or "Not now". */
+  async resumeAfterGap(resume: boolean): Promise<void> {
+    const state = this.state.idleCheck;
+    if (state.phase !== 'resume') return;
+    this.setIdleCheck(WATCHING);
+    if (resume) await this.start(this.findTask(state.taskId) ?? { id: state.taskId, title: state.taskTitle });
+  }
+
+  dismissClamps(): void {
+    this.clampNotes = [];
+    this.render();
   }
 
   // ---- updates ----------------------------------------------------------------------------------------------------
@@ -721,12 +845,47 @@ export class DesktopApp {
       if (feature === 'autostart') await this.platform.setAutostart(enabled);
       this.state = recordConsent(this.state, feature, enabled, this.now());
       saveLocal(this.state, this.storage);
-      if (feature === 'idleDetection' && !enabled) this.monitor.reset();
+      if (feature === 'idleDetection' && !enabled && this.state.idleCheck.phase === 'asking') this.setIdleCheck(WATCHING);
     });
   }
 
-  setIdleMinutes(minutes: number): void {
+  setIdleMinutes(minutes: number | null): void {
     this.persist({ settings: { ...this.state.settings, idleMinutes: minutes } });
+  }
+
+  /**
+   * "Clear local data": revokes the token (best effort), deletes it from the keychain, empties the app's storage
+   * (settings, consents, pinned tasks, queued actions, idle-check state) and turns "start at login" off.
+   */
+  async clearLocalData(): Promise<void> {
+    if (this.state.session !== null) {
+      try {
+        await this.api().logout();
+      } catch {
+        // Local clean-up never depends on the server.
+      }
+    }
+    try {
+      if (await this.platform.autostartEnabled()) await this.platform.setAutostart(false);
+    } catch {
+      // Not available on this system.
+    }
+    await this.platform.secretDelete();
+    for (const key of LOCAL_KEYS) this.storage.removeItem(key);
+    this.token = null;
+    this.state = emptyState();
+    this.serverDraft = this.deps.beaconUrl ?? '';
+    this.tasks = [];
+    this.entries = null;
+    this.me = null;
+    this.clampNotes = [];
+    this.main = null;
+    this.confirmClear = false;
+    this.offline = false;
+    this.view = 'login';
+    this.setNotice(this.t('localDataCleared'));
+    this.render();
+    await this.updateTray();
   }
 
   // ---- keyboard ---------------------------------------------------------------------------------------------------
@@ -1189,7 +1348,8 @@ export class DesktopApp {
           h('span', {}, this.updateMessage),
           h('button', { class: 'secondary small', id: 'download-beacon', on: { click: () => this.openApps() } }, t('downloadFromBeacon')),
         ),
-      this.idle !== null && this.renderIdle(this.idle),
+      this.renderIdleCheck(),
+      this.clampNotes.length > 0 && this.renderClamps(),
       this.offline && h('p', { class: 'muted' }, t('offlineStartNote')),
     ]);
   }
@@ -1206,6 +1366,7 @@ export class DesktopApp {
           h('span', { class: 'chip' }, '○ ', t('notTracking')),
           last !== null && h('p', { class: 'last', id: 'last-task' }, t('lastTask', { task: last.title })),
           last !== null &&
+            this.state.idleCheck.phase !== 'resume' &&
             h('button', { class: 'primary', id: 'resume', key: 'resume', attrs: { 'aria-disabled': this.busy ? 'true' : undefined, 'aria-label': t('resumeTask', { task: last.title }), 'aria-keyshortcuts': 'Control+Shift+S' }, on: { click: () => this.whenIdle(() => this.resume()) } }, icon('play'), t('resume')),
         ],
         '#search',
@@ -1330,19 +1491,178 @@ export class DesktopApp {
     );
   }
 
-  private renderIdle(period: IdlePeriod): HTMLElement {
+  private time(iso: string | Date): string {
+    return this.timeFormat.format(typeof iso === 'string' ? new Date(iso) : iso);
+  }
+
+  /** The "Still there?" prompt, the "welcome back" gap question and the Resume offer (calm, never blocking). */
+  private renderIdleCheck(): HTMLElement | null {
     const t = this.t;
-    const time = (d: Date) => this.timeFormat.format(d);
-    const minutes = Math.round((period.to.getTime() - period.from.getTime()) / 60000);
+    const state = this.state.idleCheck;
+    const card = (id: string, title: string, ...children: Child[]) =>
+      h(
+        'section',
+        { class: 'card still-there', id, key: id, attrs: { 'aria-labelledby': `${id}-title` } },
+        art('mascot-small', '', 'mascot tiny'),
+        h('div', { class: 'still-there-body' }, h('h2', { id: `${id}-title` }, title), ...children),
+      );
+    switch (state.phase) {
+      case 'watching':
+        return null;
+      case 'asking': {
+        const span = promptSpan(state, this.now());
+        const minutes = this.minutesBetween(state.from, state.returnedAt ?? span.to);
+        return card(
+          'idle',
+          t('stillThereTitle'),
+          h('p', { id: 'idle-text' }, t('stillThereText', { minutes: Math.max(minutes, this.idleSettings().thresholdMinutes), task: state.taskTitle })),
+          h('p', { class: 'muted' }, t('stillThereSince', { time: this.time(state.from) })),
+          this.meetingOpen
+            ? this.renderMeeting()
+            : h(
+                'div',
+                { class: 'choice-list', attrs: { role: 'group', 'aria-labelledby': 'idle-title' } },
+                h('button', { class: 'primary', id: 'idle-here', key: 'idle-here', attrs: { type: 'button' }, on: { click: () => void this.answerIdle({ kind: 'here' }) } }, t('idleHere')),
+                h('button', { class: 'secondary', id: 'idle-meeting', key: 'idle-meeting', attrs: { type: 'button', 'aria-expanded': 'false' }, on: { click: () => this.openMeeting() } }, t('idleMeeting')),
+                h('button', { class: 'secondary', id: 'idle-discard', key: 'idle-discard', attrs: { type: 'button' }, on: { click: () => void this.answerIdle({ kind: 'discard' }) } }, t('idleDiscardMinutes', { minutes })),
+                h('button', { class: 'secondary', id: 'idle-pause', key: 'idle-pause', attrs: { type: 'button' }, on: { click: () => void this.answerIdle({ kind: 'pause' }) } }, t('idlePause', { time: this.time(state.from) })),
+              ),
+          h('p', { class: 'muted small-print' }, t('stillThereTimeout', { minutes: this.idleSettings().answerTimeoutMinutes })),
+        );
+      }
+      case 'away':
+        return card('idle-away', t('awayTitle'), h('p', {}, t('awayText', { time: this.time(state.from), task: state.taskTitle })));
+      case 'gap': {
+        const minutes = this.minutesBetween(state.from, state.to);
+        const features = this.features();
+        const canAdd = features.startBackdate && features.stopBackdate;
+        const select = h('select', { id: 'gap-task', attrs: { 'aria-label': t('gapOtherTask') } });
+        for (const task of this.reassignTargets(state.taskId)) select.append(h('option', { attrs: { value: task.id } }, task.title));
+        return card(
+          'gap',
+          t('gapTitle'),
+          h('p', { id: 'gap-text' }, t('gapText', { from: this.time(state.from), to: this.time(state.to), minutes, task: state.taskTitle })),
+          canAdd
+            ? h(
+                'div',
+                { class: 'choice-list', attrs: { role: 'group', 'aria-labelledby': 'gap-title' } },
+                h('button', { class: 'primary', id: 'gap-keep', key: 'gap-keep', attrs: { type: 'button' }, on: { click: () => void this.answerGap({ kind: 'keep' }) } }, t('gapKeep', { task: state.taskTitle })),
+                select.options.length > 0 &&
+                  h(
+                    'div',
+                    { class: 'inline-choice' },
+                    select,
+                    h('button', {
+                      class: 'secondary',
+                      id: 'gap-reassign',
+                      key: 'gap-reassign',
+                      attrs: { type: 'button' },
+                      on: {
+                        click: () => {
+                          const task = this.reassignTargets(state.taskId).find((item) => item.id === select.value);
+                          if (task !== undefined) void this.answerGap({ kind: 'reassign', task: { id: task.id, title: task.title } });
+                        },
+                      },
+                    }, t('gapReassign')),
+                  ),
+                h('button', { class: 'secondary', id: 'gap-discard', key: 'gap-discard', attrs: { type: 'button' }, on: { click: () => void this.answerGap({ kind: 'discard' }) } }, t('gapDiscard')),
+              )
+            : h(
+                'div',
+                { class: 'choice-list' },
+                h('p', { class: 'muted', id: 'gap-unsupported' }, t('gapUnsupported')),
+                h('button', { class: 'secondary', id: 'gap-discard', key: 'gap-discard', attrs: { type: 'button' }, on: { click: () => void this.answerGap({ kind: 'discard' }) } }, t('gapOk')),
+              ),
+        );
+      }
+      case 'resume':
+        return card(
+          'gap-resume-card',
+          t('resumeTitle', { task: state.taskTitle }),
+          h(
+            'div',
+            { class: 'row-actions' },
+            h('button', { class: 'primary', id: 'gap-resume', key: 'gap-resume', attrs: { type: 'button' }, on: { click: () => void this.resumeAfterGap(true) } }, icon('play'), t('resume')),
+            h('button', { class: 'secondary', id: 'gap-dismiss', key: 'gap-dismiss', attrs: { type: 'button' }, on: { click: () => void this.resumeAfterGap(false) } }, t('notNow')),
+          ),
+        );
+    }
+  }
+
+  /** Tasks the idle time can go to: pinned, recent and listed tasks, except `exclude`. */
+  reassignTargets(exclude: string): Task[] {
+    const seen = new Set<string>([exclude]);
+    const result: Task[] = [];
+    for (const task of [...this.quickTasks(), ...this.tasks]) {
+      if (seen.has(task.id)) continue;
+      seen.add(task.id);
+      result.push(task);
+    }
+    return result;
+  }
+
+  private openMeeting(): void {
+    this.meetingOpen = true;
+    this.render();
+    this.main?.root.querySelector<HTMLInputElement>('#idle-note')?.focus();
+  }
+
+  /** "I was in a meeting / call": keep the time (optional note) or, on a 1.10 server, count it on another task. */
+  private renderMeeting(): HTMLElement {
+    const t = this.t;
+    const state = this.state.idleCheck;
+    const note = h('input', { id: 'idle-note', attrs: { type: 'text', maxlength: String(NOTE_MAX), autocomplete: 'off', 'aria-describedby': 'idle-note-help' } });
+    const reassign = this.features().idleReassign && state.phase === 'asking';
+    const target = h('select', { id: 'idle-target' });
+    if (reassign) {
+      target.append(h('option', { attrs: { value: '' } }, t('idleSameTask', { task: state.taskTitle })));
+      for (const task of this.reassignTargets(state.taskId)) target.append(h('option', { attrs: { value: task.id } }, task.title));
+    }
+    return h(
+      'form',
+      {
+        class: 'meeting',
+        id: 'idle-meeting-form',
+        on: {
+          submit: (event) => {
+            event.preventDefault();
+            const task = target.value !== '' && state.phase === 'asking' ? this.reassignTargets(state.taskId).find((item) => item.id === target.value) : undefined;
+            void this.answerIdle({ kind: 'meeting', note: note.value, reassignTo: task !== undefined ? { id: task.id, title: task.title } : undefined });
+          },
+        },
+      },
+      h('label', { attrs: { for: 'idle-note' } }, t('idleNote')),
+      note,
+      h('p', { class: 'help', id: 'idle-note-help' }, t('idleNoteHelp')),
+      reassign && h('label', { attrs: { for: 'idle-target' } }, t('idleCountOn')),
+      reassign && target,
+      h(
+        'div',
+        { class: 'row-actions' },
+        h('button', { class: 'primary small', id: 'idle-meeting-save', key: 'idle-meeting-save', attrs: { type: 'submit' } }, t('idleMeetingSave')),
+        h('button', { class: 'link', id: 'idle-meeting-cancel', key: 'idle-meeting-cancel', attrs: { type: 'button' }, on: { click: () => { this.meetingOpen = false; this.render(); this.main?.root.querySelector<HTMLButtonElement>('#idle-meeting')?.focus(); } } }, t('cancel')),
+      ),
+    );
+  }
+
+  /** Times the server recorded differently from what was asked, in plain words. */
+  private renderClamps(): HTMLElement {
+    const t = this.t;
     return h(
       'section',
-      { class: 'card idle', id: 'idle', attrs: { role: 'alertdialog', 'aria-labelledby': 'idle-title' } },
-      h('strong', { id: 'idle-title' }, t('idleTitle')),
-      h('p', {}, t('idleText', { from: time(period.from), to: time(period.to), minutes })),
-      h('button', { class: 'primary', id: 'idle-keep', on: { click: () => void this.resolveIdle('keep') } }, t('idleKeep')),
-      h('button', { class: 'secondary', id: 'idle-split', on: { click: () => void this.resolveIdle('split') } }, t('idleSplit')),
-      h('button', { class: 'danger', id: 'idle-discard', on: { click: () => void this.resolveIdle('discard') } }, t('idleDiscard')),
+      { class: 'card clamps', id: 'clamps', key: 'clamps', attrs: { 'aria-labelledby': 'clamps-title' } },
+      h('h2', { id: 'clamps-title' }, t('clampTitle')),
+      h('ul', { class: 'plain' }, ...this.clampNotes.map((note) => h('li', {}, this.clampText(note)))),
+      h('button', { class: 'secondary small', id: 'clamps-dismiss', key: 'clamps-dismiss', attrs: { type: 'button' }, on: { click: () => this.dismissClamps() } }, t('gotIt')),
     );
+  }
+
+  clampText(note: ClampNote): string {
+    const params = { requested: this.time(note.requested), applied: this.time(note.applied), task: note.taskTitle ?? '' };
+    const reason = note.reason ?? 'none';
+    const key = `clamp_${note.kind}_${reason}` as MessageKey;
+    const text = this.t(key, params);
+    return text === key ? this.t(note.kind === 'start' ? 'clamp_start_none' : 'clamp_stop_none', params) : text;
   }
 
   private renderFeature(feature: Feature, label: MessageKey, text: MessageKey, extra?: HTMLElement): HTMLElement {
@@ -1362,15 +1682,38 @@ export class DesktopApp {
     );
   }
 
-  private renderSettings(): HTMLElement {
+  /** "Still there?" settings: set by the organisation on 1.10 servers (the person may only lengthen the wait). */
+  private renderIdleSettings(): HTMLElement {
     const t = this.t;
+    const features = this.features();
+    const current = this.idleSettings().thresholdMinutes;
     const minutes = h('select', { id: 'idle-minutes' });
-    for (const value of [5, 10, 15, 30]) {
+    for (const value of thresholdChoices(features)) {
       const option = h('option', { attrs: { value: String(value) } }, String(value));
-      option.selected = value === this.state.settings.idleMinutes;
+      option.selected = value === current;
       minutes.append(option);
     }
-    minutes.addEventListener('change', () => this.setIdleMinutes(Number(minutes.value)));
+    minutes.addEventListener('change', () => this.setIdleMinutes(Number(minutes.value) === features.thresholdMinutes ? null : Number(minutes.value)));
+    const wait = h('label', { class: 'inline' }, t('idleMinutes'), minutes);
+    const timeout = h('p', { class: 'muted', id: 'idle-timeout-text' }, t('stillThereTimeout', { minutes: features.answerTimeoutMinutes }));
+    if (features.idleCheck === null) {
+      return this.renderFeature('idleDetection', 'featureIdle', 'featureIdleText', h('div', {}, wait, timeout));
+    }
+    return h(
+      'section',
+      { class: 'feature', id: 'idle-settings' },
+      h('h2', {}, t('stillThereSetting')),
+      features.idleCheck
+        ? h('p', { class: 'help', id: 'idle-org' }, t('idleOrgOn', { minutes: features.thresholdMinutes }))
+        : h('p', { class: 'help', id: 'idle-org' }, t('idleOrgOff')),
+      features.idleCheck && wait,
+      features.idleCheck && timeout,
+      h('p', { class: 'muted' }, t('idleLocalOnly')),
+    );
+  }
+
+  private renderSettings(): HTMLElement {
+    const t = this.t;
     const shortcut = h('input', { id: 'shortcut', attrs: { type: 'text', spellcheck: 'false', autocomplete: 'off', 'aria-describedby': 'shortcut-help shortcut-message' } });
     shortcut.value = this.state.settings.shortcut;
     return h(
@@ -1399,7 +1742,7 @@ export class DesktopApp {
           h('button', { class: 'link', id: 'shortcut-default', attrs: { type: 'button' }, on: { click: () => void this.applyShortcut(DEFAULT_SETTINGS.shortcut) } }, t('shortcutDefault')),
         ),
       ),
-      this.renderFeature('idleDetection', 'featureIdle', 'featureIdleText', h('label', { class: 'inline' }, t('idleMinutes'), minutes)),
+      this.renderIdleSettings(),
       this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText'),
       this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
       h('button', { class: 'link', id: 'open-privacy', on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
@@ -1411,20 +1754,38 @@ export class DesktopApp {
     );
   }
 
+  /** What is sent, what stays on this computer, and "Clear local data". */
   private renderPrivacy(): HTMLElement {
     const t = this.t;
+    const section = (id: string, title: MessageKey, items: MessageKey[]) =>
+      h('section', { class: 'privacy-section', id, attrs: { 'aria-labelledby': `${id}-title` } }, h('h2', { id: `${id}-title` }, t(title)), h('ul', { class: 'plain' }, ...items.map((key) => h('li', {}, t(key)))));
+    const pending = this.queue.size;
     return h(
       'main',
       { id: 'privacy' },
       h('p', {}, t('privacyIntro')),
+      section('privacy-sent', 'privacySentTitle', ['privacySentSignIn', 'privacySentTimer', 'privacySentIdle', 'privacySentUpdates']),
+      section('privacy-local', 'privacyLocalTitle', ['privacyLocalToken', 'privacyLocalState', 'privacyLocalIdle', 'privacyLocalTotals']),
+      section('privacy-never', 'privacyNeverTitle', ['privacyNever']),
+      h('p', {}, t('privacyRights')),
       h(
-        'ul',
-        { class: 'plain' },
-        h('li', {}, t('privacySent')),
-        h('li', {}, t('privacyStored')),
-        h('li', {}, t('privacyNever')),
-        h('li', {}, t('privacyIdle')),
-        h('li', {}, t('privacyRights')),
+        'section',
+        { class: 'feature', id: 'clear-local-section', attrs: { 'aria-labelledby': 'clear-local-title' } },
+        h('h2', { id: 'clear-local-title' }, t('clearLocalTitle')),
+        h('p', { class: 'help' }, t('clearLocalText')),
+        this.confirmClear
+          ? h(
+              'div',
+              { class: 'confirm', id: 'clear-local-confirm', attrs: { role: 'group', 'aria-labelledby': 'clear-local-question' } },
+              h('p', { id: 'clear-local-question' }, pending > 0 ? t('clearLocalPending', { count: pending }) : t('clearLocalSure')),
+              h(
+                'div',
+                { class: 'row-actions' },
+                h('button', { class: 'danger', id: 'clear-local-yes', key: 'clear-local-yes', attrs: { type: 'button' }, on: { click: () => void this.clearLocalData() } }, t('clearLocalYes')),
+                h('button', { class: 'secondary', id: 'clear-local-no', key: 'clear-local-no', attrs: { type: 'button' }, on: { click: () => { this.confirmClear = false; this.render(); this.body.querySelector<HTMLButtonElement>('#clear-local')?.focus(); } } }, t('cancel')),
+              ),
+            )
+          : h('button', { class: 'secondary', id: 'clear-local', key: 'clear-local', attrs: { type: 'button' }, on: { click: () => { this.confirmClear = true; this.render(); this.body.querySelector<HTMLButtonElement>('#clear-local-yes')?.focus(); } } }, t('clearLocal')),
       ),
     );
   }

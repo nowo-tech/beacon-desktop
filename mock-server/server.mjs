@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Mock of the TimeTrackBundle 1.9.0 client API (docs/CLIENT-API.md of nowo-tech/TimeTrackBundle) plus Beacon's
- * desktop updater route. Zero dependencies. Used by the unit / e2e tests and for local development:
+ * Mock of the TimeTrackBundle 1.10.0 client API, contract v0.3 (docs/CLIENT-API.md of nowo-tech/TimeTrackBundle), plus
+ * Beacon's desktop updater route. `POST /__mock/config {"apiVersion": "1.9"}` turns it into a 1.9 server (no `features`
+ * / `limits`, `startedAt` / `endedAt` ignored, no `reassign`). Zero dependencies. Used by the unit / e2e tests and for local development:
  *
  *   node mock-server/server.mjs            # http://127.0.0.1:8787
  *   PORT=9000 node mock-server/server.mjs
@@ -19,7 +20,9 @@ import { pathToFileURL } from 'node:url';
 const PREFIX = '/api/time-track';
 const ALL_SCOPES = ['timer:read', 'timer:write', 'tasks:read', 'entries:read'];
 const SOURCES = new Set(['extension', 'desktop', 'web']);
-const IDLE_ACTIONS = new Set(['keep', 'discard', 'split']);
+const IDLE_ACTIONS = new Set(['keep', 'discard', 'split', 'reassign']);
+const IDLE_THEN = new Set(['continue', 'stop', 'switch']);
+const CLOCK_SKEW_SECONDS = 120;
 const USER_CODE_ALPHABET = 'BCDFGHJKLMNPQRSTVWXZ';
 
 const USERS = [
@@ -68,6 +71,12 @@ function freshState() {
       notFound: [],
       // Lifetime of device codes in seconds (0 = expired at the first poll).
       deviceExpiresIn: 600,
+      // '1.10' (contract v0.3) or '1.9' (contract v0.2).
+      apiVersion: '1.10',
+      // client_api.backdate.max_seconds (0 = backdating off).
+      backdateMaxSeconds: 86400,
+      allowReassign: true,
+      idleCheck: { enabled: true, threshold_minutes: 10, answer_timeout_minutes: 5 },
     },
   };
 }
@@ -194,6 +203,45 @@ export function createMockServer(options = {}) {
     return entry;
   }
 
+  const v110 = () => state.config.apiVersion !== '1.9';
+
+  /** Strict-enough RFC 3339 check (the bundle uses one parser for every client time). */
+  function parseTime(value) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : new Date(Math.floor(date.getTime() / 1000) * 1000);
+  }
+
+  function result(requested, applied, clamped, reason) {
+    return { requested: requested.toISOString(), applied: applied.toISOString(), clamped, reason };
+  }
+
+  /** Contract v0.3 §4.2. */
+  function clampStart(userId, requested) {
+    const now = new Date(Math.floor(Date.now() / 1000) * 1000);
+    const max = state.config.backdateMaxSeconds;
+    if (max === 0) return result(requested, now, true, 'disabled');
+    if (requested.getTime() > now.getTime() + CLOCK_SKEW_SECONDS * 1000) return result(requested, now, true, 'future');
+    if (requested > now) return result(requested, now, false, null);
+    const ends = (state.entries.get(userId) ?? []).map((e) => Date.parse(e.endedAt));
+    const lastEnd = ends.length > 0 ? Math.max(...ends) : null;
+    const floor = now.getTime() - max * 1000;
+    const lower = lastEnd !== null && lastEnd > now.getTime() ? now.getTime() : Math.max(floor, lastEnd ?? -Infinity);
+    if (requested.getTime() >= lower) return result(requested, requested, false, null);
+    return result(requested, new Date(lower), true, lastEnd !== null && lastEnd >= floor ? 'overlap' : 'max_backdate');
+  }
+
+  /** Contract v0.3 §4.4. */
+  function clampStop(timer, requested) {
+    const now = new Date(Math.floor(Date.now() / 1000) * 1000);
+    const start = new Date(timer.startedAt);
+    if (state.config.backdateMaxSeconds === 0) return result(requested, now, true, 'disabled');
+    if (requested.getTime() > now.getTime() + CLOCK_SKEW_SECONDS * 1000) return result(requested, now, true, 'future');
+    if (requested > now) return result(requested, now, false, null);
+    if (requested < start) return result(requested, start, true, 'before_start');
+    return result(requested, requested, false, null);
+  }
+
   function validTask(body) {
     return typeof body.taskId === 'string' && TASKS.some((t) => t.id === body.taskId);
   }
@@ -231,6 +279,8 @@ export function createMockServer(options = {}) {
         const session = auth(req, res);
         if (!session) return;
         const user = USERS.find((u) => u.id === session.userId);
+        const backdate = state.config.backdateMaxSeconds > 0;
+        const idle = state.config.idleCheck;
         return send(res, 200, {
           userId: user.id,
           identifier: user.email,
@@ -238,6 +288,23 @@ export function createMockServer(options = {}) {
           scopes: session.scopes,
           workingHours: state.config.workingHours,
           ...(state.config.minSupportedVersion ? { minSupportedVersion: state.config.minSupportedVersion } : {}),
+          ...(v110()
+            ? {
+                features: {
+                  task_details: true,
+                  start_backdate: backdate,
+                  stop_backdate: backdate,
+                  idle_reassign: state.config.allowReassign,
+                  idle_check: idle.enabled,
+                  workday: false,
+                  monitoring: false,
+                },
+                limits: {
+                  backdate: { max_seconds: state.config.backdateMaxSeconds, clock_skew_seconds: CLOCK_SKEW_SECONDS },
+                  idle_check: { threshold_minutes: idle.threshold_minutes, answer_timeout_minutes: idle.answer_timeout_minutes },
+                },
+              }
+            : {}),
         });
       }
       case 'GET tasks': {
@@ -262,16 +329,30 @@ export function createMockServer(options = {}) {
         if (!validTask(body)) {
           return error(res, 403, 'task_forbidden', 'You may not track time on this task.');
         }
+        const startedAt = v110() && body.startedAt !== undefined ? parseTime(body.startedAt) : undefined;
+        if (startedAt === null) {
+          return error(res, 400, 'invalid_request', 'startedAt must be an RFC 3339 date-time.');
+        }
         if (state.timers.has(session.userId)) {
           return error(res, 409, 'timer_running', 'A timer is already running.');
         }
-        return send(res, 201, { timer: startTimer(session.userId, body.taskId, body.note, body.source ?? session.clientType) });
+        const clamp = startedAt !== undefined ? clampStart(session.userId, startedAt) : null;
+        const timer = startTimer(session.userId, body.taskId, body.note, body.source ?? session.clientType);
+        if (clamp !== null) timer.startedAt = clamp.applied;
+        return send(res, 201, clamp !== null ? { timer, startedAtResult: clamp } : { timer });
       }
       case 'POST timer/stop': {
         const session = auth(req, res, 'timer:write');
         if (!session) return;
-        const entry = stopTimer(session.userId, body.note);
-        return entry ? send(res, 200, { entry }) : error(res, 404, 'no_active_timer', 'No active timer.');
+        const endedAt = v110() && body.endedAt !== undefined ? parseTime(body.endedAt) : undefined;
+        if (endedAt === null) {
+          return error(res, 400, 'invalid_request', 'endedAt must be an RFC 3339 date-time.');
+        }
+        const timer = state.timers.get(session.userId);
+        const clamp = timer && endedAt !== undefined ? clampStop(timer, endedAt) : null;
+        const entry = stopTimer(session.userId, body.note, clamp !== null ? new Date(clamp.applied) : undefined);
+        if (!entry) return error(res, 404, 'no_active_timer', 'No active timer.');
+        return send(res, 200, clamp !== null ? { entry, endedAtResult: clamp } : { entry });
       }
       case 'POST timer/switch': {
         const session = auth(req, res, 'timer:write');
@@ -288,28 +369,54 @@ export function createMockServer(options = {}) {
         if (!session) return;
         const from = new Date(body.from);
         const to = new Date(body.to);
-        if (!IDLE_ACTIONS.has(body.action) || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) {
-          return error(res, 400, 'invalid_request', 'from < to and action keep|discard|split are required.');
+        const reassign = body.action === 'reassign';
+        if (!IDLE_ACTIONS.has(body.action) || (reassign && (!v110() || !state.config.allowReassign)) || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) {
+          return error(res, 400, 'invalid_request', 'from < to and a known action are required.');
+        }
+        if (reassign && (typeof body.taskId !== 'string' || body.taskId.trim() === '' || (body.then !== undefined && !IDLE_THEN.has(body.then)))) {
+          return error(res, 400, 'invalid_request', 'taskId is required and then must be continue|stop|switch.');
+        }
+        if (reassign && !validTask(body)) {
+          return error(res, 403, 'task_forbidden', 'You may not track time on this task.');
         }
         const timer = state.timers.get(session.userId);
         if (!timer) {
           return error(res, 404, 'no_active_timer', 'No active timer.');
         }
+        if (reassign && body.taskId === timer.taskId) {
+          return error(res, 400, 'invalid_request', 'use keep or split for the same task');
+        }
         if (from < new Date(timer.startedAt) || to > new Date(Date.now() + 1000)) {
           return error(res, 400, 'invalid_request', 'from must be >= the timer start and to <= now.');
         }
-        state.idleDecisions.push({ userId: session.userId, from: body.from, to: body.to, action: body.action });
+        state.idleDecisions.push({
+          userId: session.userId,
+          from: body.from,
+          to: body.to,
+          action: body.action,
+          ...(reassign ? { taskId: body.taskId, then: body.then ?? 'continue', note: body.note ?? null } : {}),
+        });
+        const reassignedKey = v110() ? { reassigned: null } : {};
         if (body.action === 'keep') {
-          return send(res, 200, { entry: null, timer });
+          return send(res, 200, { entry: null, timer, ...reassignedKey });
         }
         const { taskId, clientType } = timer;
-        const entry = stopTimer(session.userId, undefined, from);
+        const entry = from.getTime() > new Date(timer.startedAt).getTime() || !reassign ? stopTimer(session.userId, undefined, from) : (state.timers.delete(session.userId), null);
         if (body.action === 'discard') {
-          return send(res, 200, { entry, timer: null });
+          return send(res, 200, { entry, timer: null, ...reassignedKey });
+        }
+        if (reassign) {
+          startTimer(session.userId, body.taskId, body.note, body.source ?? clientType);
+          state.timers.get(session.userId).startedAt = from.toISOString();
+          const reassigned = stopTimer(session.userId, body.note, to);
+          const then = body.then ?? 'continue';
+          const next = then === 'stop' ? null : startTimer(session.userId, then === 'switch' ? body.taskId : taskId, undefined, clientType);
+          if (next) next.startedAt = to.toISOString();
+          return send(res, 200, { entry, reassigned, timer: next });
         }
         const restarted = startTimer(session.userId, taskId, undefined, clientType);
         restarted.startedAt = to.toISOString();
-        return send(res, 200, { entry, timer: restarted });
+        return send(res, 200, { entry, timer: restarted, ...reassignedKey });
       }
       case 'GET entries': {
         const session = auth(req, res, 'entries:read');
