@@ -40,6 +40,11 @@ Zero-cost signing and auto-update (owner decision 2026-11-04). Plan, Beacon chan
 - The updater public key is committed in `tauri.conf.json` (placeholder until the owner adds it); the
   `TAURI_UPDATER_PUBKEY` variable is now an optional override (also compiled in). The release workflow requires the
   signing key instead of skipping updater artifacts.
+- Release workflow runners come from repository variables (`LINUX_RUNNER`, `WINDOWS_RUNNER`, `MACOS_RUNNER`, JSON
+  `runs-on` values; GitHub-hosted defaults), so the same workflow runs on self-hosted runners. `WINDOWS_BUILD=false` /
+  `MACOS_BUILD=false` skip that platform: `stable.json` then has no entries for it in that version. The Linux apt step
+  runs on hosted runners only, and self-hosted jobs delete `src-tauri/target`, `out` and `node_modules` at the end.
+  Secret names are unchanged.
 
 ## [0.3.0] - 2026-11-04
 
