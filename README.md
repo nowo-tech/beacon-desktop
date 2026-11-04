@@ -41,6 +41,9 @@ Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile 
   newer than the app and an update satisfying it is offered; it always keeps *Remind me later*, *Download from Beacon*
   and *Sign out*. The Bearer token is never sent to the artifact host (pre-signed URL on another origin); the device
   verification page is opened only when it is https on the server's host.
+- Links back to Beacon: **Open Beacon** and **My time** in the header (and *Open Beacon* in the tray menu), plus an
+  "Open in Beacon" icon on each task and on the running timer when the server sends the task's `url`. Only `https:`
+  links on the connected server's origin are shown or opened.
 - "What we collect" screen.
 
 ## Development

@@ -20,7 +20,7 @@ export function tauriPlatform(): Platform {
     secretDelete: () => invoke('secret_delete'),
     idleSeconds: () => invoke<number>('idle_seconds'),
     openUrl: (url) => openUrl(url),
-    setTray: (text, running) => invoke('set_tray_status', { text, running }),
+    setTray: (text, running, beaconLabel) => invoke('set_tray_status', { text, running, beaconLabel }),
     notify: async (title, body) => {
       let granted = await isPermissionGranted();
       if (!granted) granted = (await requestPermission()) === 'granted';

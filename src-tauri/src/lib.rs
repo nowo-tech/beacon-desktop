@@ -4,6 +4,7 @@
 //! which never leaves the device (the UI only asks the user what to do with an idle period).
 
 use serde::Serialize;
+use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent, Wry};
@@ -17,9 +18,16 @@ const TRAY_ID: &str = "main";
 const SHORTCUT: &str = "CommandOrControl+Alt+T";
 
 struct TrayItems {
+    menu: Menu<Wry>,
     status: MenuItem<Wry>,
     stop: MenuItem<Wry>,
+    /// "Open Beacon": only in the menu while connected to an https server (the UI decides, see `set_tray_status`).
+    beacon: MenuItem<Wry>,
+    beacon_shown: Mutex<bool>,
 }
+
+/// Position of "Open Beacon" in the tray menu (after the status line and "Open TimeTrack").
+const BEACON_POSITION: usize = 2;
 
 fn keychain() -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER).map_err(|e| e.to_string())
@@ -57,9 +65,16 @@ fn idle_seconds() -> u64 {
         .unwrap_or(0)
 }
 
-/// Updates the tray tooltip / title (macOS, Linux) and the "Stop timer" item.
+/// Updates the tray tooltip / title (macOS, Linux), the "Stop timer" item and the "Open Beacon" item.
+/// `beacon_label` is the translated label of "Open Beacon", or `None` to remove it (not connected). The item only emits
+/// `tray-open-beacon`; the UI builds and checks the URL and opens it through the opener plugin.
 #[tauri::command]
-fn set_tray_status(app: AppHandle, text: String, running: bool) -> Result<(), String> {
+fn set_tray_status(
+    app: AppHandle,
+    text: String,
+    running: bool,
+    beacon_label: Option<String>,
+) -> Result<(), String> {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         tray.set_tooltip(Some(&text)).map_err(|e| e.to_string())?;
         tray.set_title(if running { Some(text.as_str()) } else { None })
@@ -68,6 +83,27 @@ fn set_tray_status(app: AppHandle, text: String, running: bool) -> Result<(), St
     if let Some(items) = app.try_state::<TrayItems>() {
         items.status.set_text(&text).map_err(|e| e.to_string())?;
         items.stop.set_enabled(running).map_err(|e| e.to_string())?;
+        let mut shown = items.beacon_shown.lock().map_err(|e| e.to_string())?;
+        match beacon_label {
+            Some(label) => {
+                items.beacon.set_text(&label).map_err(|e| e.to_string())?;
+                if !*shown {
+                    items
+                        .menu
+                        .insert(&items.beacon, BEACON_POSITION)
+                        .map_err(|e| e.to_string())?;
+                    *shown = true;
+                }
+            }
+            None if *shown => {
+                items
+                    .menu
+                    .remove(&items.beacon)
+                    .map_err(|e| e.to_string())?;
+                *shown = false;
+            }
+            None => {}
+        }
     }
     Ok(())
 }
@@ -257,6 +293,8 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let status = MenuItem::with_id(app, "status", "TimeTrack", false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open TimeTrack", true, None::<&str>)?;
     let stop = MenuItem::with_id(app, "stop", "Stop timer", false, None::<&str>)?;
+    // Not in the menu until the UI reports a connected https server.
+    let beacon = MenuItem::with_id(app, "open-beacon", "Open Beacon", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&status, &open, &stop, &quit])?;
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
@@ -267,6 +305,9 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             "open" => show_main(app),
             "stop" => {
                 let _ = app.emit("tray-stop", ());
+            }
+            "open-beacon" => {
+                let _ = app.emit("tray-open-beacon", ());
             }
             "quit" => app.exit(0),
             _ => {}
@@ -285,7 +326,13 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         builder = builder.icon(icon.clone());
     }
     builder.build(app)?;
-    app.manage(TrayItems { status, stop });
+    app.manage(TrayItems {
+        menu,
+        status,
+        stop,
+        beacon,
+        beacon_shown: Mutex::new(false),
+    });
     Ok(())
 }
 

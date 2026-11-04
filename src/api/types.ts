@@ -50,6 +50,11 @@ export interface Task {
   title: string;
   boardId?: string | null;
   boardTitle?: string | null;
+  /**
+   * Absolute URL of the task page in the host app (optional; Beacon adds it through its TaskProvider bridge, older
+   * servers omit it). Clients only open it when it is https on the connected server's origin.
+   */
+  url?: string | null;
 }
 
 /** `metadata` of timers and entries: only `note` is set by these clients (free metadata is rejected). */
@@ -67,6 +72,8 @@ export interface Timer {
   lastHeartbeatAt?: string | null;
   clientType?: string | null;
   metadata?: Metadata | null;
+  /** Absolute URL of the task page (optional, same rules as `Task.url`). */
+  url?: string | null;
 }
 
 export interface Entry {
