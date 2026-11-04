@@ -8,10 +8,15 @@ const platform: Platform = isTauri ? tauriPlatform() : browserPlatform(__VERSION
 const root = document.getElementById('app');
 
 if (root !== null) {
-  const app = new DesktopApp(root, platform, { beaconUrl: __BEACON_URL__ });
+  const app = new DesktopApp(root, platform, {
+    beaconUrl: __BEACON_URL__,
+    channel: __CHANNEL__,
+    ...(__STORE_URL__ !== '' ? { storeUrl: __STORE_URL__ } : {}),
+  });
   void app.init();
   setInterval(() => void app.tick(), 30_000);
   setInterval(() => void (app.state.session !== null && app.refresh()), 5 * 60_000);
+  // Startup check runs in init(); then every 6 hours (Store build: only GET me's minimum, the Store updates the app).
   setInterval(() => void app.checkUpdates(), 6 * 3600_000);
   window.addEventListener('online', () => void (app.state.session !== null && app.refresh()));
   if (!isTauri) {

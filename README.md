@@ -51,11 +51,17 @@ Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile 
 - Privacy screen ("What we collect"): exactly what is sent and what stays on this computer, and **Clear local data**
   (signs out, deletes the token, settings, consents, pinned tasks, queued actions and the idle-check state).
 - Optional, off by default, with dated consent: notifications (never outside `me.workingHours`), start at login.
-- Auto-update through Beacon (`/api/time-track/updates/desktop/{target}/{arch}/{version}`, your token as Bearer);
-  an "update required" screen when the server's `min_supported_version` (body or `X-Min-Supported-Version` header) is
-  newer than the app and an update satisfying it is offered; it always keeps *Remind me later*, *Download from Beacon*
-  and *Sign out*. The Bearer token is never sent to the artifact host (pre-signed URL on another origin); the device
-  verification page is opened only when it is https on the server's host.
+- Auto-update through Beacon (`/api/time-track/updates/desktop/{target}/{arch}/{version}?bundle_type=…`, your token
+  as Bearer), signed with the owner's minisign key: checked at start, every 6 h and from *Check for updates* (tray,
+  Settings → About). A calm card ("Version X is available — What's new · Update now · Later") downloads with progress,
+  verifies, installs and relaunches; with a timer running it asks first and offers *After I stop*. An "update
+  required" screen when `min_supported_version` (updater body / `X-Min-Supported-Version` / `GET me`) is newer than the
+  app and an update satisfying it is offered; it always keeps *Remind me later*, *Download from Beacon* and *Sign out*.
+  The Bearer token is never sent to the artifact host (pre-signed URL on another origin); the device verification page
+  is opened only when it is https on the server's host.
+- Windows: Microsoft Store (MSIX, updated by the Store) or the per-user NSIS installer from Beacon (no UAC). macOS:
+  unsigned, see [first open on macOS](docs/guides/macos-first-open.en.md) ([español](docs/guides/macos-first-open.es.md)).
+  Plan and owner steps: [docs/RELEASE-PLAN-0.4.0.md](docs/RELEASE-PLAN-0.4.0.md).
 - Links back to Beacon: **Open Beacon** and **My time** in the header (and *Open Beacon* in the tray menu), plus an
   "Open in Beacon" icon on each task and on the running timer when the server sends the task's `url`. Only `https:`
   links on the connected server's origin are shown or opened.
@@ -83,15 +89,28 @@ verbatim with [time-track-extension](https://github.com/nowo-tech/time-track-ext
 
 Bump `package.json` and `CHANGELOG.md`, merge, push a `vX.Y.Z` tag. `.github/workflows/release.yml` (tags only) builds
 Linux and Windows first, macOS (universal) last, then uploads every file to `time-track-clients/desktop/<version>/` and
-writes `time-track-clients/desktop/channel/stable.json` last. Missing secrets skip their step with a notice.
+writes `time-track-clients/desktop/channel/stable.json` last. Updater signing is required: the build fails without
+`TAURI_SIGNING_PRIVATE_KEY` or while `src-tauri/tauri.conf.json` still has the updater public key placeholder
+(`pnpm release:check`). A missing S3 secret skips the upload with a notice. Microsoft Store: `pwsh
+scripts/store/build-msix.ps1` on Windows (`TIMETRACK_CHANNEL=store`, no in-app updater), upload in Partner Center. Full
+steps: [docs/RELEASE-PLAN-0.4.0.md](docs/RELEASE-PLAN-0.4.0.md).
 
 | Name | Kind | Used for |
 |---|---|---|
 | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | secrets | updater signatures (`pnpm tauri signer generate -w ~/.tauri/timetrack.key`) |
-| `TAURI_UPDATER_PUBKEY` | variable | the matching public key, built into the app |
+| `TAURI_UPDATER_PUBKEY` | variable (optional) | overrides the public key committed in `tauri.conf.json` (`plugins.updater.pubkey`) |
+| `MSIX_IDENTITY_NAME`, `MSIX_PUBLISHER`, `MSIX_PUBLISHER_DISPLAY_NAME`, `TIMETRACK_STORE_URL` | variables (optional) | Microsoft Store package (Partner Center → Product identity) |
 | `TIME_TRACK_S3_ENDPOINT`, `TIME_TRACK_S3_BUCKET`, `TIME_TRACK_S3_ACCESS_KEY_ID`, `TIME_TRACK_S3_SECRET_ACCESS_KEY` (+ optional `TIME_TRACK_S3_REGION`) | secrets | upload (`s3:PutObject` on `time-track-clients/*` only) |
 | `BEACON_URL` | variable | prefilled server URL |
 | `TIME_TRACK_MIN_SUPPORTED_VERSION` | variable (optional) | `min_supported_version` in `stable.json` |
+| `LINUX_RUNNER`, `WINDOWS_RUNNER`, `MACOS_RUNNER` | variables (optional) | JSON `runs-on` value per platform, e.g. `["self-hosted","linux","x64","tauri-build"]`; default `"ubuntu-22.04"`, `"windows-latest"`, `"macos-latest"` |
+| `WINDOWS_BUILD`, `MACOS_BUILD` | variables (optional) | `false` skips that platform (no entries for it in that version's `stable.json`) |
+
+Self-hosted runners (build runner spec in `nowo-tech/devops`, spec 024): ephemeral, scoped to this repository, never
+the production deploy runner (`prod-vps`). Linux images must carry the Tauri system libraries (webkit2gtk-4.1,
+ayatana-appindicator, librsvg, xdo, patchelf), rustup and the AWS CLI; Windows hosts need VS Build Tools (C++),
+WebView2, rustup, Git for Windows (`bash`) and PowerShell 7. The workflow only runs on `v*.*.*` tags, never on pull
+requests.
 
 Docs: [CHANGELOG](CHANGELOG.md) · [PRIVACY](PRIVACY.md) · [SECURITY](SECURITY.md) · [CONTRIBUTING](CONTRIBUTING.md)
 

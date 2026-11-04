@@ -5,6 +5,47 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+## [0.4.0] - unreleased
+
+Zero-cost signing and auto-update (owner decision 2026-11-04). Plan, Beacon changes and owner steps:
+[docs/RELEASE-PLAN-0.4.0.md](docs/RELEASE-PLAN-0.4.0.md).
+
+### Added
+
+- **Signed auto-update** from Beacon's updater route (`time_track_client_updater`): `createUpdaterArtifacts` on, so
+  every AppImage / NSIS `-setup.exe` / macOS `.app.tar.gz` ships with a minisign `.sig`; the app verifies it (and the
+  signed version) with the public key built in. Checks at start, every 6 hours and on demand (**Check for updates…** in
+  the tray, **Check for updates** in Settings → About).
+- **Update card**: calm, non-blocking, with the mascot — "Version X is available", **What's new** (release notes),
+  **Update now**, **Later**; download progress, then "Installing… TimeTrack will restart". English and Spanish; polite
+  announcements; axe-checked in light and dark.
+- **Never interrupts a running timer without asking**: *Update now* while tracking offers **After I stop** (installs as
+  soon as the timer stops, from anywhere) or *Update now* (the timer keeps running in Beacon).
+- **Forced update from `GET me`**: `minSupportedVersion` counts like the updater's minimum (the strictest wins); the
+  "Update required" screen gains the mascot and, with a timer running, **Stop the timer, then update**.
+- **Microsoft Store channel** (`TIMETRACK_CHANNEL=store`): no in-app updater, no autostart switch, About → *Open
+  Microsoft Store*; a forced update opens the Store listing. `scripts/store/build-msix.ps1` +
+  `scripts/store/msix-manifest.mjs` build the MSIX (the Store re-signs it: no certificate needed).
+- `pnpm release:check` (`scripts/release/check-updater-key.mjs`, also the first step of every `tauri build`): a release
+  build fails while `tauri.conf.json` still has the updater public key placeholder or the key is not a minisign key.
+- macOS first-open guide for unsigned builds (Sequoia / Sonoma), English and Spanish: `docs/guides/`.
+
+### Changed
+
+- Windows direct download: **NSIS only, per-user (`installMode: currentUser`)** — no UAC prompt for install or
+  updates. MSI is no longer built; MSI and deb installs are told to download from Beacon instead of getting a package
+  they cannot use (the updater request carries `bundle_type`).
+- macOS bundles are ad-hoc signed (`signingIdentity: "-"`), so Apple Silicon shows the normal "cannot verify" prompt
+  instead of "damaged".
+- The updater public key is committed in `tauri.conf.json` (placeholder until the owner adds it); the
+  `TAURI_UPDATER_PUBKEY` variable is now an optional override (also compiled in). The release workflow requires the
+  signing key instead of skipping updater artifacts.
+- Release workflow runners come from repository variables (`LINUX_RUNNER`, `WINDOWS_RUNNER`, `MACOS_RUNNER`, JSON
+  `runs-on` values; GitHub-hosted defaults), so the same workflow runs on self-hosted runners. `WINDOWS_BUILD=false` /
+  `MACOS_BUILD=false` skip that platform: `stable.json` then has no entries for it in that version. The Linux apt step
+  runs on hosted runners only, and self-hosted jobs delete `src-tauri/target`, `out` and `node_modules` at the end.
+  Secret names are unchanged.
+
 ## [0.3.0] - 2026-11-04
 
 Needs TimeTrackBundle 1.10 (client API contract v0.3) for the full feature set; works with 1.9 servers with the

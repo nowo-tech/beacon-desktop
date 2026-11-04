@@ -492,9 +492,13 @@ describe('desktop app', () => {
     expect(ui.app.update).toBeNull();
     await env.control('config', { update: { version: '0.2.0', notes: '', pub_date: '', url: 'u', signature: 's' } });
     await ui.app.checkUpdates();
-    expect(ui.$('#update').textContent).toContain('Version 0.2.0 is available.');
-    ui.click('#install-update');
+    expect(ui.$('#update').textContent).toContain('Version 0.2.0 is available');
+    ui.click('#update-now');
     await tick();
+    expect(ui.platform.hooks.installed).toBe(1);
+    expect(ui.$('#update').textContent).toContain('Installing version 0.2.0. TimeTrack will restart.');
+    // The real app relaunches here; the browser fake stays, so go back to "offered".
+    ui.app.updateStage = 'offer';
     await env.control('config', { failNext: { status: 500, error: 'x' } });
     await ui.app.checkUpdates();
     await env.control('token/revoke', {});
@@ -563,7 +567,7 @@ describe('desktop app', () => {
     await env.control('config', { update: { version: '0.3.0', notes: '', pub_date: '', url: 'u', signature: 's', min_supported_version: '0.2.0' } });
     await ui.app.checkUpdates();
     expect(ui.app.view).toBe('main');
-    expect(ui.$('#update-message').textContent).toContain('Automatic updates are not available in this build. Download version 0.3.0');
+    expect(ui.$('#update-message').textContent).toContain('Automatic updates are not available for this installation. Download version 0.3.0');
     // Up to date again clears the message.
     await env.control('config', { update: null, minSupportedVersion: null });
     await ui.app.checkUpdates();

@@ -9,3 +9,4 @@ src-tauri/gen/schemas/
 *.key
 .env
 scripts/icons/preview-*.png
+out/

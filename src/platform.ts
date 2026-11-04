@@ -10,10 +10,15 @@ export type UpdateCheck =
       version: string;
       notes?: string | null;
       min_supported_version?: string | null;
-      /** False when the build has no updater public key (cannot verify, so never block). */
+      /** False when this copy cannot install it itself (no updater public key, MSI / deb install): never block. */
       installable?: boolean;
     }
+  /** Microsoft Store build: the Store updates the app. */
+  | { status: 'disabled' }
   | { status: 'error'; message: string };
+
+/** Download progress of an update (`update-progress` events of the Rust `install_update` command). */
+export type UpdateProgress = { phase: 'downloading'; downloaded: number; total: number | null } | { phase: 'installing' };
 
 /** Tray tooltip and title (title: macOS menu bar / Linux AppIndicator label; `null` hides it). */
 export interface TrayStatus {
@@ -44,6 +49,8 @@ export interface TrayMenu {
   /** Present only while connected to an https server (see lib/beacon.ts). */
   openBeacon: string | null;
   myTime: string | null;
+  /** "Check for updates…" (absent in the Microsoft Store build). */
+  checkUpdates: string | null;
   settings: string;
   quit: string;
 }
@@ -71,7 +78,11 @@ export interface Platform {
   autostartEnabled(): Promise<boolean>;
   setAutostart(enabled: boolean): Promise<void>;
   checkUpdate(server: string, token: string): Promise<UpdateCheck>;
-  installUpdate(server: string, token: string): Promise<void>;
+  /**
+   * Downloads, verifies the signature, installs and relaunches (the promise only settles on failure in the real app,
+   * which restarts). `onProgress` receives the download progress, then `installing`.
+   */
+  installUpdate(server: string, token: string, onProgress?: (progress: UpdateProgress) => void): Promise<void>;
   /** The global shortcut was pressed (the window is already shown). */
   onShortcut(handler: () => void): void;
   /** A tray menu item was chosen (see `TrayMenu`). */
@@ -91,6 +102,12 @@ export interface BrowserHooks {
   refusedShortcuts: string[];
   installable: boolean;
   installError: string | null;
+  /** Progress events the fake updater sends before it "installs". */
+  installSteps: UpdateProgress[];
+  /** Pause between fake progress events (ms), so e2e can see the progress bar. */
+  installStepMs: number;
+  /** Number of successful fake installs (the real app relaunches instead). */
+  installed: number;
   shortcutPressed(): void;
   trayAction(action: string): void;
 }
@@ -111,6 +128,14 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     refusedShortcuts: [],
     installable: true,
     installError: null,
+    installSteps: [
+      { phase: 'downloading', downloaded: 0, total: 1000 },
+      { phase: 'downloading', downloaded: 500, total: 1000 },
+      { phase: 'downloading', downloaded: 1000, total: 1000 },
+      { phase: 'installing' },
+    ],
+    installStepMs: 0,
+    installed: 0,
     shortcutPressed: () => shortcutHandlers.forEach((handler) => handler()),
     trayAction: (action) => trayHandlers.forEach((handler) => handler(action)),
   };
@@ -146,8 +171,14 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
       const body = (await response.json()) as { version: string; notes?: string; min_supported_version?: string };
       return { status: 'available', installable: hooks.installable, ...body, min_supported_version: body.min_supported_version ?? headerMin };
     },
-    installUpdate: async () => {
+    installUpdate: async (_server, _token, onProgress) => {
+      for (const step of hooks.installSteps) {
+        if (hooks.installError !== null && step.phase === 'installing') break;
+        onProgress?.(step);
+        if (hooks.installStepMs > 0) await new Promise((resolve) => setTimeout(resolve, hooks.installStepMs));
+      }
       if (hooks.installError !== null) throw new Error(hooks.installError);
+      hooks.installed += 1;
     },
     onShortcut: (handler) => void shortcutHandlers.push(handler),
     onTray: (handler) => void trayHandlers.push(handler),

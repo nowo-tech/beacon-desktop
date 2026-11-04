@@ -11,7 +11,8 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - Your answer to "Still there?" (keep, discard, pause, or count on another task, with the start and end of that time),
   and the times you started or stopped a timer (also for actions sent later, after being offline). Never the input
   counter.
-- The app version, platform and architecture when it checks for updates.
+- The app version, platform, architecture and installer kind (for example `nsis` or `appimage`) when it checks for
+  updates. The Microsoft Store build never checks with Beacon: the Store updates it.
 - Nothing else: no screenshots, keystrokes, applications, window titles, URLs, activity or idle state.
 
 ## Stored on this computer
