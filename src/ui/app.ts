@@ -107,6 +107,8 @@ export class DesktopApp {
   /** The current failure (error catalogue), shown with its actions until dismissed or resolved. */
   error: ErrorView | null = null;
   notice: string | null = null;
+  /** Last screen-reader announcement (visually hidden). */
+  live = '';
   /** Value typed in the server field: never cleared by an error. */
   serverDraft: string;
   serverProblem: ServerUrlProblem | null = null;
@@ -202,7 +204,11 @@ export class DesktopApp {
   }
 
   show(view: View): void {
-    if (view !== this.view) this.showWhere = false;
+    if (view !== this.view) {
+      this.showWhere = false;
+      this.live = '';
+      if (this.notice !== null) this.setNotice(null);
+    }
     this.view = view;
     this.render();
   }
@@ -847,9 +853,10 @@ export class DesktopApp {
     if (action !== null) await action();
   }
 
-  /** Short status announcement (result counts, code expiry): same polite region as notices, dismissed the same way. */
+  /** Screen-reader-only announcement (result counts, code expiry) in the persistent polite status region. */
   private announce(text: string): void {
-    this.setNotice(text);
+    this.live = text;
+    this.renderMessages();
   }
 
   // ---- rendering --------------------------------------------------------------------------------------------------
@@ -929,6 +936,7 @@ export class DesktopApp {
     const t = this.t;
     const signedIn = this.state.session !== null;
     patch(this.status, [
+      this.live !== '' && h('p', { class: 'sr-only', id: 'live' }, this.live),
       this.notice !== null && h('p', { class: 'notice', id: 'notice' }, this.notice),
       this.offline && signedIn && h('p', { class: 'notice warn', id: 'offline' }, t('offline', { count: this.queue.size })),
     ]);
