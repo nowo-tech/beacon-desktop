@@ -221,7 +221,8 @@ describe('0.2.0 UX', () => {
     await ui.app.connect('unreachable.invalid/dashboard/tasks');
     expect(ui.$<HTMLInputElement>('#server').value).toBe('https://unreachable.invalid');
     expect(ui.$('#error-title').textContent).toBe('No podemos contactar con unreachable.invalid');
-    expect(ui.$('#error .error-art').getAttribute('src')).toBe('mascot/error-503.webp');
+    expect(ui.$('#error .error-art').getAttribute('src')).toBe('mascot/pose-reconnect.webp');
+    expect(ui.$('#error .error-art').getAttribute('aria-hidden')).toBe('true');
     expect(ui.$('#login-form .mascot').getAttribute('alt')).toBe('El robot mascota de Beacon saludando');
   });
 
@@ -243,6 +244,7 @@ describe('0.2.0 UX', () => {
     await ui.app.connect(env.url);
     expect(ui.app.view).toBe('device');
     expect(ui.$('#device-state').textContent).toBe('The code expired');
+    expect(ui.$('#device [data-moment="deviceExpired"]').getAttribute('data-pose')).toBe('pose-hourglass');
     await env.control('config', { deviceExpiresIn: 600 });
     ui.click('#new-code');
     await tick();

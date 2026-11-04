@@ -75,6 +75,8 @@ export interface Platform {
   /** Registers the global shortcut (replacing the previous one). Rejects when the OS refuses it (in use, invalid). */
   setShortcut(accelerator: string): Promise<void>;
   notify(title: string, body: string): Promise<void>;
+  /** Native window theme (title bar, menus): `null` follows the system. */
+  setWindowTheme(theme: 'light' | 'dark' | null): Promise<void>;
   autostartEnabled(): Promise<boolean>;
   setAutostart(enabled: boolean): Promise<void>;
   checkUpdate(server: string, token: string): Promise<UpdateCheck>;
@@ -108,6 +110,8 @@ export interface BrowserHooks {
   installStepMs: number;
   /** Number of successful fake installs (the real app relaunches instead). */
   installed: number;
+  /** Last native window theme asked for (`null` = follow the system; `undefined` = never set). */
+  windowTheme: 'light' | 'dark' | null | undefined;
   shortcutPressed(): void;
   trayAction(action: string): void;
 }
@@ -136,6 +140,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     ],
     installStepMs: 0,
     installed: 0,
+    windowTheme: undefined,
     shortcutPressed: () => shortcutHandlers.forEach((handler) => handler()),
     trayAction: (action) => trayHandlers.forEach((handler) => handler(action)),
   };
@@ -158,6 +163,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
       hooks.shortcut = accelerator;
     },
     notify: async (title, body) => void hooks.notifications.push(`${title}: ${body}`),
+    setWindowTheme: async (theme) => void (hooks.windowTheme = theme),
     autostartEnabled: async () => autostart,
     setAutostart: async (enabled) => void (autostart = enabled),
     checkUpdate: async (server, token) => {

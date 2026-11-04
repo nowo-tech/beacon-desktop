@@ -1,4 +1,9 @@
-/* Beacon design tokens (symfony-beacon assets/styles/tailwind.css), sizes in rem so text zoom scales everything. */
+/*
+ * Beacon design tokens (symfony-beacon assets/styles/tailwind.css), sizes in rem so text zoom scales everything.
+ * Every colour of the UI comes from these custom properties. Theme (0.5.0): light by default; the dark set applies when
+ * the system prefers dark and Settings → Theme is "System" (no data-theme), or when "Dark" is chosen (data-theme=dark).
+ * Pairs used for text keep WCAG AA (≥ 4.5:1) in both themes; --control-border keeps ≥ 3:1 for input / button outlines.
+ */
 :root {
   --ink: #0f1c18;
   --ink-soft: #4b5e56;
@@ -9,18 +14,21 @@
   --moss-deep: #134736;
   --on-moss: #ffffff;
   --sand: #d8e2dc;
+  --control-border: #7d8f87;
   --mist: #e7f0eb;
   --alert: #b42318;
   --alert-bg: #fef3f2;
   --warn: #b54708;
   --warn-bg: #fffaeb;
+  /* The mascot art is the same in both themes (as in Beacon); the dark theme only takes the glare off its white body. */
+  --mascot-filter: none;
   --radius-card: 0.75rem;
   --radius-control: 0.375rem;
   --mono: ui-monospace, 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
-  color-scheme: light dark;
+  color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --ink: #e6eee9;
     --ink-soft: #9fb3aa;
     --paper: #0c1210;
@@ -30,12 +38,34 @@
     --moss-deep: #6bc49a;
     --on-moss: #0c1210;
     --sand: #2a3832;
+    --control-border: #62766d;
     --mist: #17201c;
     --alert: #f97066;
     --alert-bg: #2a1614;
     --warn: #fdb022;
     --warn-bg: #2a2110;
+    --mascot-filter: brightness(0.92);
+    color-scheme: dark;
   }
+}
+:root[data-theme='dark'] {
+  --ink: #e6eee9;
+  --ink-soft: #9fb3aa;
+  --paper: #0c1210;
+  --surface: #151c19;
+  --surface-muted: #1a2320;
+  --moss: #4aad7f;
+  --moss-deep: #6bc49a;
+  --on-moss: #0c1210;
+  --sand: #2a3832;
+  --control-border: #62766d;
+  --mist: #17201c;
+  --alert: #f97066;
+  --alert-bg: #2a1614;
+  --warn: #fdb022;
+  --warn-bg: #2a2110;
+  --mascot-filter: brightness(0.92);
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 html { font-size: 100%; }
@@ -62,10 +92,10 @@ button, .button { font: inherit; cursor: pointer; border-radius: var(--radius-co
 button[disabled], button[aria-disabled='true'] { opacity: 0.6; cursor: default; }
 .primary { background: var(--moss); color: var(--on-moss); }
 .primary.small, .secondary.small, .danger.small { padding: 0.1875rem 0.625rem; font-size: 0.8125rem; }
-.secondary { background: var(--surface); color: var(--ink); border-color: var(--sand); }
+.secondary { background: var(--surface); color: var(--ink); border-color: var(--control-border); }
 .danger { background: var(--surface); color: var(--alert); border-color: var(--alert); }
 .link { background: none; color: var(--moss); padding: 0.25rem 0; border: 0; text-decoration: underline; min-height: 0; }
-.icon-button { width: 2rem; height: 2rem; padding: 0; background: var(--surface); color: var(--ink-soft); border-color: var(--sand); }
+.icon-button { width: 2rem; height: 2rem; padding: 0; background: var(--surface); color: var(--ink-soft); border-color: var(--control-border); }
 .icon-button:hover { color: var(--moss); }
 .icon { flex: none; }
 :focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; }
@@ -74,33 +104,35 @@ input[type='text'], input[type='search'] {
   display: block;
   width: 100%;
   padding: 0.4375rem 0.5625rem;
-  border: 1px solid var(--sand);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius-control);
   background: var(--surface);
   color: var(--ink);
   font: inherit;
 }
 input[aria-invalid='true'] { border-color: var(--alert); }
-select { font: inherit; padding: 0.25rem 0.375rem; border-radius: var(--radius-control); border: 1px solid var(--sand); background: var(--surface); color: var(--ink); }
+select { font: inherit; padding: 0.25rem 0.375rem; border-radius: var(--radius-control); border: 1px solid var(--control-border); background: var(--surface); color: var(--ink); }
 .row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
 kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 
 /* Messages */
 .messages:empty { display: none; }
 .notice { background: var(--surface); border-left: 3px solid var(--moss); padding: 0.375rem 0.5rem; margin: 0 0 0.5rem; border-radius: 0 var(--radius-control) var(--radius-control) 0; }
+.notice.with-art { display: flex; align-items: center; gap: 0.5rem; }
+.notice.with-art .mascot.tiny { height: 2.25rem; flex: none; }
 .notice.warn { border-left-color: var(--warn); background: var(--warn-bg); }
 .error, .field-error { color: var(--alert); margin: 0.25rem 0 0.5rem; display: flex; gap: 0.375rem; align-items: flex-start; }
 .error-card { position: relative; display: flex; flex-direction: column; gap: 0.25rem; padding: 0.75rem 2.75rem 0.75rem 0.75rem; margin-bottom: 0.75rem; background: var(--alert-bg); border: 1px solid var(--alert); border-radius: var(--radius-card); }
 .error-card strong { display: flex; gap: 0.375rem; align-items: flex-start; color: var(--alert); }
 .error-card p { margin: 0; }
 .error-card #error-dismiss { position: absolute; top: 0.5rem; right: 0.5rem; }
-.error-art { width: 7.5rem; height: auto; align-self: center; }
+.error-art { width: 7.5rem; height: auto; align-self: center; filter: var(--mascot-filter); }
 .sheet { background: var(--surface); border: 1px solid var(--sand); border-radius: var(--radius-card); padding: 0.75rem; }
 
 /* Connect / device */
 #login-form > .primary { width: 100%; margin: 0.75rem 0 0.25rem; }
 #login-form .link { display: block; margin: 0 auto; }
-.mascot { display: block; height: 7.5rem; width: auto; margin: 0.5rem auto; }
+.mascot { display: block; height: 7.5rem; width: auto; margin: 0.5rem auto; filter: var(--mascot-filter); }
 .mascot.small { height: 4rem; }
 .mascot.tiny { height: 3rem; margin: 0; }
 .mascot-wait { position: relative; height: 7.5rem; width: 5.125rem; margin: 0.25rem auto; }
@@ -131,7 +163,7 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 .tile .label { font-size: 0.75rem; color: var(--ink-soft); }
 .tile .value { font: 600 1.125rem var(--mono); font-variant-numeric: tabular-nums; }
 .my-time { font-size: 0.8125rem; color: var(--moss); }
-.search { display: flex; align-items: center; gap: 0.375rem; padding-left: 0.5625rem; border: 1px solid var(--sand); border-radius: var(--radius-control); background: var(--surface); color: var(--ink-soft); }
+.search { display: flex; align-items: center; gap: 0.375rem; padding-left: 0.5625rem; border: 1px solid var(--control-border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink-soft); }
 .search:focus-within { outline: 2px solid var(--moss); outline-offset: 2px; }
 .search input { border: 0; outline: none; padding-left: 0; background: transparent; }
 .tasks, .plain { list-style: none; margin: 0; padding: 0; }
@@ -147,6 +179,7 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 .beacon-link.icon { display: inline-flex; align-items: center; justify-content: center; min-width: 2rem; min-height: 2rem; border-radius: var(--radius-control); text-decoration: none; }
 .row-action { min-width: 2rem; }
 .empty-state { display: flex; align-items: center; gap: 0.75rem; color: var(--ink-soft); margin: 0.5rem 0; }
+.empty-state .mascot.tiny { flex: none; }
 .footer { display: flex; justify-content: space-between; color: var(--ink-soft); font-size: 0.75rem; margin-top: 0.75rem; padding-top: 0.5rem; border-top: 1px solid var(--sand); }
 .plain li { margin: 0.375rem 0; }
 .update { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
@@ -188,6 +221,15 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 .confirm p { margin: 0; }
 
 /* Settings */
+/* Theme: System / Light / Dark as a segmented radio group (native radios, so arrow keys and screen readers just work). */
+.theme-choice { border: 0; border-bottom: 1px solid var(--sand); margin: 0 0 0.5rem; padding: 0 0 0.5rem; min-width: 0; }
+.theme-choice legend { font-weight: 500; padding: 0; margin: 0.75rem 0 0.375rem; }
+.segmented { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--control-border); border-radius: var(--radius-control); overflow: hidden; background: var(--surface); }
+.segment { position: relative; margin: 0; display: flex; align-items: center; justify-content: center; min-height: 2rem; padding: 0.25rem 0.5rem; font-weight: 500; cursor: pointer; color: var(--ink); }
+.segment + .segment { border-left: 1px solid var(--control-border); }
+.segment input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.segment:has(input:checked) { background: var(--moss); color: var(--on-moss); }
+.segment:has(input:focus-visible) { outline: 2px solid var(--moss); outline-offset: -4px; box-shadow: inset 0 0 0 4px var(--surface); }
 .feature { border-bottom: 1px solid var(--sand); padding-bottom: 0.5rem; margin-bottom: 0.5rem; }
 .switch { display: flex; gap: 0.5rem; align-items: flex-start; }
 .switch input { width: auto; margin-top: 0.1875rem; }

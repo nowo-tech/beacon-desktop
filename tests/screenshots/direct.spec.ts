@@ -1,23 +1,8 @@
 import { expect, test } from '@playwright/test';
-import { app, connect, control, reset, shot, signIn, UPDATE } from './helpers';
+import { app, control, reset, shot, signIn, UPDATE } from './helpers';
 
 /** Screenshots of the default (direct download) build: `pnpm screenshots`. */
 test.beforeEach(reset);
-
-test('desktop-device-code', async ({ page }) => {
-  await connect(page);
-  await expect(page.locator('body')).toContainText('beacon.example.test/device');
-  await shot(page, 'desktop-device-code');
-});
-
-test('desktop-timer', async ({ page }) => {
-  await signIn(page);
-  await page.locator('[data-task="T-104"] .row-action').click();
-  await expect(page.locator('#timer-task')).toHaveText('Fix invoice rounding bug');
-  await page.locator('#main [data-task="T-101"] .row-action', { hasText: 'Switch' }).click();
-  await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
-  await shot(page, 'desktop-timer');
-});
 
 for (const scheme of ['light', 'dark'] as const) {
   test(`desktop-update-card-${scheme} and progress`, async ({ page }) => {

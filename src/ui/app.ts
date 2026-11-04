@@ -13,12 +13,14 @@ import { hostOf, prepareServerUrl, type ServerUrlProblem } from '../lib/serverUr
 import { type Feature, type LocalState, DEFAULT_SETTINGS, LOCAL_KEYS, MAX_PINNED, emptyState, hasConsent, loadLocal, recordConsent, saveLocal } from '../lib/settings';
 import { computeTotals, formatHoursMinutes, recentTasks, startOfWeek, taskContext, todayByTask, type Totals } from '../lib/summary';
 import { elapsedSeconds, formatElapsed } from '../lib/time';
+import { applyTheme, forcedTheme, THEMES, type ThemePreference } from '../lib/theme';
 import { appsPage, safeVerificationUri } from '../lib/urls';
 import { compareVersions, isVersion, updateRequired } from '../lib/version';
 import { withinWorkingHours } from '../lib/workingHours';
 import type { Platform, TrayMenu, UpdateCheck, UpdateProgress } from '../platform';
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
+import { art, ERROR_POSES, moment, variant, type Moment } from './mascot';
 
 export type View = 'loading' | 'login' | 'device' | 'main' | 'settings' | 'privacy' | 'update-required';
 
@@ -55,17 +57,6 @@ const URL_PROBLEMS: Record<ServerUrlProblem, MessageKey> = {
   insecure: 'urlInsecure',
 };
 
-/** Mascot illustration for an error (Beacon brand: friendly, empty and error states only). */
-const ERROR_ART: Record<string, string> = {
-  not_beacon: 'error-404',
-  no_device_flow: 'error-404',
-  invalid_response: 'error-404',
-  unreachable: 'error-503',
-  server: 'error-503',
-  rate_limited: 'error-429',
-  insufficient_scope: 'error-401',
-};
-
 const MAX_TRAY_TASKS = 7;
 /** Two checks further apart than this mean the computer slept in between (checks run every 30 s). */
 const SUSPEND_GAP_MS = 90_000;
@@ -73,19 +64,16 @@ const SUSPEND_GAP_MS = 90_000;
 const NOTE_MAX = 500;
 /** Entries pages fetched for the week totals (100 each). */
 const MAX_ENTRY_PAGES = 5;
+/** A timer running this long gets a calm "still going?" nudge (once per entry, dismissible). */
+export const LONG_RUNNING_HOURS = 8;
+/** Success copy after a stop: the n-th stop of the session gets variant n mod 3. */
+const SAVED_VARIANTS: MessageKey[] = ['savedA', 'savedB', 'savedC'];
+const THEME_LABELS: Record<ThemePreference, MessageKey> = { system: 'themeSystem', light: 'themeLight', dark: 'themeDark' };
 
 /** `m:ss` for the device-code countdown. */
 function countdown(seconds: number): string {
   const s = Math.max(0, Math.ceil(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
-
-/** Image with 1x / 2x sources from `public/mascot/`. */
-function art(name: string, alt: string, className: string): HTMLImageElement {
-  return h('img', {
-    class: className,
-    attrs: { src: `mascot/${name}.webp`, srcset: `mascot/${name}.webp 1x, mascot/${name}@2x.webp 2x`, alt, decoding: 'async' },
-  });
 }
 
 interface MainRegions {
@@ -141,6 +129,14 @@ export class DesktopApp {
   /** The current failure (error catalogue), shown with its actions until dismissed or resolved. */
   error: ErrorView | null = null;
   notice: string | null = null;
+  /** Mascot shown with the notice (success moments), if any. */
+  noticeMoment: Moment | null = null;
+  /** "You're in" card after a sign-in, until dismissed or a timer starts. */
+  welcome = false;
+  /** Entry (task + start) whose long-running nudge was answered "Keep going". */
+  longRunningOk: string | null = null;
+  /** Stops of this session (picks the success copy variant). */
+  saves = 0;
   /** Last screen-reader announcement (visually hidden). */
   live = '';
   /** Value typed in the server field: never cleared by an error. */
@@ -199,6 +195,7 @@ export class DesktopApp {
     this.serverDraft = this.state.lastServer ?? deps.beaconUrl ?? '';
     this.queue = new OfflineQueue(this.storage);
     document.documentElement.lang = this.locale;
+    applyTheme(this.state.settings.theme);
     this.header = h('header', { class: 'bar' });
     this.status = h('div', { class: 'messages', id: 'status', attrs: { role: 'status', 'aria-live': 'polite' } });
     this.alert = h('div', { class: 'messages', id: 'alerts', attrs: { role: 'alert' } });
@@ -210,6 +207,7 @@ export class DesktopApp {
 
   async init(): Promise<void> {
     this.version = await this.platform.appVersion();
+    await this.syncWindowTheme();
     this.platform.onTray((action) => void this.trayAction(action));
     this.platform.onShortcut(() => this.focusSearch());
     await this.applyShortcut(this.state.settings.shortcut, false);
@@ -254,9 +252,10 @@ export class DesktopApp {
     this.render();
   }
 
-  /** Info notice in the status region; dismissed after a few seconds. */
-  setNotice(text: string | null): void {
+  /** Info notice in the status region (optionally with a mascot moment); dismissed after a few seconds. */
+  setNotice(text: string | null, art: Moment | null = null): void {
     this.notice = text;
+    this.noticeMoment = text === null ? null : art;
     if (this.noticeTimer !== null) clearTimeout(this.noticeTimer);
     this.noticeTimer = text === null ? null : setTimeout(() => this.setNotice(null), this.deps.noticeMs ?? 6000);
     this.renderMessages();
@@ -324,6 +323,7 @@ export class DesktopApp {
           });
           this.device = null;
           this.view = 'main';
+          this.welcome = true;
           this.setNotice(null);
           await this.load(api);
         } catch (error) {
@@ -369,6 +369,7 @@ export class DesktopApp {
     this.me = null;
     this.clampNotes = [];
     this.meetingOpen = false;
+    this.welcome = false;
     this.main = null;
     this.query = '';
     this.error = null;
@@ -475,6 +476,7 @@ export class DesktopApp {
 
   async start(task: Task): Promise<void> {
     const running = this.state.activeTimer;
+    this.welcome = false;
     this.persist({ lastTask: this.taskRef(task) });
     await this.guard(
       async () => {
@@ -503,6 +505,7 @@ export class DesktopApp {
     const timer = this.state.activeTimer;
     if (timer === null) return;
     this.persist({ lastTask: this.taskRef(this.timerTask(timer)) });
+    let queued = false;
     await this.guard(
       async () => {
         await this.api().stop(this.state.pendingNote ?? undefined);
@@ -510,12 +513,60 @@ export class DesktopApp {
         await this.setTimer(null);
       },
       () => {
+        queued = true;
         const note = this.takeNote();
         this.queue.push({ kind: 'stop', at: this.now().toISOString(), ...(note !== undefined ? { note } : {}) });
         return this.setTimer(null);
       },
     );
+    if (this.state.activeTimer === null && this.error === null) this.saved(timer, queued);
     if (this.entries !== null) await this.reloadEntries();
+  }
+
+  /** Success moment after a stop: what was saved, in one of a few friendly wordings (queued: kept here for now). */
+  private saved(timer: Timer, queued: boolean): void {
+    const params = { time: formatHoursMinutes(elapsedSeconds(timer.startedAt, this.now())), task: timer.taskTitle };
+    this.setNotice(queued ? this.t('savedOffline', params) : this.t(variant(SAVED_VARIANTS, this.saves++), params), 'saved');
+  }
+
+  /** The running entry has been on the clock for `LONG_RUNNING_HOURS` or more and nobody said "Keep going". */
+  longRunning(): boolean {
+    const timer = this.state.activeTimer;
+    if (timer === null || this.longRunningOk === this.entryKey(timer)) return false;
+    return elapsedSeconds(timer.startedAt, this.now()) >= LONG_RUNNING_HOURS * 3600;
+  }
+
+  private entryKey(timer: Timer): string {
+    return `${timer.taskId}@${timer.startedAt}`;
+  }
+
+  keepGoing(): void {
+    const timer = this.state.activeTimer;
+    if (timer !== null) this.longRunningOk = this.entryKey(timer);
+    this.render();
+    this.main?.root.querySelector<HTMLButtonElement>('#stop')?.focus();
+  }
+
+  dismissWelcome(): void {
+    this.welcome = false;
+    this.render();
+    this.main?.search.focus();
+  }
+
+  /** Settings → Appearance: applies and stores the theme, and hands it to the native window (title bar). */
+  async setTheme(theme: ThemePreference): Promise<void> {
+    this.persist({ settings: { ...this.state.settings, theme } });
+    applyTheme(theme);
+    this.render();
+    await this.syncWindowTheme();
+  }
+
+  private async syncWindowTheme(): Promise<void> {
+    try {
+      await this.platform.setWindowTheme(forcedTheme(this.state.settings.theme));
+    } catch {
+      // Older webviews / platforms without a themable title bar: the page itself is themed anyway.
+    }
   }
 
   /** Starts the last task again ("Resume"). */
@@ -725,6 +776,7 @@ export class DesktopApp {
    */
   async tick(): Promise<void> {
     await this.updateTray();
+    if (this.view === 'main' && this.longRunning() !== (this.main?.banners.querySelector('#long-running') !== null)) this.render();
     const now = this.now();
     const suspendedSince = this.lastCheck !== null && now.getTime() - this.lastCheck.getTime() > SUSPEND_GAP_MS ? this.lastCheck : null;
     this.lastCheck = now;
@@ -1284,7 +1336,8 @@ export class DesktopApp {
     const t = this.t;
     const signedIn = this.state.session !== null;
     patch(this.status, [
-      this.notice !== null && h('p', { class: 'notice', id: 'notice' }, this.notice),
+      this.notice !== null &&
+        h('p', { class: this.noticeMoment !== null ? 'notice with-art' : 'notice', id: 'notice' }, this.noticeMoment !== null && moment(this.noticeMoment, 'mascot tiny', t), h('span', {}, this.notice)),
       this.offline && signedIn && h('p', { class: 'notice warn', id: 'offline' }, t('offline', { count: this.queue.size })),
     ]);
     patch(this.alert, [this.error !== null ? this.renderError(this.error) : null]);
@@ -1292,7 +1345,7 @@ export class DesktopApp {
 
   private renderError(error: ErrorView): HTMLElement {
     const t = this.t;
-    const artName = ERROR_ART[error.id];
+    const pose = ERROR_POSES[error.id];
     const actions: Child[] = error.actions.map((action) => {
       switch (action) {
         case 'retry':
@@ -1308,7 +1361,7 @@ export class DesktopApp {
     return h(
       'section',
       { class: 'error-card', id: 'error', attrs: { 'aria-labelledby': 'error-title', 'data-error': error.id } },
-      artName !== undefined && art(artName, '', 'error-art'),
+      pose !== undefined && art(pose, '', 'error-art'),
       h('div', { class: 'error-body' },
         h('strong', { id: 'error-title' }, icon('alert'), t(error.title, error.params)),
         h('p', { id: 'error-text' }, t(error.text, error.params)),
@@ -1380,7 +1433,7 @@ export class DesktopApp {
           },
         },
       },
-      art('mascot', t('mascotAlt'), 'mascot'),
+      moment('firstRun', 'mascot', t),
       h('h2', {}, t('loginTitle')),
       h('p', { class: 'help' }, t('loginHelp')),
       h('label', { attrs: { for: 'server' } }, t('serverUrl')),
@@ -1403,7 +1456,7 @@ export class DesktopApp {
       return h(
         'main',
         { id: 'device', class: 'center' },
-        art('mascot-small', '', 'mascot small'),
+        moment(expired ? 'deviceExpired' : 'deviceDenied', 'mascot small', t),
         h('h2', { id: 'device-state', attrs: { tabindex: '-1' } }, t(titleKey)),
         this.deviceState !== 'scope' && h('p', { class: 'help' }, t(expired ? 'deviceExpiredText' : 'deviceDeniedText')),
         h('button', { class: 'primary', id: 'new-code', key: 'new-code', attrs: { type: 'button', disabled: this.busy }, on: { click: () => void this.connect(this.serverDraft) } }, icon('refresh'), t(expired ? 'newCode' : 'tryAgain')),
@@ -1436,7 +1489,7 @@ export class DesktopApp {
     return h(
       'main',
       { id: 'device' },
-      h('div', { class: 'mascot-wait', attrs: { 'aria-hidden': 'true' } }, art('mascot-wait', '', 'mascot'), art('mascot-arcs', '', 'mascot arcs')),
+      h('div', { class: 'mascot-wait', attrs: { 'aria-hidden': 'true' } }, moment('deviceWaiting', 'mascot', t), art('mascot-arcs', '', 'mascot arcs')),
       h('h2', {}, t('deviceTitle')),
       safe !== null
         ? h('p', { class: 'help' }, t('deviceHelp', { uri: code.verificationUri }))
@@ -1520,6 +1573,8 @@ export class DesktopApp {
     const t = this.t;
     patch(region, [
       this.renderUpdateCard(),
+      this.welcome && this.error === null && this.renderWelcome(),
+      this.longRunning() && this.renderLongRunning(),
       this.updateMessage !== null &&
         h(
           'section',
@@ -1529,8 +1584,56 @@ export class DesktopApp {
         ),
       this.renderIdleCheck(),
       this.clampNotes.length > 0 && this.renderClamps(),
-      this.offline && h('p', { class: 'muted' }, t('offlineStartNote')),
+      this.offline &&
+        h(
+          'section',
+          { class: 'card still-there offline-card', id: 'offline-card', attrs: { role: 'region', 'aria-labelledby': 'offline-title' } },
+          moment('offline', 'mascot tiny', t),
+          h('div', { class: 'still-there-body' }, h('h2', { id: 'offline-title' }, t('offlineTitle')), h('p', { class: 'muted' }, t('offlineStartNote'))),
+        ),
     ]);
+  }
+
+  /** Calm card with a mascot moment, a heading and its content (welcome, long-running, idle check, update). */
+  private momentCard(id: string, name: Moment, title: string, ...children: Child[]): HTMLElement {
+    return h(
+      'section',
+      { class: 'card still-there', id, key: id, attrs: { role: 'region', 'aria-labelledby': `${id}-title`, 'data-moment': name } },
+      moment(name, 'mascot tiny', this.t),
+      h('div', { class: 'still-there-body' }, h('h2', { id: `${id}-title` }, title), ...children),
+    );
+  }
+
+  /** "You're in": right after the device sign-in, until "Got it" or the first Start. */
+  private renderWelcome(): HTMLElement {
+    const t = this.t;
+    return this.momentCard(
+      'welcome',
+      'signedIn',
+      t('welcomeTitle'),
+      h('p', {}, t('welcomeText', { host: hostOf(this.state.session?.server ?? null) })),
+      h('div', { class: 'row-actions' }, h('button', { class: 'secondary small', id: 'welcome-dismiss', key: 'welcome-dismiss', attrs: { type: 'button' }, on: { click: () => this.dismissWelcome() } }, t('gotIt'))),
+    );
+  }
+
+  /** Gentle nudge on a timer left running for hours (forgotten Stop): never stops it by itself. */
+  private renderLongRunning(): HTMLElement | null {
+    const t = this.t;
+    const timer = this.state.activeTimer;
+    if (timer === null) return null;
+    const hours = Math.floor(elapsedSeconds(timer.startedAt, this.now()) / 3600);
+    return this.momentCard(
+      'long-running',
+      'longRunning',
+      t('longRunningTitle'),
+      h('p', { id: 'long-running-text' }, t('longRunningText', { task: timer.taskTitle, hours })),
+      h(
+        'div',
+        { class: 'row-actions' },
+        h('button', { class: 'secondary small', id: 'long-running-stop', key: 'long-running-stop', attrs: { type: 'button' }, on: { click: () => this.whenIdle(() => this.stop()) } }, icon('stop'), t('longRunningStop')),
+        h('button', { class: 'link', id: 'long-running-keep', key: 'long-running-keep', attrs: { type: 'button' }, on: { click: () => this.keepGoing() } }, t('longRunningKeep')),
+      ),
+    );
   }
 
   /**
@@ -1604,7 +1707,7 @@ export class DesktopApp {
     return h(
       'section',
       { class: 'card still-there update-card', id: 'update', key: 'update', attrs: { role: 'region', 'aria-labelledby': 'update-title' } },
-      art('mascot-small', '', 'mascot tiny'),
+      moment(stage === 'downloading' || stage === 'installing' ? 'updateWorking' : 'updateOffer', 'mascot tiny', t),
       h('div', { class: 'still-there-body' }, h('h2', { id: 'update-title' }, t('updateCardTitle', { version: update.version })), ...body),
     );
   }
@@ -1619,7 +1722,7 @@ export class DesktopApp {
         region,
         [
           h('span', { class: 'chip' }, '○ ', t('notTracking')),
-          last !== null && h('p', { class: 'last', id: 'last-task' }, t('lastTask', { task: last.title })),
+          last !== null ? h('p', { class: 'last', id: 'last-task' }, t('lastTask', { task: last.title })) : h('p', { class: 'last', id: 'idle-hint' }, t('idleHint')),
           last !== null &&
             this.state.idleCheck.phase !== 'resume' &&
             h('button', { class: 'primary', id: 'resume', key: 'resume', attrs: { 'aria-disabled': this.busy ? 'true' : undefined, 'aria-label': t('resumeTask', { task: last.title }), 'aria-keyshortcuts': 'Control+Shift+S' }, on: { click: () => this.whenIdle(() => this.resume()) } }, icon('play'), t('resume')),
@@ -1690,7 +1793,7 @@ export class DesktopApp {
           h('h2', { class: 'section-title', id: 'quick-title' }, t('pinnedRecent')),
           quick.length > 0
             ? h('ul', { class: 'tasks', id: 'quick', attrs: { 'aria-labelledby': 'quick-title' } }, ...quick.map((task, index) => this.taskRow(task, perTask, index + 1)))
-            : h('p', { class: 'empty-state', id: 'quick-empty' }, art('mascot-small', '', 'mascot tiny'), t('noRecent')),
+            : h('p', { class: 'empty-state', id: 'quick-empty' }, t('noRecent')),
         ],
         '#search',
       );
@@ -1706,7 +1809,7 @@ export class DesktopApp {
         h('ul', { class: 'tasks', id: 'tasks', attrs: { 'aria-labelledby': 'list-title' } }, ...rows.map((task) => this.taskRow(task, perTask))),
         rows.length === 0 &&
           !this.busy &&
-          h('p', { class: 'empty-state', id: 'tasks-empty' }, searching ? null : art('mascot-small', '', 'mascot tiny'), searching ? t('noResults', { query: this.query.trim() }) : t('noTasks')),
+          h('p', { class: 'empty-state', id: 'tasks-empty' }, moment(searching ? 'noResults' : 'noTasks', 'mascot tiny', t), h('span', {}, searching ? t('noResults', { query: this.query.trim() }) : t('noTasks'))),
       ],
       this.state.activeTimer !== null ? 'stop' : '#search',
     );
@@ -1754,13 +1857,10 @@ export class DesktopApp {
   private renderIdleCheck(): HTMLElement | null {
     const t = this.t;
     const state = this.state.idleCheck;
-    const card = (id: string, title: string, ...children: Child[]) =>
-      h(
-        'section',
-        { class: 'card still-there', id, key: id, attrs: { role: 'region', 'aria-labelledby': `${id}-title` } },
-        art('mascot-small', '', 'mascot tiny'),
-        h('div', { class: 'still-there-body' }, h('h2', { id: `${id}-title` }, title), ...children),
-      );
+    const card = (id: string, title: string, ...children: Child[]) => {
+      const name: Moment = state.phase === 'away' ? 'away' : state.phase === 'gap' ? 'gap' : state.phase === 'resume' ? 'resume' : 'stillThere';
+      return this.momentCard(id, name, title, ...children);
+    };
     switch (state.phase) {
       case 'watching':
         return null;
@@ -1992,6 +2092,7 @@ export class DesktopApp {
     return h(
       'main',
       { id: 'settings' },
+      this.renderAppearance(),
       h(
         'form',
         {
@@ -2021,7 +2122,7 @@ export class DesktopApp {
       this.channel === 'direct' && this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
       h('button', { class: 'link', id: 'open-privacy', on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
       h('section', { class: 'about', id: 'about', attrs: { 'aria-labelledby': 'about-title' } },
-        art('mascot-small', '', 'mascot tiny'),
+        moment('about', 'mascot tiny', t),
         h(
           'div',
           {},
@@ -2030,6 +2131,7 @@ export class DesktopApp {
           ...(this.channel === 'store'
             ? [
                 h('p', { class: 'muted', id: 'update-status' }, t('updateStoreManaged')),
+                h('p', { class: 'muted', id: 'store-about' }, t('storeAbout')),
                 h('button', { class: 'secondary small', id: 'open-store', attrs: { type: 'button' }, on: { click: () => this.openStore() } }, t('openStore')),
               ]
             : [
@@ -2039,6 +2141,28 @@ export class DesktopApp {
         ),
       ),
       h('button', { class: 'danger', id: 'logout', on: { click: () => void this.logout() } }, t('logout')),
+    );
+  }
+
+  /** Settings → Appearance: System / Light / Dark (radio group, stored locally, applied at once). */
+  private renderAppearance(): HTMLElement {
+    const t = this.t;
+    const current = this.state.settings.theme;
+    return h(
+      'fieldset',
+      { class: 'feature theme-choice', id: 'theme' },
+      h('legend', {}, t('themeLabel')),
+      h(
+        'div',
+        { class: 'segmented' },
+        ...THEMES.map((theme) => {
+          const input = h('input', { id: `theme-${theme}`, key: `theme-${theme}`, attrs: { type: 'radio', name: 'theme', value: theme } });
+          input.checked = theme === current;
+          input.addEventListener('change', () => void (input.checked && this.setTheme(theme)));
+          return h('label', { class: 'segment', attrs: { for: `theme-${theme}` } }, input, h('span', {}, t(THEME_LABELS[theme])));
+        }),
+      ),
+      h('p', { class: 'help' }, t('themeHelp')),
     );
   }
 
@@ -2088,7 +2212,7 @@ export class DesktopApp {
       return h(
         'main',
         { id: 'update-required', attrs: { role: 'alertdialog', 'aria-labelledby': 'update-required-title', 'aria-describedby': 'update-required-text' } },
-        art('mascot-small', '', 'mascot small'),
+        moment('updateRequired', 'mascot small', t),
         h('h2', { id: 'update-required-title' }, t('updateRequiredTitle')),
         h('p', { id: 'update-required-text' }, t('updateRequiredStore', { current: this.version, min })),
         h('button', { class: 'primary', id: 'open-store-required', on: { click: () => this.openStore() } }, t('openStore')),
@@ -2099,7 +2223,7 @@ export class DesktopApp {
     return h(
       'main',
       { id: 'update-required', attrs: { role: 'alertdialog', 'aria-labelledby': 'update-required-title', 'aria-describedby': 'update-required-text' } },
-      art('mascot-small', '', 'mascot small'),
+      moment('updateRequired', 'mascot small', t),
       h('h2', { id: 'update-required-title' }, t('updateRequiredTitle')),
       h('p', { id: 'update-required-text' }, t('updateRequiredText', { current: this.version, min })),
       timer !== null && !working && h('p', { id: 'update-required-running' }, t('updateRequiredRunning', { task: timer.taskTitle })),
