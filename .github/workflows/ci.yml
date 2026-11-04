@@ -1,5 +1,8 @@
 name: CI
 
+# Runners: LINUX_RUNNER (JSON runs-on value, e.g. ["self-hosted","linux","x64","tauri-build"]) selects a
+# self-hosted runner; unset means GitHub-hosted ubuntu-latest. See release.yml for the same pattern.
+
 on:
   pull_request:
   push:
@@ -15,7 +18,7 @@ concurrency:
 jobs:
   web:
     name: Lint, typecheck, unit (≥90% coverage), e2e
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -28,7 +31,11 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test:coverage
-      - run: pnpm exec playwright install --with-deps chromium
+      # System libraries come from apt on GitHub-hosted runners; the self-hosted image ships them.
+      - if: runner.environment == 'github-hosted'
+        run: pnpm exec playwright install --with-deps chromium
+      - if: runner.environment == 'self-hosted'
+        run: pnpm exec playwright install chromium
       - run: pnpm test:e2e
       - if: failure()
         uses: actions/upload-artifact@v7
@@ -36,14 +43,18 @@ jobs:
           name: playwright-results
           path: test-results/
           retention-days: 7
+      - name: Clean build tree (self-hosted)
+        if: always() && runner.environment == 'self-hosted'
+        run: rm -rf node_modules test-results playwright-report coverage
 
   rust:
     name: Rust (fmt, clippy, tests) on Linux
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: System libraries
+        if: runner.environment == 'github-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
@@ -62,3 +73,6 @@ jobs:
         working-directory: src-tauri
       - run: cargo test --locked
         working-directory: src-tauri
+      - name: Clean build tree (self-hosted)
+        if: always() && runner.environment == 'self-hosted'
+        run: rm -rf src-tauri/target dist
