@@ -92,9 +92,9 @@ test('offline actions are queued and synced', async ({ page, context }) => {
 
 test('min_supported_version blocks with "update required"', async ({ page }) => {
   await signIn(page);
-  await control('config', { update: { version: '0.3.0', notes: '', pub_date: '', url: 'u', signature: 's', min_supported_version: '0.2.0' } });
+  await control('config', { update: { version: '99.1.0', notes: '', pub_date: '', url: 'u', signature: 's', min_supported_version: '99.0.0' } });
   await page.evaluate(() => (window as unknown as { __timeTrack: { app: AppHandle } }).__timeTrack.app.checkUpdates());
-  await expect(page.locator('#update-required')).toContainText('Version 0.2.0 or later is required.');
+  await expect(page.locator('#update-required')).toContainText('Version 99.0.0 or later is required.');
   await expect(page.locator('#tasks')).toHaveCount(0);
 });
 
