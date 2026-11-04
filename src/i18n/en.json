@@ -68,5 +68,9 @@
   "updateFailed": "The automatic update failed: {message}. Download the new version from Beacon.",
   "updateUnavailable": "Your server asks for version {min} or later, but no compatible update is offered automatically. Download it from Beacon.",
   "updateManual": "Automatic updates are not available in this build. Download version {version} from Beacon.",
-  "deviceUntrusted": "The server sent a sign-in address on another site, so it was not opened. Open it yourself only if you trust it:"
+  "deviceUntrusted": "The server sent a sign-in address on another site, so it was not opened. Open it yourself only if you trust it:",
+  "beaconLinks": "Beacon links",
+  "openBeacon": "Open Beacon",
+  "myTime": "My time",
+  "openTaskInBeacon": "Open “{title}” in Beacon"
 }

@@ -97,3 +97,36 @@ test('min_supported_version blocks with "update required"', async ({ page }) => 
   await expect(page.locator('#update-required')).toContainText('Version 0.2.0 or later is required.');
   await expect(page.locator('#tasks')).toHaveCount(0);
 });
+
+test('Beacon links: Open Beacon, My time and same-origin task links on an https server', async ({ page }) => {
+  // Serve https://beacon.test from the mock so the https-only links render in the browser build.
+  await page.route('https://beacon.test/**', async (route) => {
+    const response = await route.fetch({ url: route.request().url().replace('https://beacon.test', MOCK) });
+    await route.fulfill({ response });
+  });
+  await control('config', {
+    deviceInterval: 1,
+    verificationUri: 'https://beacon.test/device',
+    taskUrls: { 'T-101': 'https://beacon.test/dashboard/tasks/T-101', 'T-102': 'https://evil.test/dashboard/tasks/T-102' },
+  });
+  await page.goto('/');
+  await expect(page.locator('a.beacon-link')).toHaveCount(0);
+  await page.locator('#server').fill('https://beacon.test');
+  await page.locator('#connect').click();
+  const code = await page.locator('#user-code').textContent();
+  await control('device/approve', { userCode: code });
+  await expect(page.locator('#tasks li')).toHaveCount(8, { timeout: 15_000 });
+  await expect(page.getByRole('link', { name: 'Open Beacon' })).toHaveAttribute('href', 'https://beacon.test/dashboard');
+  await expect(page.getByRole('link', { name: 'My time' })).toHaveAttribute('href', 'https://beacon.test/dashboard/tasks/time');
+  const taskLink = page.getByRole('link', { name: 'Open “Write onboarding guide” in Beacon' });
+  await expect(taskLink).toHaveAttribute('href', 'https://beacon.test/dashboard/tasks/T-101');
+  await expect(page.locator('[data-task="T-102"] a')).toHaveCount(0);
+  await taskLink.focus();
+  await page.keyboard.press('Enter');
+  await page.locator('[data-task="T-101"] button').click();
+  await expect(page.getByRole('link', { name: 'Open “Write onboarding guide” in Beacon' })).toHaveCount(2);
+  await page.getByRole('link', { name: 'Open Beacon' }).click();
+  const opened = await page.evaluate(() => (window as unknown as { __timeTrack: { hooks: Hooks } }).__timeTrack.hooks.opened);
+  expect(opened.slice(1)).toEqual(['https://beacon.test/dashboard/tasks/T-101', 'https://beacon.test/dashboard']);
+  expect(page.url()).toBe('http://127.0.0.1:1420/');
+});

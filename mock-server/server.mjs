@@ -59,6 +59,9 @@ function freshState() {
       minSupportedVersion: null,
       // Overrides the verification URI returned by device/code (tests of the desktop's same-host check).
       verificationUri: null,
+      // `url` per task id on `tasks` and on timers started afterwards (Beacon's TaskProvider bridge); null = omitted,
+      // as in TimeTrackBundle 1.9.x. Tests use it for the clients' same-origin check of "Open in Beacon".
+      taskUrls: null,
     },
   };
 }
@@ -136,18 +139,26 @@ export function createMockServer(options = {}) {
     return { token: value, expiresAt: new Date(expiresAt).toISOString(), scopes: [...scopes] };
   }
 
+  function withUrl(item, taskId) {
+    const url = state.config.taskUrls?.[taskId];
+    return url === undefined ? item : { ...item, url };
+  }
+
   function startTimer(userId, taskId, note, source) {
     const task = TASKS.find((t) => t.id === taskId);
-    const timer = {
-      id: randomUUID(),
-      taskId: task.id,
-      taskTitle: task.title,
-      boardId: task.boardId,
-      startedAt: new Date().toISOString(),
-      lastHeartbeatAt: null,
-      clientType: source,
-      metadata: note ? { note } : null,
-    };
+    const timer = withUrl(
+      {
+        id: randomUUID(),
+        taskId: task.id,
+        taskTitle: task.title,
+        boardId: task.boardId,
+        startedAt: new Date().toISOString(),
+        lastHeartbeatAt: null,
+        clientType: source,
+        metadata: note ? { note } : null,
+      },
+      task.id,
+    );
     state.timers.set(userId, timer);
     return timer;
   }
@@ -230,7 +241,7 @@ export function createMockServer(options = {}) {
         const tasks = TASKS.filter(
           (t) => search === '' || t.title.toLowerCase().includes(search) || t.id.toLowerCase() === search,
         );
-        return send(res, 200, { tasks: tasks.slice(offset, offset + limit) });
+        return send(res, 200, { tasks: tasks.slice(offset, offset + limit).map((t) => withUrl(t, t.id)) });
       }
       case 'GET timer': {
         const session = auth(req, res, 'timer:read');

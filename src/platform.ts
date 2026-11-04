@@ -15,6 +15,8 @@ export type UpdateCheck =
     }
   | { status: 'error'; message: string };
 
+export type PlatformEvent = 'tray-stop' | 'tray-open-beacon' | 'shortcut';
+
 export interface Platform {
   readonly kind: 'tauri' | 'browser';
   fetch: typeof fetch;
@@ -26,14 +28,18 @@ export interface Platform {
   /** Seconds since the last input, read locally from the OS. Never sent. */
   idleSeconds(): Promise<number>;
   openUrl(url: string): Promise<void>;
-  setTray(text: string, running: boolean): Promise<void>;
+  /**
+   * Tray status text, "Stop timer" enabled state and the "Open Beacon" item: `beaconLabel` is its translated label, or
+   * `null` to hide it (not connected, or the server is not https).
+   */
+  setTray(text: string, running: boolean, beaconLabel: string | null): Promise<void>;
   notify(title: string, body: string): Promise<void>;
   autostartEnabled(): Promise<boolean>;
   setAutostart(enabled: boolean): Promise<void>;
   checkUpdate(server: string, token: string): Promise<UpdateCheck>;
   installUpdate(server: string, token: string): Promise<void>;
-  /** Tray "Stop timer" and the global shortcut. */
-  on(event: 'tray-stop' | 'shortcut', handler: () => void): void;
+  /** Tray "Stop timer", tray "Open Beacon" and the global shortcut. */
+  on(event: PlatformEvent, handler: () => void): void;
 }
 
 /** Test / development hooks of the browser fallback (set from Playwright through `window.__timeTrack`). */
@@ -41,10 +47,10 @@ export interface BrowserHooks {
   idleSeconds: number;
   opened: string[];
   notifications: string[];
-  tray: { text: string; running: boolean };
+  tray: { text: string; running: boolean; beacon: string | null };
   installable: boolean;
   installError: string | null;
-  emit(event: 'tray-stop' | 'shortcut'): void;
+  emit(event: PlatformEvent): void;
 }
 
 export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o) => globalThis.fetch(i, o)): Platform & { hooks: BrowserHooks } {
@@ -55,7 +61,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     idleSeconds: 0,
     opened: [],
     notifications: [],
-    tray: { text: '', running: false },
+    tray: { text: '', running: false, beacon: null },
     installable: true,
     installError: null,
     emit: (event) => (handlers[event] ?? []).forEach((handler) => handler()),
@@ -71,7 +77,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     secretDelete: async () => void (secret = null),
     idleSeconds: async () => hooks.idleSeconds,
     openUrl: async (url) => void hooks.opened.push(url),
-    setTray: async (text, running) => void (hooks.tray = { text, running }),
+    setTray: async (text, running, beacon) => void (hooks.tray = { text, running, beacon }),
     notify: async (title, body) => void hooks.notifications.push(`${title}: ${body}`),
     autostartEnabled: async () => autostart,
     setAutostart: async (enabled) => void (autostart = enabled),

@@ -29,10 +29,10 @@ function mount(options: { locale?: 'en' | 'es'; fetchImpl?: typeof fetch; now?: 
   return { app, platform, root, $, click: (selector: string) => $(selector).click() };
 }
 
-async function signedIn(options: Parameters<typeof mount>[0] = {}) {
+async function signedIn(options: Parameters<typeof mount>[0] = {}, server = env.url) {
   const ui = mount(options);
   await ui.app.init();
-  const done = ui.app.connect(env.url);
+  const done = ui.app.connect(server);
   await tick();
   const code = ui.$('#user-code').textContent ?? '';
   await env.control('device/approve', { userCode: code });
@@ -96,7 +96,7 @@ describe('desktop app', () => {
     ui.root.querySelector<HTMLElement>('[data-task="T-101"] button')?.click();
     await tick();
     expect(ui.$('#timer-task').textContent).toBe('Write onboarding guide');
-    expect(ui.platform.hooks.tray).toEqual({ text: '0:00:00 · Write onboarding guide', running: true });
+    expect(ui.platform.hooks.tray).toEqual({ text: '0:00:00 · Write onboarding guide', running: true, beacon: null });
     ui.root.querySelector<HTMLElement>('[data-task="T-102"] button')?.click();
     await tick();
     expect(ui.app.state.activeTimer?.taskId).toBe('T-102');
@@ -349,5 +349,98 @@ describe('desktop app', () => {
     expect(again.$('#error').textContent).toBe('Something went wrong: plain');
     again.app.view = 'loading';
     again.app.render();
+  });
+
+  describe('Beacon links', () => {
+    const HTTPS = 'https://beacon.test';
+    /** Serves https://beacon.test from the http mock, so the https-only links can be rendered. */
+    const proxy = ((input: string, init?: RequestInit) => nodeFetch(String(input).replace(HTTPS, env.url), init)) as typeof fetch;
+    const taskUrls = {
+      'T-101': `${HTTPS}/dashboard/tasks/T-101`,
+      'T-102': 'https://evil.test/dashboard/tasks/T-102',
+      'T-103': 'javascript:alert(1)',
+      'T-104': `http://beacon.test/dashboard/tasks/T-104`,
+      'T-105': `https://user@beacon.test/dashboard/tasks/T-105`,
+      'T-106': `${HTTPS}:8443/dashboard/tasks/T-106`,
+      'T-107': '/dashboard/tasks/T-107',
+    };
+
+    beforeEach(async () => {
+      await env.control('config', { taskUrls, verificationUri: `${HTTPS}/device` });
+    });
+
+    it('shows Open Beacon, My time and same-origin task links only, and opens them through the platform', async () => {
+      const ui = await signedIn({ fetchImpl: proxy }, HTTPS);
+      ui.platform.hooks.opened.length = 0;
+      const nav = ui.$('header nav');
+      expect(nav.getAttribute('aria-label')).toBe('Beacon links');
+      expect(ui.$<HTMLAnchorElement>('#open-beacon').href).toBe(`${HTTPS}/dashboard`);
+      expect(ui.$<HTMLAnchorElement>('#open-my-time').href).toBe(`${HTTPS}/dashboard/tasks/time`);
+      expect([...nav.children].map((el) => el.id)).toEqual(['open-beacon', 'open-my-time', 'open-settings']);
+      const links = [...ui.root.querySelectorAll<HTMLAnchorElement>('#tasks a.beacon-link')];
+      expect(links.map((a) => a.closest('li')?.getAttribute('data-task'))).toEqual(['T-101']);
+      expect(links[0].getAttribute('aria-label')).toBe('Open “Write onboarding guide” in Beacon');
+      expect(links[0].getAttribute('title')).toBe('Open “Write onboarding guide” in Beacon');
+      expect(links[0].getAttribute('rel')).toBe('noopener noreferrer');
+      expect(links[0].querySelector('[aria-hidden="true"]')).not.toBeNull();
+      // Focus order inside a row: title, link, start button.
+      const row = links[0].closest('li') as HTMLElement;
+      expect([...row.children].map((el) => el.tagName)).toEqual(['SPAN', 'A', 'BUTTON']);
+      ui.click('#open-beacon');
+      ui.click('#open-my-time');
+      links[0].click();
+      expect(ui.platform.hooks.opened).toEqual([`${HTTPS}/dashboard`, `${HTTPS}/dashboard/tasks/time`, `${HTTPS}/dashboard/tasks/T-101`]);
+      expect(ui.platform.hooks.tray.beacon).toBe('Open Beacon');
+      ui.platform.hooks.emit('tray-open-beacon');
+      expect(ui.platform.hooks.opened.at(-1)).toBe(`${HTTPS}/dashboard`);
+      ui.app.openBeacon('https://evil.test/dashboard');
+      ui.app.openBeacon(null);
+      expect(ui.platform.hooks.opened).toHaveLength(4);
+      ui.click('#open-settings');
+      expect(ui.$('#open-beacon')).not.toBeNull();
+      ui.app.destroy();
+    });
+
+    it('links the running timer from its url, or from the task list, and hides foreign ones', async () => {
+      const ui = await signedIn({ fetchImpl: proxy, locale: 'es' }, HTTPS);
+      await ui.app.start({ id: 'T-101', title: 'Write onboarding guide' });
+      const link = ui.$<HTMLAnchorElement>('#timer-open-in-beacon');
+      expect(link.href).toBe(`${HTTPS}/dashboard/tasks/T-101`);
+      expect(link.getAttribute('aria-label')).toBe('Abrir «Write onboarding guide» en Beacon');
+      expect(ui.$('#open-beacon').textContent).toBe('Abrir Beacon');
+      expect(ui.$('#open-my-time').textContent).toBe('Mi tiempo');
+      link.click();
+      expect(ui.platform.hooks.opened.at(-1)).toBe(`${HTTPS}/dashboard/tasks/T-101`);
+      await ui.app.start({ id: 'T-102', title: 'Review pull request queue' });
+      expect(ui.$('#timer-open-in-beacon')).toBeNull();
+      // A timer without `url` (TimeTrackBundle 1.9.x) falls back to the same task in the list.
+      await ui.app.stop();
+      await env.control('config', { taskUrls: null });
+      await ui.app.start({ id: 'T-101', title: 'Write onboarding guide' });
+      expect(ui.app.state.activeTimer?.url).toBeUndefined();
+      expect(ui.$<HTMLAnchorElement>('#timer-open-in-beacon').href).toBe(`${HTTPS}/dashboard/tasks/T-101`);
+      await ui.app.refresh();
+      expect(ui.$('#timer-open-in-beacon')).toBeNull();
+      expect(ui.root.querySelectorAll('a.beacon-link.icon')).toHaveLength(0);
+      ui.app.destroy();
+    });
+
+    it('shows no Beacon link before connecting, on http servers, and after signing out', async () => {
+      const ui = mount({ fetchImpl: proxy });
+      await ui.app.init();
+      expect(ui.root.querySelectorAll('a.beacon-link')).toHaveLength(0);
+      ui.platform.hooks.emit('tray-open-beacon');
+      expect(ui.platform.hooks.opened).toHaveLength(0);
+      const http = await signedIn();
+      expect(http.root.querySelectorAll('a.beacon-link')).toHaveLength(0);
+      expect(http.platform.hooks.tray.beacon).toBeNull();
+      http.platform.hooks.emit('tray-open-beacon');
+      expect(http.platform.hooks.opened.filter((url) => url.includes('/dashboard'))).toHaveLength(0);
+      const https = await signedIn({ fetchImpl: proxy }, HTTPS);
+      expect(https.platform.hooks.tray.beacon).toBe('Open Beacon');
+      await https.app.logout();
+      expect(https.platform.hooks.tray.beacon).toBeNull();
+      expect(https.root.querySelectorAll('a.beacon-link')).toHaveLength(0);
+    });
   });
 });

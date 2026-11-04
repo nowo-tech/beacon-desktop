@@ -6,6 +6,7 @@ import { IdleMonitor, clampPeriod, type IdlePeriod } from '../lib/idle';
 import { OfflineQueue } from '../lib/queue';
 import { type Feature, type LocalState, hasConsent, loadLocal, recordConsent, saveLocal } from '../lib/settings';
 import { elapsedSeconds, formatElapsed } from '../lib/time';
+import { dashboardUrl, myTimeUrl, sameOriginHttps, taskUrl } from '../lib/beacon';
 import { appsPage, safeVerificationUri } from '../lib/urls';
 import { compareVersions, isVersion, updateRequired } from '../lib/version';
 import { withinWorkingHours } from '../lib/workingHours';
@@ -88,6 +89,7 @@ export class DesktopApp {
   async init(): Promise<void> {
     this.version = await this.platform.appVersion();
     this.platform.on('tray-stop', () => void this.stop());
+    this.platform.on('tray-open-beacon', () => this.openBeacon(dashboardUrl(this.state.session?.server)));
     this.platform.on('shortcut', () => (this.root.querySelector('#search') as HTMLInputElement | null)?.focus());
     this.token = await this.platform.secretGet();
     if (this.state.session === null || this.token === null) {
@@ -201,7 +203,7 @@ export class DesktopApp {
     this.me = null;
     this.idle = null;
     this.notice = notice;
-    await this.platform.setTray(this.t('noTimer'), false);
+    await this.platform.setTray(this.t('noTimer'), false, null);
     this.show('login');
   }
 
@@ -241,7 +243,7 @@ export class DesktopApp {
       () => {
         const at = this.now().toISOString();
         this.queue.push(running !== null ? { kind: 'switch', taskId: task.id, taskTitle: task.title, at } : { kind: 'start', taskId: task.id, taskTitle: task.title, at });
-        return this.setTimer({ id: 'offline', taskId: task.id, taskTitle: task.title, startedAt: at });
+        return this.setTimer({ id: 'offline', taskId: task.id, taskTitle: task.title, startedAt: at, url: task.url ?? null });
       },
     );
   }
@@ -269,7 +271,8 @@ export class DesktopApp {
   async updateTray(): Promise<void> {
     const timer = this.state.activeTimer;
     const text = timer !== null ? `${formatElapsed(elapsedSeconds(timer.startedAt, this.now()))} · ${timer.taskTitle}` : this.t('noTimer');
-    await this.platform.setTray(text, timer !== null);
+    const beacon = dashboardUrl(this.state.session?.server) !== null ? this.t('openBeacon') : null;
+    await this.platform.setTray(text, timer !== null, beacon);
   }
 
   // ---- idle (local only) -----------------------------------------------------------------------------------------
@@ -368,6 +371,21 @@ export class DesktopApp {
     this.show('main');
   }
 
+  /**
+   * Opens a Beacon page in the browser. The URL is checked again against the connected server right before opening
+   * (https, same origin, no credentials); anything else is ignored.
+   */
+  openBeacon(url: string | null | undefined): void {
+    const safe = sameOriginHttps(url, this.state.session?.server);
+    if (safe !== null) void this.platform.openUrl(safe);
+  }
+
+  /** Task page of the running timer: the timer's `url`, else the `url` of the same task in the list. */
+  timerUrl(timer: Timer): string | null {
+    const server = this.state.session?.server;
+    return taskUrl(timer.url, server) ?? taskUrl(this.tasks.find((task) => task.id === timer.taskId)?.url, server);
+  }
+
   openApps(): void {
     const session = this.state.session;
     if (session !== null) void this.platform.openUrl(appsPage(session.server));
@@ -425,17 +443,25 @@ export class DesktopApp {
     }
     const t = this.t;
     const signedIn = this.state.session !== null;
+    const dashboard = signedIn ? dashboardUrl(this.state.session?.server) : null;
+    const myTime = signedIn ? myTimeUrl(this.state.session?.server) : null;
     const header = h(
       'header',
       { class: 'bar' },
       h('h1', {}, t('appName')),
-      this.view === 'main' && h('button', { class: 'link', id: 'open-settings', on: { click: () => this.show('settings') } }, t('settings')),
-      (this.view === 'settings' || this.view === 'privacy') &&
-        h(
-          'button',
-          { class: 'link', id: 'back', on: { click: () => this.show(this.view === 'privacy' && signedIn ? 'settings' : signedIn ? 'main' : 'login') } },
-          t('back'),
-        ),
+      h(
+        'nav',
+        { class: 'actions', attrs: { 'aria-label': t('beaconLinks') } },
+        dashboard !== null && this.beaconLink(dashboard, t('openBeacon'), { id: 'open-beacon' }),
+        myTime !== null && this.beaconLink(myTime, t('myTime'), { id: 'open-my-time' }),
+        this.view === 'main' && h('button', { class: 'link', id: 'open-settings', on: { click: () => this.show('settings') } }, t('settings')),
+        (this.view === 'settings' || this.view === 'privacy') &&
+          h(
+            'button',
+            { class: 'link', id: 'back', on: { click: () => this.show(this.view === 'privacy' && signedIn ? 'settings' : signedIn ? 'main' : 'login') } },
+            t('back'),
+          ),
+      ),
     );
     const messages = h(
       'div',
@@ -455,6 +481,35 @@ export class DesktopApp {
     };
     this.root.replaceChildren(header, messages, views[this.view]());
     this.root.setAttribute('aria-busy', this.busy ? 'true' : 'false');
+  }
+
+  /**
+   * A link to Beacon: a real `<a href>` (keyboard focus, accessible name) whose click opens the browser through the
+   * platform opener instead of navigating the app window. With `icon`, the visible text is an arrow glyph and the
+   * accessible name is `label` (also shown as tooltip).
+   */
+  private beaconLink(url: string, label: string, options: { id?: string; icon?: boolean } = {}): HTMLAnchorElement {
+    return h(
+      'a',
+      {
+        class: options.icon ? 'beacon-link icon' : 'beacon-link',
+        id: options.id,
+        attrs: {
+          href: url,
+          target: '_blank',
+          rel: 'noopener noreferrer',
+          'aria-label': options.icon ? label : undefined,
+          title: options.icon ? label : undefined,
+        },
+        on: {
+          click: (event) => {
+            event.preventDefault();
+            this.openBeacon(url);
+          },
+        },
+      },
+      options.icon ? h('span', { attrs: { 'aria-hidden': 'true' } }, '↗') : label,
+    );
   }
 
   private renderLogin(): HTMLElement {
@@ -507,11 +562,17 @@ export class DesktopApp {
       this.ticker = setInterval(() => {
         elapsed.textContent = formatElapsed(elapsedSeconds(timer.startedAt, this.now()));
       }, 1000);
+      const link = this.timerUrl(timer);
       card = h(
         'section',
         { class: 'card running', id: 'timer' },
         h('span', { class: 'label' }, t('tracking')),
-        h('strong', { id: 'timer-task' }, timer.taskTitle),
+        h(
+          'span',
+          { class: 'title-line' },
+          h('strong', { id: 'timer-task' }, timer.taskTitle),
+          link !== null && this.beaconLink(link, t('openTaskInBeacon', { title: timer.taskTitle }), { id: 'timer-open-in-beacon', icon: true }),
+        ),
         elapsed,
         h('button', { class: 'danger', id: 'stop', attrs: { disabled: this.busy }, on: { click: () => void this.stop() } }, t('stop')),
       );
@@ -527,11 +588,13 @@ export class DesktopApp {
     const list = h('ul', { class: 'tasks', id: 'tasks' });
     for (const task of this.tasks) {
       const current = timer?.taskId === task.id;
+      const link = taskUrl(task.url, this.state.session?.server);
       list.append(
         h(
           'li',
           { attrs: { 'data-task': task.id } },
           h('span', { class: 'task' }, h('span', {}, task.title), task.boardTitle ? h('small', {}, task.boardTitle) : null),
+          link !== null && this.beaconLink(link, t('openTaskInBeacon', { title: task.title }), { icon: true }),
           current
             ? h('span', { class: 'label' }, t('tracking'))
             : h('button', { class: 'primary small', attrs: { disabled: this.busy }, on: { click: () => void this.start(task) } }, timer !== null ? t('switch') : t('start')),
