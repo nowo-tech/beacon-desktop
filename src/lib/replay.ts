@@ -174,9 +174,9 @@ export async function replay(api: TimeTrackApi, action: QueuedAction, features: 
     case 'start':
       return startAt(api, action.taskId, action.taskTitle, notPast(action.at, now), now, action.note);
     case 'idle': {
-      const reassign = action.action === 'reassign' && action.taskId !== undefined ? { taskId: action.taskId, then: action.then, note: action.note } : undefined;
+      const options = { taskId: action.taskId, then: action.then, note: action.note };
       try {
-        const change = await api.discardIdle(new Date(action.from), notPast(action.to, now), action.action, reassign);
+        const change = await api.discardIdle(new Date(action.from), notPast(action.to, now), action.action, options);
         return { timer: change.timer, clamps: [] };
       } catch (error) {
         if (error instanceof ApiError && error.code === 'no_active_timer') return { timer: null, clamps: [] };

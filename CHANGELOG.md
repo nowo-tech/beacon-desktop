@@ -36,6 +36,16 @@ fallbacks below.
   `stopAt`, `reassign`), `lib/serverFeatures.ts`, `lib/idleCheck.ts`, `lib/replay.ts`, the mock server (1.10 by
   default, `{"apiVersion": "1.9"}` for the old behaviour).
 
+- Beacon review:
+  - With `features.idle_keep_note` (TimeTrackBundle 1.10.x) the meeting note is sent with `keep`. Otherwise it waits
+    on this computer for the next stop.
+  - With `limits.idle_check.user_can_disable: true` (personal accounts) Settings shows an on/off switch, on by default,
+    with dated consent. When the value is false or the key is absent, the check stays mandatory.
+  - The gap screen has a labelled full-width "Another task" row, and "Leave it out" is a ghost button.
+  - Times follow the locale (24 h in Spanish).
+  - The idle cards are named regions, announced once through a persistent polite live region.
+  - axe checks (WCAG 2.1 A/AA) run in e2e, in light and dark.
+
 ### Changed
 
 - The old opt-in "You were away" prompt (keep / discard / split on return) is replaced by the "Still there?" check.

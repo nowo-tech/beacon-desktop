@@ -200,5 +200,7 @@
   "clearLocal": "Borrar datos locales…",
   "clearLocalSure": "¿Borrar todos los datos de TimeTrack de este ordenador?",
   "clearLocalPending": "{count} acción(es) aún no han llegado al servidor y se perderán. ¿Borrar todos los datos de TimeTrack de este ordenador?",
-  "clearLocalYes": "Borrar datos locales"
+  "clearLocalYes": "Borrar datos locales",
+  "idleUserSwitch": "Preguntar \"¿Sigues ahí?\" mientras hay un temporizador en marcha",
+  "idlePersonalText": "Activado por defecto en tu cuenta. Tras {minutes} minutos sin usar teclado ni ratón la app te pregunta si sigues ahí. Puedes desactivarlo o hacer que espere más."
 }

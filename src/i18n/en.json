@@ -200,5 +200,7 @@
   "clearLocal": "Clear local data…",
   "clearLocalSure": "Delete all TimeTrack data on this computer?",
   "clearLocalPending": "{count} action(s) have not reached the server yet and will be lost. Delete all TimeTrack data on this computer?",
-  "clearLocalYes": "Delete local data"
+  "clearLocalYes": "Delete local data",
+  "idleUserSwitch": "Ask \"Still there?\" while a timer runs",
+  "idlePersonalText": "On by default for your account. After {minutes} minutes without keyboard or mouse input the app asks whether you are still there. You can turn it off or make it wait longer."
 }

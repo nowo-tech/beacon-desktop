@@ -210,7 +210,7 @@ describe('desktop app', () => {
       expect(Object.keys(JSON.parse(request.body) as object).every((key) => ['from', 'to', 'action', 'taskId', 'then', 'note', 'source'].includes(key))).toBe(true);
     }
     const everything = [...sent, ...logged, ...Object.values(localStorage)].join('\n');
-    expect(everything).not.toMatch(/617|idleSeconds|isIdle|lastInput|idleSince/);
+    expect(everything).not.toMatch(/617\.25|617250|idleSeconds|isIdle|lastInput|idleSince/);
     spies.forEach((spy) => spy.mockRestore());
     ui.app.destroy();
   });
@@ -355,6 +355,70 @@ describe('desktop app', () => {
     select.dispatchEvent(new Event('change'));
     expect(ui.app.state.settings.idleMinutes).toBeNull();
     ui.app.destroy();
+  });
+
+  it('sends the meeting note with keep when the server takes it (idle_keep_note)', async () => {
+    await env.control('config', { keepNote: true });
+    const ui = await signedIn();
+    await ui.app.start({ id: 'T-101', title: 'Write onboarding guide' });
+    await env.control('timer/backdate', { seconds: 3600 });
+    await ui.app.refresh();
+    expect(ui.app.features().idleKeepNote).toBe(true);
+    ui.platform.hooks.idleSeconds = 700;
+    await ui.app.tick();
+    await ui.app.answerIdle({ kind: 'meeting', note: 'Standup' });
+    const decisions = ((await env.control('state')) as { idleDecisions: { action: string; note?: string }[] }).idleDecisions;
+    expect(decisions).toEqual([expect.objectContaining({ action: 'keep', note: 'Standup' })]);
+    expect(ui.app.state.pendingNote).toBeNull();
+    // Without the feature (1.10.0): the note waits for the stop.
+    await env.control('config', { keepNote: false });
+    await ui.app.refresh();
+    await env.control('timer/backdate', { seconds: 3600 });
+    await ui.app.refresh();
+    await ui.app.tick();
+    await ui.app.answerIdle({ kind: 'meeting', note: 'Retro' });
+    expect(ui.app.state.pendingNote).toBe('Retro');
+    ui.app.destroy();
+  });
+
+  it('personal accounts (user_can_disable) get an on/off switch, on by default, with dated consent', async () => {
+    await env.control('config', { userCanDisable: true });
+    const ui = await signedIn();
+    expect(ui.app.idleCheckEnabled()).toBe(true);
+    ui.app.show('settings');
+    const toggle = ui.$<HTMLInputElement>('#idle-toggle');
+    expect(toggle.checked).toBe(true);
+    expect(ui.$('#idle-org').textContent).toContain('You can turn it off');
+    expect(ui.root.querySelector('#idle-minutes')).not.toBeNull();
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event('change'));
+    await tick();
+    expect(ui.app.idleCheckEnabled()).toBe(false);
+    expect(ui.$('#consent-idleDetection').textContent).toContain('Consent withdrawn on');
+    expect(ui.root.querySelector('#idle-minutes')).toBeNull();
+    await ui.app.setFeature('idleDetection', true);
+    expect(ui.app.idleCheckEnabled()).toBe(true);
+    // An organisation policy (false or key absent): mandatory, no switch.
+    await env.control('config', { userCanDisable: false });
+    await ui.app.refresh();
+    await ui.app.setFeature('idleDetection', false);
+    expect(ui.app.idleCheckEnabled()).toBe(true);
+    ui.app.show('settings');
+    expect(ui.root.querySelector('#idle-toggle')).toBeNull();
+    await env.control('config', { userCanDisable: null });
+    await ui.app.refresh();
+    expect(ui.app.features().userCanDisable).toBe(false);
+    expect(ui.app.idleCheckEnabled()).toBe(true);
+    ui.app.destroy();
+  });
+
+  it('formats times with the locale: 24 h in Spanish, no hard-coded AM/PM', () => {
+    const local = new Date(2026, 10, 4, 13, 59).toISOString();
+    const note = { kind: 'start' as const, taskTitle: 'A', requested: local, applied: local, reason: 'overlap' as const };
+    const es = mount({ locale: 'es' }).app.clampText(note);
+    expect(es).toContain('13:59');
+    expect(es).not.toMatch(/AM|PM|a\. m\.|p\. m\./i);
+    expect(mount({ locale: 'en' }).app.clampText(note)).toContain('1:59');
   });
 
   it('suppresses notifications outside working hours', async () => {

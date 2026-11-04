@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 
 const MOCK = 'http://127.0.0.1:8787';
@@ -66,7 +67,7 @@ test('"Still there?" asks after the threshold and only the decision is sent', as
   await expect(page.locator('#timer-task')).toHaveText('Review pull request queue');
   await control('timer/backdate', { seconds: 3600 });
   await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
-  await idleTick(page, 617);
+  await idleTick(page, 617.25);
   await expect(page.locator('#idle')).toContainText('Still there?');
   await expect(page.locator('#idle-text')).toHaveText('No activity for 10 min on Review pull request queue.');
   // Non-blocking: the list stays usable and focus is not taken.
@@ -82,7 +83,7 @@ test('"Still there?" asks after the threshold and only the decision is sent', as
   await expect(page.locator('#notice')).toHaveText('Got it, the time is kept.');
   const state = (await control('state')) as { idleDecisions: { action: string }[]; requests: { body: string; query: string }[] };
   expect(state.idleDecisions.map((d) => d.action)).toEqual(['keep']);
-  expect(state.requests.map((r) => `${r.query} ${r.body}`).join()).not.toMatch(/617|isIdle|idleSeconds|lastInput/);
+  expect(state.requests.map((r) => `${r.query} ${r.body}`).join()).not.toMatch(/617\.25|617250|isIdle|idleSeconds|lastInput/);
   // The meeting note goes on the entry when it stops.
   await page.locator('#stop').click();
   await expect(page.locator('#timer')).toContainText('Not tracking');
@@ -117,6 +118,61 @@ test('no answer: the entry ends at the last input, then the gap question and Res
   expect(entries).toHaveLength(2);
   expect(entries[1].startedAt).toBe(entries[0].endedAt);
 });
+
+async function axe(page: Page, state: string) {
+  const { violations } = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+  expect(violations.map((v) => `${state}: ${v.id} ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+}
+
+for (const scheme of ['light', 'dark'] as const) {
+  test(`axe (${scheme}): Still there?, meeting form, gap, Resume, settings and privacy; keyboard order is the visual order`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await signIn(page);
+    await page.locator('[data-task="T-101"] .row-action').click();
+    await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
+    await control('timer/backdate', { seconds: 3600 });
+    await page.clock.install({ time: Date.now() - 10 * 60_000 });
+    await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
+    await idleTick(page, 660);
+    const card = page.getByRole('region', { name: 'Still there?' });
+    await expect(card).toBeVisible();
+    await expect(page.locator('#live')).toHaveCount(1);
+    await expect(page.locator('#live')).toContainText('Still there?');
+    await axe(page, 'still-there');
+    // Tab order = visual order of the choices.
+    await page.locator('#idle-here').focus();
+    for (const id of ['idle-meeting', 'idle-discard', 'idle-pause']) {
+      await page.keyboard.press('Tab');
+      await expect(page.locator(`#${id}`)).toBeFocused();
+    }
+    await page.locator('#idle-meeting').click();
+    await expect(page.locator('#idle-note')).toBeFocused();
+    await axe(page, 'meeting');
+    await page.locator('#idle-meeting-cancel').click();
+    await page.clock.fastForward('06:00');
+    await idleTick(page, 660 + 360);
+    await expect(page.locator('#idle-away')).toBeVisible();
+    await axe(page, 'away');
+    await idleTick(page, 1);
+    await expect(page.getByRole('region', { name: 'Welcome back' })).toBeVisible();
+    await expect(page.getByLabel('Another task')).toBeVisible();
+    await axe(page, 'gap');
+    await page.locator('#gap-keep').focus();
+    for (const id of ['gap-task', 'gap-reassign', 'gap-discard']) {
+      await page.keyboard.press('Tab');
+      await expect(page.locator(`#${id}`)).toBeFocused();
+    }
+    await page.locator('#gap-discard').click();
+    await expect(page.locator('#gap-resume')).toBeFocused();
+    await axe(page, 'resume');
+    await page.locator('#gap-dismiss').click();
+    await page.locator('#open-settings').click();
+    await axe(page, 'settings');
+    await page.locator('#open-privacy').click();
+    await page.locator('#clear-local').click();
+    await axe(page, 'privacy');
+  });
+}
 
 test('offline actions are queued and replayed with their real times', async ({ page, context }) => {
   await signIn(page);

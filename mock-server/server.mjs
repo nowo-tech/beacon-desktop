@@ -76,7 +76,11 @@ function freshState() {
       // client_api.backdate.max_seconds (0 = backdating off).
       backdateMaxSeconds: 86400,
       allowReassign: true,
+      // 1.10.x: `note` on `keep` (features.idle_keep_note).
+      keepNote: false,
       idleCheck: { enabled: true, threshold_minutes: 10, answer_timeout_minutes: 5 },
+      // limits.idle_check.user_can_disable; null = key absent.
+      userCanDisable: null,
     },
   };
 }
@@ -296,12 +300,17 @@ export function createMockServer(options = {}) {
                   stop_backdate: backdate,
                   idle_reassign: state.config.allowReassign,
                   idle_check: idle.enabled,
+                  ...(state.config.keepNote ? { idle_keep_note: true } : {}),
                   workday: false,
                   monitoring: false,
                 },
                 limits: {
                   backdate: { max_seconds: state.config.backdateMaxSeconds, clock_skew_seconds: CLOCK_SKEW_SECONDS },
-                  idle_check: { threshold_minutes: idle.threshold_minutes, answer_timeout_minutes: idle.answer_timeout_minutes },
+                  idle_check: {
+                    threshold_minutes: idle.threshold_minutes,
+                    answer_timeout_minutes: idle.answer_timeout_minutes,
+                    ...(state.config.userCanDisable !== null ? { user_can_disable: state.config.userCanDisable } : {}),
+                  },
                 },
               }
             : {}),
@@ -395,6 +404,7 @@ export function createMockServer(options = {}) {
           to: body.to,
           action: body.action,
           ...(reassign ? { taskId: body.taskId, then: body.then ?? 'continue', note: body.note ?? null } : {}),
+          ...(body.action === 'keep' && state.config.keepNote && typeof body.note === 'string' ? { note: body.note.trim().slice(0, 500) } : {}),
         });
         const reassignedKey = v110() ? { reassigned: null } : {};
         if (body.action === 'keep') {

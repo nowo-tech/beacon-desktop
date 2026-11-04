@@ -12,6 +12,10 @@ export interface ServerFeatures {
   startBackdate: boolean;
   stopBackdate: boolean;
   idleReassign: boolean;
+  /** `keep` takes an optional note (1.10.x `features.idle_keep_note`); else the note waits for the next stop. */
+  idleKeepNote: boolean;
+  /** The person may turn the organisation's check off (`limits.idle_check.user_can_disable`, personal accounts). */
+  userCanDisable: boolean;
   /**
    * `true` / `false`: the organisation turned the "Still there?" check on / off. `null`: a 1.9 server that says
    * nothing, so the person decides on this device (opt-in).
@@ -41,6 +45,8 @@ export function serverFeatures(me: Pick<Me, 'features' | 'limits'> | null | unde
     startBackdate: features?.start_backdate === true,
     stopBackdate: features?.stop_backdate === true,
     idleReassign: features?.idle_reassign === true,
+    idleKeepNote: features?.idle_keep_note === true,
+    userCanDisable: idle?.user_can_disable === true,
     idleCheck: known ? features.idle_check === true : null,
     thresholdMinutes: clampInt(idle?.threshold_minutes, THRESHOLD_RANGE, DEFAULT_THRESHOLD_MINUTES),
     answerTimeoutMinutes: clampInt(idle?.answer_timeout_minutes, ANSWER_TIMEOUT_RANGE, DEFAULT_ANSWER_TIMEOUT_MINUTES),

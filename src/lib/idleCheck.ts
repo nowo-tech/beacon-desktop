@@ -153,7 +153,11 @@ export function promptSpan(state: Extract<IdleCheckState, { phase: 'asking' }>, 
   return { from, to: to.getTime() > now.getTime() ? now : to };
 }
 
-export function decide(state: Extract<IdleCheckState, { phase: 'asking' }>, choice: IdleChoice, now: Date): Decision {
+/**
+ * `keepNote`: the server takes a note on `keep` (`features.idle_keep_note`), so a "meeting" note on the same task is
+ * sent with the decision; without it the note waits locally for the next stop / switch (`pendingNote`).
+ */
+export function decide(state: Extract<IdleCheckState, { phase: 'asking' }>, choice: IdleChoice, now: Date, options: { keepNote?: boolean } = {}): Decision {
   const { from, to } = promptSpan(state, now);
   const span = { from: from.toISOString(), to: to.toISOString() };
   const note = choice.kind === 'meeting' ? choice.note?.trim() || null : null;
@@ -168,6 +172,9 @@ export function decide(state: Extract<IdleCheckState, { phase: 'asking' }>, choi
           actions: [{ kind: 'idle', ...span, action: 'reassign', taskId: choice.reassignTo.id, taskTitle: choice.reassignTo.title, then: 'continue', ...(note !== null ? { note } : {}) }],
           pendingNote: null,
         };
+      }
+      if (note !== null && options.keepNote === true) {
+        return { state: WATCHING, actions: [{ kind: 'idle', ...span, action: 'keep', note }], pendingNote: null };
       }
       return { state: WATCHING, actions: [{ kind: 'idle', ...span, action: 'keep' }], pendingNote: note };
     case 'discard':

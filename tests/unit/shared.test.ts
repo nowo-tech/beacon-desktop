@@ -28,6 +28,8 @@ describe('server features (GET me)', () => {
       startBackdate: false,
       stopBackdate: false,
       idleReassign: false,
+      idleKeepNote: false,
+      userCanDisable: false,
       idleCheck: null,
       thresholdMinutes: 10,
       answerTimeoutMinutes: 5,
@@ -40,7 +42,9 @@ describe('server features (GET me)', () => {
       limits: { idle_check: { threshold_minutes: 2, answer_timeout_minutes: 99 } },
     });
     expect(features).toMatchObject({ known: true, startBackdate: true, idleReassign: true, idleCheck: false, thresholdMinutes: 5, answerTimeoutMinutes: 30 });
-    expect(serverFeatures({ features: {}, limits: { idle_check: { threshold_minutes: 'x' as never } } })).toMatchObject({ idleCheck: false, thresholdMinutes: 10 });
+    expect(serverFeatures({ features: {}, limits: { idle_check: { threshold_minutes: 'x' as never } } })).toMatchObject({ idleCheck: false, thresholdMinutes: 10, userCanDisable: false });
+    expect(serverFeatures({ features: { idle_keep_note: true }, limits: { idle_check: { user_can_disable: true } } })).toMatchObject({ idleKeepNote: true, userCanDisable: true });
+    expect(serverFeatures({ features: {}, limits: { idle_check: { user_can_disable: 'yes' as never } } }).userCanDisable).toBe(false);
   });
 
   it('lets the person only lengthen the threshold, up to 60', () => {
@@ -110,6 +114,13 @@ describe('"Still there?" state machine', () => {
     const span = { from: iso(2), to: iso(15) };
     expect(decide(asking, { kind: 'here' }, at(15))).toEqual({ state: WATCHING, actions: [{ kind: 'idle', ...span, action: 'keep' }], pendingNote: null });
     expect(decide(asking, { kind: 'meeting', note: '  Standup ' }, at(15))).toEqual({ state: WATCHING, actions: [{ kind: 'idle', ...span, action: 'keep' }], pendingNote: 'Standup' });
+    // 1.10.x with features.idle_keep_note: the note travels with keep.
+    expect(decide(asking, { kind: 'meeting', note: '  Standup ' }, at(15), { keepNote: true })).toEqual({
+      state: WATCHING,
+      actions: [{ kind: 'idle', ...span, action: 'keep', note: 'Standup' }],
+      pendingNote: null,
+    });
+    expect(decide(asking, { kind: 'meeting', note: ' ' }, at(15), { keepNote: true }).actions).toEqual([{ kind: 'idle', ...span, action: 'keep' }]);
     expect(decide(asking, { kind: 'meeting', note: ' ', reassignTo: { id: 'T-2', title: 'Meetings' } }, at(15)).actions).toEqual([
       { kind: 'idle', ...span, action: 'reassign', taskId: 'T-2', taskTitle: 'Meetings', then: 'continue' },
     ]);
@@ -230,6 +241,25 @@ describe('client v0.3 and replay against the mock', () => {
     expect((await entries()).map((e) => e.taskId)).toEqual(['T-101', 'T-103']);
     await api.stop();
     expect((await syncQueue(memoryStore([{ kind: 'idle', from: ago(10).toISOString(), to: ago(5).toISOString(), action: 'keep' }]), api)).timer).toBeNull();
+  });
+
+  it('sends a keep note only to a server that takes it (idle_keep_note)', async () => {
+    await api.startAt('T-101', { startedAt: ago(1200) });
+    const keep = (note: string): QueuedAction => ({ kind: 'idle', from: ago(1100).toISOString(), to: ago(1000).toISOString(), action: 'keep', note });
+    await syncQueue(memoryStore([keep('ignored by 1.10.0')]), api);
+    await env.control('config', { keepNote: true });
+    expect(serverFeatures(await api.me()).idleKeepNote).toBe(true);
+    await syncQueue(memoryStore([keep('Standup')]), api);
+    const state = (await env.control('state')) as { idleDecisions: { action: string; note?: string }[]; requests: { path: string; body: string }[] };
+    expect(state.idleDecisions).toEqual([expect.not.objectContaining({ note: expect.anything() }), expect.objectContaining({ action: 'keep', note: 'Standup' })]);
+    const bodies = state.requests.filter((r) => r.path.endsWith('discard-idle')).map((r) => JSON.parse(r.body) as Record<string, unknown>);
+    expect(bodies.map((b) => Object.keys(b).sort())).toEqual([
+      ['action', 'from', 'note', 'to'],
+      ['action', 'from', 'note', 'to'],
+    ]);
+    await api.discardIdle(ago(900), ago(800), 'split', { note: 'never sent with split' });
+    const last = ((await env.control('state')) as { requests: { body: string }[] }).requests.at(-1);
+    expect(last?.body).not.toContain('never sent');
   });
 
   it('falls back on a 1.9 server: start recorded on return (told), stop via discard-idle', async () => {

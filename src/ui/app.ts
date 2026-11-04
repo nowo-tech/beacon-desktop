@@ -147,6 +147,8 @@ export class DesktopApp {
   private main: MainRegions | null = null;
   private readonly header: HTMLElement;
   private readonly status: HTMLElement;
+  /** Persistent polite live region: only its text changes, so an announcement is read once, not on every render. */
+  private readonly liveRegion: HTMLElement;
   private readonly alert: HTMLElement;
   private readonly body: HTMLElement;
   private readonly now: () => Date;
@@ -163,8 +165,11 @@ export class DesktopApp {
     this.now = deps.now ?? (() => new Date());
     this.locale = deps.locale ?? detectLocale(globalThis.navigator?.language);
     this.t = createTranslator(this.locale);
-    this.timeFormat = new Intl.DateTimeFormat(this.locale, { hour: '2-digit', minute: '2-digit' });
-    this.dateFormat = new Intl.DateTimeFormat(this.locale, { dateStyle: 'medium', timeStyle: 'short' });
+    // The OS locale when it is a variant of the app's language (en-GB → 24 h), else the app's (es → 24 h, en → 12 h).
+    const os = globalThis.navigator?.language;
+    const formatLocale = typeof os === 'string' && os.toLowerCase().startsWith(this.locale) ? os : this.locale;
+    this.timeFormat = new Intl.DateTimeFormat(formatLocale, { hour: 'numeric', minute: '2-digit' });
+    this.dateFormat = new Intl.DateTimeFormat(formatLocale, { dateStyle: 'medium', timeStyle: 'short' });
     this.state = loadLocal(this.storage);
     this.serverDraft = this.state.lastServer ?? deps.beaconUrl ?? '';
     this.queue = new OfflineQueue(this.storage);
@@ -173,7 +178,8 @@ export class DesktopApp {
     this.status = h('div', { class: 'messages', id: 'status', attrs: { role: 'status', 'aria-live': 'polite' } });
     this.alert = h('div', { class: 'messages', id: 'alerts', attrs: { role: 'alert' } });
     this.body = h('div', { class: 'view', id: 'view' });
-    this.root.replaceChildren(this.header, this.status, this.alert, this.body);
+    this.liveRegion = h('p', { class: 'sr-only', id: 'live', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
+    this.root.replaceChildren(this.header, this.status, this.alert, this.liveRegion, this.body);
     document.addEventListener('keydown', (event) => this.onKey(event));
   }
 
@@ -216,7 +222,7 @@ export class DesktopApp {
   show(view: View): void {
     if (view !== this.view) {
       this.showWhere = false;
-      this.live = '';
+      this.announce('');
       if (this.notice !== null) this.setNotice(null);
     }
     this.view = view;
@@ -664,7 +670,10 @@ export class DesktopApp {
    */
   idleCheckEnabled(): boolean {
     const features = this.features();
-    return this.state.session !== null && (features.idleCheck ?? hasConsent(this.state, 'idleDetection'));
+    if (this.state.session === null) return false;
+    if (features.idleCheck === null) return hasConsent(this.state, 'idleDetection');
+    // Personal accounts (`user_can_disable`): on by default, off once the person withdraws consent.
+    return features.idleCheck && (!features.userCanDisable || this.state.consents.idleDetection?.granted !== false);
   }
 
   idleSettings(): { thresholdMinutes: number; answerTimeoutMinutes: number } {
@@ -720,7 +729,7 @@ export class DesktopApp {
   async answerIdle(choice: IdleChoice): Promise<void> {
     const state = this.state.idleCheck;
     if (state.phase !== 'asking') return;
-    const decision = decide(state, choice, this.now());
+    const decision = decide(state, choice, this.now(), { keepNote: this.features().idleKeepNote });
     this.persist({ pendingNote: decision.pendingNote ?? this.state.pendingNote });
     this.setIdleCheck(decision.state);
     await this.runActions(decision.actions);
@@ -1015,7 +1024,7 @@ export class DesktopApp {
   /** Screen-reader-only announcement (result counts, code expiry) in the persistent polite status region. */
   private announce(text: string): void {
     this.live = text;
-    this.renderMessages();
+    if (this.liveRegion.textContent !== text) this.liveRegion.textContent = text;
   }
 
   // ---- rendering --------------------------------------------------------------------------------------------------
@@ -1095,7 +1104,6 @@ export class DesktopApp {
     const t = this.t;
     const signedIn = this.state.session !== null;
     patch(this.status, [
-      this.live !== '' && h('p', { class: 'sr-only', id: 'live' }, this.live),
       this.notice !== null && h('p', { class: 'notice', id: 'notice' }, this.notice),
       this.offline && signedIn && h('p', { class: 'notice warn', id: 'offline' }, t('offline', { count: this.queue.size })),
     ]);
@@ -1502,7 +1510,7 @@ export class DesktopApp {
     const card = (id: string, title: string, ...children: Child[]) =>
       h(
         'section',
-        { class: 'card still-there', id, key: id, attrs: { 'aria-labelledby': `${id}-title` } },
+        { class: 'card still-there', id, key: id, attrs: { role: 'region', 'aria-labelledby': `${id}-title` } },
         art('mascot-small', '', 'mascot tiny'),
         h('div', { class: 'still-there-body' }, h('h2', { id: `${id}-title` }, title), ...children),
       );
@@ -1536,7 +1544,7 @@ export class DesktopApp {
         const minutes = this.minutesBetween(state.from, state.to);
         const features = this.features();
         const canAdd = features.startBackdate && features.stopBackdate;
-        const select = h('select', { id: 'gap-task', attrs: { 'aria-label': t('gapOtherTask') } });
+        const select = h('select', { id: 'gap-task' });
         for (const task of this.reassignTargets(state.taskId)) select.append(h('option', { attrs: { value: task.id } }, task.title));
         return card(
           'gap',
@@ -1550,7 +1558,8 @@ export class DesktopApp {
                 select.options.length > 0 &&
                   h(
                     'div',
-                    { class: 'inline-choice' },
+                    { class: 'gap-other' },
+                    h('label', { attrs: { for: 'gap-task' } }, t('gapOtherTask')),
                     select,
                     h('button', {
                       class: 'secondary',
@@ -1565,7 +1574,7 @@ export class DesktopApp {
                       },
                     }, t('gapReassign')),
                   ),
-                h('button', { class: 'secondary', id: 'gap-discard', key: 'gap-discard', attrs: { type: 'button' }, on: { click: () => void this.answerGap({ kind: 'discard' }) } }, t('gapDiscard')),
+                h('button', { class: 'ghost', id: 'gap-discard', key: 'gap-discard', attrs: { type: 'button' }, on: { click: () => void this.answerGap({ kind: 'discard' }) } }, t('gapDiscard')),
               )
             : h(
                 'div',
@@ -1698,6 +1707,23 @@ export class DesktopApp {
     const timeout = h('p', { class: 'muted', id: 'idle-timeout-text' }, t('stillThereTimeout', { minutes: features.answerTimeoutMinutes }));
     if (features.idleCheck === null) {
       return this.renderFeature('idleDetection', 'featureIdle', 'featureIdleText', h('div', {}, wait, timeout));
+    }
+    if (features.idleCheck && features.userCanDisable) {
+      const record = this.state.consents.idleDetection;
+      const toggle = h('input', { id: 'idle-toggle', attrs: { type: 'checkbox', 'aria-describedby': 'idle-org' } });
+      toggle.checked = record?.granted !== false;
+      toggle.addEventListener('change', () => void this.setFeature('idleDetection', toggle.checked));
+      return h(
+        'section',
+        { class: 'feature', id: 'idle-settings' },
+        h('h2', {}, t('stillThereSetting')),
+        h('label', { class: 'switch' }, toggle, t('idleUserSwitch')),
+        h('p', { class: 'help', id: 'idle-org' }, t('idlePersonalText', { minutes: features.thresholdMinutes })),
+        toggle.checked && wait,
+        toggle.checked && timeout,
+        record !== undefined && h('p', { class: 'muted', id: 'consent-idleDetection' }, t(record.granted ? 'consentGiven' : 'consentWithdrawn', { date: this.dateFormat.format(new Date(record.at)) })),
+        h('p', { class: 'muted' }, t('idleLocalOnly')),
+      );
     }
     return h(
       'section',

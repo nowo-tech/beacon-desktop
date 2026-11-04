@@ -159,8 +159,12 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 .still-there-body > * { min-width: 0; }
 .choice-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.375rem; margin-top: 0.25rem; }
 .choice-list > button { justify-content: flex-start; text-align: left; white-space: normal; overflow-wrap: anywhere; }
-.inline-choice { display: flex; flex-wrap: wrap; gap: 0.375rem; align-items: center; }
-.inline-choice select { flex: 1; min-width: 0; }
+.gap-other { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.25rem; }
+.gap-other label { margin: 0.25rem 0 0; }
+.gap-other select { width: 100%; }
+.gap-other button { justify-self: start; }
+.ghost { background: transparent; color: var(--ink); border-color: transparent; text-decoration: underline; text-underline-offset: 2px; justify-content: flex-start; }
+.ghost:hover { background: var(--surface); }
 .meeting label { margin-top: 0.25rem; }
 .meeting select { width: 100%; }
 .small-print { font-size: 0.6875rem; }

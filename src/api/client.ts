@@ -16,12 +16,12 @@ import type {
   EntriesPage,
   Entry,
   EntryQuery,
+  IdleOptions,
   ExportFormat,
   ExportResult,
   IdleAction,
   LoginResult,
   Me,
-  ReassignOptions,
   Scope,
   StartResult,
   StopResult,
@@ -258,13 +258,16 @@ export class TimeTrackApi {
 
   /**
    * Sends the user's decision about an idle period detected locally. Idle state itself is never sent: the body is the
-   * span, the action and, for `reassign` (1.10+), the other task, what runs next and an optional note.
+   * span, the action and, for `reassign` (1.10+), the other task, what runs next and an optional note; for `keep`, an
+   * optional note (only send it when the server has `features.idle_keep_note`).
    */
-  async discardIdle(from: Date, to: Date, action: IdleAction, reassign?: ReassignOptions): Promise<TimerChange> {
+  async discardIdle(from: Date, to: Date, action: IdleAction, options: IdleOptions = {}): Promise<TimerChange> {
     const extra =
-      action === 'reassign' && reassign !== undefined
-        ? { taskId: reassign.taskId, then: reassign.then ?? 'continue', note: blankToUndefined(reassign.note), source: this.source }
-        : {};
+      action === 'reassign' && options.taskId !== undefined
+        ? { taskId: options.taskId, then: options.then ?? 'continue', note: blankToUndefined(options.note), source: this.source }
+        : action === 'keep'
+          ? { note: blankToUndefined(options.note) }
+          : {};
     const data = await this.json<Partial<TimerChange>>('timer/discard-idle', {
       method: 'POST',
       body: { from: from.toISOString(), to: to.toISOString(), action, ...extra },

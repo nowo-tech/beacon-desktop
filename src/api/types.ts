@@ -57,6 +57,8 @@ export interface Features {
   stop_backdate?: boolean;
   idle_reassign?: boolean;
   idle_check?: boolean;
+  /** `discard-idle` `keep` accepts an optional `note` (TimeTrackBundle 1.10.x). */
+  idle_keep_note?: boolean;
   /** Reserved, always false in 1.10. */
   workday?: boolean;
   /** Reserved, always false in 1.10. */
@@ -67,7 +69,12 @@ export interface Features {
 /** `GET me.limits` (contract v0.3 §5 and §12). */
 export interface Limits {
   backdate?: { max_seconds?: number; clock_skew_seconds?: number } | null;
-  idle_check?: { threshold_minutes?: number; answer_timeout_minutes?: number } | null;
+  idle_check?: {
+    threshold_minutes?: number;
+    answer_timeout_minutes?: number;
+    /** The person may turn the check off (personal accounts). Absent = false (organisation policy). */
+    user_can_disable?: boolean;
+  } | null;
 }
 
 /** Why the server moved a requested `startedAt` / `endedAt` (contract v0.3 §4.2 and §4.4). */
@@ -163,9 +170,12 @@ export type IdleAction = 'keep' | 'discard' | 'split' | 'reassign';
 /** What runs after a reassigned span (contract v0.3 §3.1). */
 export type IdleThen = 'continue' | 'stop' | 'switch';
 
-/** Extra fields of `discard-idle` with `reassign`. */
-export interface ReassignOptions {
-  taskId: string;
+/**
+ * Extra fields of `discard-idle`: for `reassign` the other task (required), what runs next and an optional note; for
+ * `keep` an optional note when the server has `features.idle_keep_note`. Ignored for the other actions.
+ */
+export interface IdleOptions {
+  taskId?: string;
   then?: IdleThen;
   note?: string;
 }
