@@ -1,5 +1,6 @@
 /**
- * Types of the TimeTrackBundle client API, contract v0.2 (TimeTrackBundle 1.9.0, docs/CLIENT-API.md).
+ * Types of the TimeTrackBundle client API, contract v0.3 (TimeTrackBundle 1.10.0, docs/CLIENT-API.md). Every v0.3
+ * addition is optional: a 1.9 server (contract v0.2) omits it and the clients fall back (see lib/serverFeatures.ts).
  *
  * Keep this file and `client.ts` identical in time-track-extension and time-track-desktop:
  * they are the only place that knows the wire format.
@@ -43,6 +44,48 @@ export interface Me {
   workingHours?: WorkingHours | null;
   /** Oldest client version the server still supports for this client type (TimeTrack 1.9.1+; absent before). */
   minSupportedVersion?: string | null;
+  /** Feature switches (1.10+; absent on 1.9). Unknown keys are ignored; a missing or `false` key means "off". */
+  features?: Features | null;
+  /** Policy numbers (1.10+; absent on 1.9). */
+  limits?: Limits | null;
+}
+
+/** `GET me.features` (contract v0.3 §5): an object of booleans that may grow. */
+export interface Features {
+  task_details?: boolean;
+  start_backdate?: boolean;
+  stop_backdate?: boolean;
+  idle_reassign?: boolean;
+  idle_check?: boolean;
+  /** `discard-idle` `keep` accepts an optional `note` (TimeTrackBundle 1.10.x). */
+  idle_keep_note?: boolean;
+  /** Reserved, always false in 1.10. */
+  workday?: boolean;
+  /** Reserved, always false in 1.10. */
+  monitoring?: boolean;
+  [key: string]: boolean | undefined;
+}
+
+/** `GET me.limits` (contract v0.3 §5 and §12). */
+export interface Limits {
+  backdate?: { max_seconds?: number; clock_skew_seconds?: number } | null;
+  idle_check?: {
+    threshold_minutes?: number;
+    answer_timeout_minutes?: number;
+    /** The person may turn the check off (personal accounts). Absent = false (organisation policy). */
+    user_can_disable?: boolean;
+  } | null;
+}
+
+/** Why the server moved a requested `startedAt` / `endedAt` (contract v0.3 §4.2 and §4.4). */
+export type ClampReason = 'future' | 'overlap' | 'max_backdate' | 'disabled' | 'before_start';
+
+/** `startedAtResult` / `endedAtResult`: what was asked, what was stored and why. */
+export interface ClampedTime {
+  requested: string;
+  applied: string;
+  clamped: boolean;
+  reason: ClampReason | null;
 }
 
 export interface Task {
@@ -99,6 +142,20 @@ export interface Entry {
 export interface TimerChange {
   entry: Entry | null;
   timer: Timer | null;
+  /** `discard-idle` with `reassign` (1.10+): the entry written on the other task. */
+  reassigned?: Entry | null;
+}
+
+/** `timer/start` (201). `startedAtResult` is present only when the request had `startedAt` and the server knows it. */
+export interface StartResult {
+  timer: Timer;
+  startedAtResult: ClampedTime | null;
+}
+
+/** `timer/stop` (200). `entry` is null when no timer was running; `endedAtResult` as for `StartResult`. */
+export interface StopResult {
+  entry: Entry | null;
+  endedAtResult: ClampedTime | null;
 }
 
 export interface EntriesPage {
@@ -107,8 +164,21 @@ export interface EntriesPage {
   offset: number;
 }
 
-/** The user's decision about a locally detected idle period (contract §3 `timer/discard-idle`). */
-export type IdleAction = 'keep' | 'discard' | 'split';
+/** The user's decision about a locally detected idle period (contract §3 `timer/discard-idle`; `reassign` 1.10+). */
+export type IdleAction = 'keep' | 'discard' | 'split' | 'reassign';
+
+/** What runs after a reassigned span (contract v0.3 §3.1). */
+export type IdleThen = 'continue' | 'stop' | 'switch';
+
+/**
+ * Extra fields of `discard-idle`: for `reassign` the other task (required), what runs next and an optional note; for
+ * `keep` an optional note when the server has `features.idle_keep_note`. Ignored for the other actions.
+ */
+export interface IdleOptions {
+  taskId?: string;
+  then?: IdleThen;
+  note?: string;
+}
 
 export type ExportFormat = 'csv' | 'json';
 

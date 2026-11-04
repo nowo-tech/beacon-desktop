@@ -67,7 +67,7 @@ describe('0.2.0 UX', () => {
     expect(search.value).toBe('fix');
     expect(document.activeElement).toBe(search);
     expect(ui.root.querySelectorAll('#tasks li')).toHaveLength(1);
-    expect(ui.$('#status').textContent).toContain('Tasks found: 1');
+    expect(ui.$('#live').textContent).toContain('Tasks found: 1');
     // A periodic refresh does not move the focus either.
     await ui.app.refresh();
     expect(document.activeElement).toBe(search);
@@ -260,7 +260,7 @@ describe('0.2.0 UX', () => {
     await tick();
     now += 45_000;
     await tick(1100);
-    expect(ui.$('#status').textContent).toContain('The code expires in 1 minute.');
+    expect(ui.$('#live').textContent).toContain('The code expires in 1 minute.');
     ui.click('#cancel-device');
     await pending;
   });

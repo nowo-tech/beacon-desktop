@@ -150,8 +150,31 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 .footer { display: flex; justify-content: space-between; color: var(--ink-soft); font-size: 0.75rem; margin-top: 0.75rem; padding-top: 0.5rem; border-top: 1px solid var(--sand); }
 .plain li { margin: 0.375rem 0; }
 .update { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
-.card.idle { border-color: var(--moss); display: grid; gap: 0.375rem; }
-.card.idle p { margin: 0; }
+/* "Still there?": calm (moss / mist, never alert colours), non-blocking, mascot on the side. */
+.still-there { display: flex; gap: 0.75rem; align-items: flex-start; background: var(--mist); border-color: var(--moss); }
+.still-there .mascot.tiny { flex: none; }
+.still-there-body { flex: 1; min-width: 0; display: grid; gap: 0.375rem; }
+.still-there h2 { margin: 0; font-size: 1rem; }
+.still-there p { margin: 0; }
+.still-there-body > * { min-width: 0; }
+.choice-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.375rem; margin-top: 0.25rem; }
+.choice-list > button { justify-content: flex-start; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.gap-other { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.25rem; }
+.gap-other label { margin: 0.25rem 0 0; }
+.gap-other select { width: 100%; }
+.gap-other button { justify-self: start; }
+.ghost { background: transparent; color: var(--ink); border-color: transparent; text-decoration: underline; text-underline-offset: 2px; justify-content: flex-start; }
+.ghost:hover { background: var(--surface); }
+.meeting label { margin-top: 0.25rem; }
+.meeting select { width: 100%; }
+.small-print { font-size: 0.6875rem; }
+.clamps { border-left: 3px solid var(--moss); }
+.clamps h2 { font-size: 0.875rem; margin: 0 0 0.25rem; }
+
+/* Privacy */
+.privacy-section h2 { font-size: 0.875rem; margin: 0.75rem 0 0.25rem; }
+.confirm { background: var(--warn-bg); border-radius: var(--radius-card); padding: 0.5rem 0.75rem; }
+.confirm p { margin: 0; }
 
 /* Settings */
 .feature { border-bottom: 1px solid var(--sand); padding-bottom: 0.5rem; margin-bottom: 0.5rem; }

@@ -36,10 +36,21 @@ Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile 
 - Pinned and recent tasks (`Alt+1…9`), Resume the last task, Today / This week totals, search with `Ctrl/Cmd + K`, arrow
   keys and Enter.
 - Device-flow sign-in (no password typed in the app); `401` asks you to sign in again.
-- Task search, start / stop / switch. Offline queue: actions taken offline are sent when the connection returns (a stop
-  keeps its original time; a start begins when it reaches the server).
-- Optional, off by default, with dated consent: idle detection (local only; you choose keep / discard / split, only the
-  decision is sent), notifications (never outside `me.workingHours`), start at login.
+- Task search, start / stop / switch. Offline queue: actions taken offline (and "Still there?" answers) are kept on this
+  computer, survive a restart and are replayed in order with their real times (`startedAt` / `endedAt`, TimeTrackBundle
+  1.10). When the server moves a time (overlap with the previous entry, backdating limit, clock in the future), the app
+  says so in plain words. A 1.9 server records an offline start when the connection returns, and the app says that too.
+- **"Still there?"** (Beacon spec 199 block 0): while a timer runs, after N minutes without keyboard or mouse input the
+  app asks, calmly and without blocking: *Yes, I'm here* · *I was in a meeting or call* (optional note, or count the time
+  on another task on 1.10 servers) · *Discard those minutes* · *Pause the timer*. With no answer within M minutes the timer
+  stops at the last input; on return the app asks what to do with the gap, then offers *Resume*. Screen lock and sleep
+  count as idle. N and M come from the organisation (`GET me` → `features.idle_check`, `limits.idle_check`; on by
+  default there, and the person may only make N longer). On a 1.9 server it is the person's opt-in (default 10 / 5 min).
+  The OS idle counter is read locally (`user-idle`) and never stored, logged or sent: only the decision reaches the
+  server.
+- Privacy screen ("What we collect"): exactly what is sent and what stays on this computer, and **Clear local data**
+  (signs out, deletes the token, settings, consents, pinned tasks, queued actions and the idle-check state).
+- Optional, off by default, with dated consent: notifications (never outside `me.workingHours`), start at login.
 - Auto-update through Beacon (`/api/time-track/updates/desktop/{target}/{arch}/{version}`, your token as Bearer);
   an "update required" screen when the server's `min_supported_version` (body or `X-Min-Supported-Version` header) is
   newer than the app and an update satisfying it is offered; it always keeps *Remind me later*, *Download from Beacon*

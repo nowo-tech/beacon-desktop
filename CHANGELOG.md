@@ -5,6 +5,59 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
+Needs TimeTrackBundle 1.10 (client API contract v0.3) for the full feature set; works with 1.9 servers with the
+fallbacks below.
+
+### Added
+
+- **"Still there?" check** (Beacon spec 199 block 0, trust-first tone): while a timer runs, after N minutes without
+  keyboard or mouse input a non-blocking card with the small mascot asks "Still there? No activity for N min on
+  <task>": *Yes, I'm here* (keep), *I was in a meeting or call* (keep with an optional note, saved on the entry when it
+  stops, or count the time on another task with `timer/discard-idle` `reassign` on 1.10 servers), *Discard those
+  minutes* (`split`), *Pause the timer* (stop at the last input). No sound, calm colours, polite screen-reader
+  announcement, no focus stealing, keyboard reachable; English and Spanish.
+- No answer within M minutes: the timer stops at the last input (`timer/stop` `endedAt`). On return the app asks what to
+  do with the gap (add it to the task, add it to another task, or leave it out; adding needs backdating on the server),
+  then offers *Resume*. Screen lock counts as idle (the OS input counter keeps running); a system sleep is detected
+  from the clock jump between two checks and counts as idle from the last check before it.
+- Settings: on 1.10 servers the organisation's switch and values (`features.idle_check`,
+  `limits.idle_check.threshold_minutes` 5–60, `answer_timeout_minutes` 1–30); the person may only lengthen the wait. On
+  1.9 servers: the person's opt-in with dated consent, local defaults 10 / 5 minutes.
+- Offline: every queued action (start, stop, switch, idle decisions) keeps the time it happened and is replayed in
+  order with `startedAt` / `endedAt`. Clamped times (`startedAtResult` / `endedAtResult`: overlap, max_backdate,
+  future, disabled, before_start) are shown in plain words until dismissed. On a 1.9 server, a start that the server
+  could not backdate (no `startedAtResult`) is reported as "recorded from when the connection returned". Replays are
+  serialised (a reconnect event and a refresh no longer send the same action twice).
+- Privacy screen: what is sent, what stays on this computer, what is never collected, and **Clear local data** (with a
+  warning when queued actions would be lost).
+- Shared modules with the extension (kept identical): `api/` (contract v0.3: `features`, `limits`, `startAt`,
+  `stopAt`, `reassign`), `lib/serverFeatures.ts`, `lib/idleCheck.ts`, `lib/replay.ts`, the mock server (1.10 by
+  default, `{"apiVersion": "1.9"}` for the old behaviour).
+
+- Beacon review:
+  - With `features.idle_keep_note` (TimeTrackBundle 1.10.x) the meeting note is sent with `keep`. Otherwise it waits
+    on this computer for the next stop.
+  - With `limits.idle_check.user_can_disable: true` (personal accounts) Settings shows an on/off switch, on by default,
+    with dated consent. When the value is false or the key is absent, the check stays mandatory.
+  - The gap screen has a labelled full-width "Another task" row, and "Leave it out" is a ghost button.
+  - Times follow the locale (24 h in Spanish).
+  - The idle cards are named regions, announced once through a persistent polite live region.
+  - axe checks (WCAG 2.1 A/AA) run in e2e, in light and dark.
+
+### Changed
+
+- The old opt-in "You were away" prompt (keep / discard / split on return) is replaced by the "Still there?" check.
+- A stored `idleMinutes` of 10 (the 0.2 default) now means "the organisation's value".
+
+### Privacy
+
+- The OS "seconds since last input" value is read every 30 s while a timer runs, only to decide when to ask. It is not
+  stored, logged or sent; a unit test checks that a recognisable counter value never appears in any request, log or
+  local storage. Only the decision reaches the server.
+- No Tauri capability or permission changed.
+
 ## [0.2.0] - 2026-11-04
 
 ### Added

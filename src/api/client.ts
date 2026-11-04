@@ -1,25 +1,30 @@
 /**
- * TimeTrackBundle client API (contract v0.2). Single module that talks to the server:
+ * TimeTrackBundle client API (contract v0.3, compatible with v0.2 servers). Single module that talks to the server:
  * when the contract changes, only this file and `types.ts` should need edits.
  *
  * Privacy rules enforced here:
  * - requests never carry cookies (`credentials: 'omit'`), only the Bearer token;
  * - `timer/start` sends the closed `source` enum, never free metadata (no URLs, no window titles);
- * - idle state is never sent; only the user's decision via `timer/discard-idle`.
+ * - idle state is never sent; only the user's decision via `timer/discard-idle`;
+ * - `startedAt` / `endedAt` are the times the user acted (offline replay, idle check), never activity data.
  */
 import type {
+  ClampedTime,
   ClientSource,
   DeviceCode,
   DeviceTokenResult,
   EntriesPage,
   Entry,
   EntryQuery,
+  IdleOptions,
   ExportFormat,
   ExportResult,
   IdleAction,
   LoginResult,
   Me,
   Scope,
+  StartResult,
+  StopResult,
   Task,
   TaskQuery,
   Timer,
@@ -104,6 +109,18 @@ function blankToUndefined(value: string | undefined): string | undefined {
   return trimmed === undefined || trimmed === '' ? undefined : trimmed;
 }
 
+function isoOrUndefined(value: Date | undefined): string | undefined {
+  return value === undefined ? undefined : value.toISOString();
+}
+
+/** A well-formed `startedAtResult` / `endedAtResult`, else `null` (absent on 1.9 servers). */
+export function clampedTime(value: unknown): ClampedTime | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const raw = value as Partial<ClampedTime>;
+  if (typeof raw.requested !== 'string' || typeof raw.applied !== 'string' || typeof raw.clamped !== 'boolean') return null;
+  return { requested: raw.requested, applied: raw.applied, clamped: raw.clamped, reason: typeof raw.reason === 'string' ? raw.reason : null };
+}
+
 function filenameFrom(disposition: string | null, fallback: string): string {
   const match = disposition !== null ? /filename="?([^";]+)"?/i.exec(disposition) : null;
   return match !== null ? match[1] : fallback;
@@ -172,6 +189,8 @@ export class TimeTrackApi {
       scopes: data.scopes ?? [],
       workingHours: data.workingHours ?? null,
       minSupportedVersion: typeof data.minSupportedVersion === 'string' ? data.minSupportedVersion : null,
+      features: typeof data.features === 'object' && data.features !== null ? data.features : null,
+      limits: typeof data.limits === 'object' && data.limits !== null ? data.limits : null,
     };
   }
 
@@ -189,24 +208,40 @@ export class TimeTrackApi {
   }
 
   async start(taskId: string, note?: string): Promise<Timer> {
-    const data = await this.json<{ timer: Timer }>('timer/start', {
+    return (await this.startAt(taskId, { note })).timer;
+  }
+
+  /**
+   * `timer/start`, optionally backdated (`startedAt`, 1.10+). The server clamps an out-of-range time and reports it in
+   * `startedAtResult`; a 1.9 server ignores `startedAt` and sends no result, so `startedAtResult` is then `null`.
+   */
+  async startAt(taskId: string, options: { note?: string; startedAt?: Date } = {}): Promise<StartResult> {
+    const data = await this.json<{ timer: Timer; startedAtResult?: unknown }>('timer/start', {
       method: 'POST',
-      body: { taskId, note: blankToUndefined(note), source: this.source },
+      body: { taskId, note: blankToUndefined(options.note), source: this.source, startedAt: isoOrUndefined(options.startedAt) },
     });
-    return data.timer;
+    return { timer: data.timer, startedAtResult: clampedTime(data.startedAtResult) };
   }
 
   /** Stops the running timer. Resolves to `null` when no timer was running (`404 no_active_timer`). */
   async stop(note?: string): Promise<Entry | null> {
+    return (await this.stopAt({ note })).entry;
+  }
+
+  /**
+   * `timer/stop`, optionally at an earlier time (`endedAt`, 1.10+), with the same clamp-and-report rule as `startAt`.
+   * `entry` is `null` when no timer was running (`404 no_active_timer`).
+   */
+  async stopAt(options: { note?: string; endedAt?: Date } = {}): Promise<StopResult> {
     try {
-      const data = await this.json<{ entry: Entry }>('timer/stop', {
+      const data = await this.json<{ entry: Entry; endedAtResult?: unknown }>('timer/stop', {
         method: 'POST',
-        body: { note: blankToUndefined(note) },
+        body: { note: blankToUndefined(options.note), endedAt: isoOrUndefined(options.endedAt) },
       });
-      return data.entry;
+      return { entry: data.entry, endedAtResult: clampedTime(data.endedAtResult) };
     } catch (error) {
       if (error instanceof ApiError && error.code === 'no_active_timer') {
-        return null;
+        return { entry: null, endedAtResult: null };
       }
       throw error;
     }
@@ -221,13 +256,23 @@ export class TimeTrackApi {
     return { entry: data.entry ?? null, timer: data.timer ?? null };
   }
 
-  /** Sends the user's decision about an idle period detected locally. Idle state itself is never sent. */
-  async discardIdle(from: Date, to: Date, action: IdleAction): Promise<TimerChange> {
+  /**
+   * Sends the user's decision about an idle period detected locally. Idle state itself is never sent: the body is the
+   * span, the action and, for `reassign` (1.10+), the other task, what runs next and an optional note; for `keep`, an
+   * optional note (only send it when the server has `features.idle_keep_note`).
+   */
+  async discardIdle(from: Date, to: Date, action: IdleAction, options: IdleOptions = {}): Promise<TimerChange> {
+    const extra =
+      action === 'reassign' && options.taskId !== undefined
+        ? { taskId: options.taskId, then: options.then ?? 'continue', note: blankToUndefined(options.note), source: this.source }
+        : action === 'keep'
+          ? { note: blankToUndefined(options.note) }
+          : {};
     const data = await this.json<Partial<TimerChange>>('timer/discard-idle', {
       method: 'POST',
-      body: { from: from.toISOString(), to: to.toISOString(), action },
+      body: { from: from.toISOString(), to: to.toISOString(), action, ...extra },
     });
-    return { entry: data.entry ?? null, timer: data.timer ?? null };
+    return { entry: data.entry ?? null, timer: data.timer ?? null, reassigned: data.reassigned ?? null };
   }
 
   /** Own entries, newest first (defaults on the server: the last 7 days). */

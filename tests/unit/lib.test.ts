@@ -3,7 +3,6 @@ import en from '../../src/i18n/en.json';
 import es from '../../src/i18n/es.json';
 import { TimeTrackApi } from '../../src/api/client';
 import { DeviceFlowError, runDeviceFlow } from '../../src/lib/deviceFlow';
-import { IdleMonitor, clampPeriod } from '../../src/lib/idle';
 import { createTranslator } from '../../src/lib/i18n';
 import { OfflineQueue } from '../../src/lib/queue';
 import { emptyState, hasConsent, loadLocal, recordConsent, saveLocal } from '../../src/lib/settings';
@@ -105,31 +104,6 @@ describe('working hours (right to disconnect)', () => {
   });
 });
 
-describe('idle monitor (local only)', () => {
-  it('reports the away period once input resumes', () => {
-    const monitor = new IdleMonitor(600);
-    const t0 = new Date('2026-11-02T10:00:00Z');
-    expect(monitor.observe(30, t0)).toBeNull();
-    expect(monitor.observe(700, new Date('2026-11-02T10:10:00Z'))).toBeNull();
-    expect(monitor.isIdle).toBe(true);
-    expect(monitor.observe(1300, new Date('2026-11-02T10:20:00Z'))).toBeNull();
-    const period = monitor.observe(5, new Date('2026-11-02T10:30:00Z'));
-    expect(period).toEqual({ from: new Date('2026-11-02T09:58:20Z'), to: new Date('2026-11-02T10:29:55Z') });
-    expect(monitor.isIdle).toBe(false);
-    monitor.observe(900, t0);
-    monitor.reset();
-    expect(monitor.isIdle).toBe(false);
-    monitor.observe(600, t0);
-    expect(monitor.observe(599, new Date(t0.getTime() - 600_000))).toBeNull();
-  });
-  it('clamps to the timer start and now', () => {
-    const now = new Date('2026-11-02T11:00:00Z');
-    const period = { from: new Date('2026-11-02T09:00:00Z'), to: new Date('2026-11-02T12:00:00Z') };
-    expect(clampPeriod(period, '2026-11-02T10:00:00Z', now)).toEqual({ from: new Date('2026-11-02T10:00:00Z'), to: now });
-    expect(clampPeriod(period, '2026-11-02T11:30:00Z', now)).toBeNull();
-  });
-});
-
 describe('settings and consent', () => {
   it('persists locally with defaults and dated consent', () => {
     const storage = new MemoryStorage();
@@ -143,7 +117,7 @@ describe('settings and consent', () => {
     expect(hasConsent(state, 'idleDetection')).toBe(true);
     expect(hasConsent(state, 'notifications')).toBe(false);
     saveLocal(state, storage);
-    expect(loadLocal(storage).settings).toMatchObject({ idleDetection: true, idleMinutes: 10, autostart: false });
+    expect(loadLocal(storage).settings).toMatchObject({ idleDetection: true, idleMinutes: null, autostart: false });
     expect(hasConsent(recordConsent(state, 'idleDetection', false), 'idleDetection')).toBe(false);
   });
 });
@@ -223,6 +197,10 @@ describe('device flow and offline queue against the mock', async () => {
     expect(queue.size).toBe(0);
     const { entries } = (await env.control('state')) as { entries: Record<string, { taskId: string }[]> };
     expect(Object.values(entries).flat().map((e) => e.taskId)).toEqual(['T-101', 'T-102']);
+    // Real times: T-101 ran from its queued start to the queued switch.
+    const first = Object.values(entries).flat()[0] as unknown as { startedAt: string; endedAt: string };
+    expect(Math.abs(Date.parse(first.startedAt) - Date.parse(t(-60_000)))).toBeLessThan(3000);
+    expect(Date.parse(first.endedAt) - Date.parse(first.startedAt)).toBeGreaterThan(25_000);
 
     await client.start('T-103');
     queue.push({ kind: 'start', taskId: 'T-104', taskTitle: 'D', at: t(0) });

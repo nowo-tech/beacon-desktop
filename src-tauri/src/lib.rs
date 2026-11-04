@@ -1,7 +1,8 @@
 //! TimeTrack desktop shell: tray, global shortcut, OS keychain, local idle time and the Beacon updater.
 //!
 //! Privacy by design: nothing here observes the user's activity beyond the OS "seconds since last input" counter,
-//! which never leaves the device (the UI only asks the user what to do with an idle period).
+//! which never leaves the device. The UI reads it every 30 s while a timer runs, only to decide when to ask "Still
+//! there?"; it is not stored, logged or sent (only the user's answer is).
 
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;

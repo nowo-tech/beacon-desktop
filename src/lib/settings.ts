@@ -1,5 +1,7 @@
 import type { Scope, Task, Timer } from '../api/types';
 import { DEFAULT_SHORTCUT } from '../platform';
+import { type IdleCheckState, WATCHING } from './idleCheck';
+import type { ServerFeatures } from './serverFeatures';
 
 /** Opt-in features. Each one is off by default and keeps a dated consent record. */
 export type Feature = 'idleDetection' | 'notifications' | 'autostart';
@@ -16,8 +18,10 @@ export interface ConsentRecord {
 export const CONSENT_TEXT_VERSION = 1;
 
 export interface Settings {
+  /** Opt-in "Still there?" check, used only when the server does not say (1.9). */
   idleDetection: boolean;
-  idleMinutes: number;
+  /** Own "Still there?" threshold in minutes; `null` = the organisation's (or the local default). Only lengthens it. */
+  idleMinutes: number | null;
   notifications: boolean;
   autostart: boolean;
   /** Global shortcut (Tauri accelerator syntax). */
@@ -46,11 +50,17 @@ export interface LocalState {
   pinned: Task[];
   /** Last task tracked on this computer, for "Resume". */
   lastTask: Task | null;
+  /** "Still there?" check (survives a restart, so an unanswered question or an auto-stop is not lost). */
+  idleCheck: IdleCheckState;
+  /** "I was in a meeting" note, sent with the next stop / switch of the running entry. */
+  pendingNote: string | null;
+  /** Server features as last seen on `GET me` (offline start). */
+  features: ServerFeatures | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   idleDetection: false,
-  idleMinutes: 10,
+  idleMinutes: null,
   notifications: false,
   autostart: false,
   shortcut: DEFAULT_SHORTCUT,
@@ -59,7 +69,18 @@ export const DEFAULT_SETTINGS: Settings = {
 const KEY = 'time-track-desktop';
 
 export function emptyState(): LocalState {
-  return { session: null, lastServer: null, activeTimer: null, settings: { ...DEFAULT_SETTINGS }, consents: {}, pinned: [], lastTask: null };
+  return {
+    session: null,
+    lastServer: null,
+    activeTimer: null,
+    settings: { ...DEFAULT_SETTINGS },
+    consents: {},
+    pinned: [],
+    lastTask: null,
+    idleCheck: WATCHING,
+    pendingNote: null,
+    features: null,
+  };
 }
 
 export function loadLocal(storage: Storage = localStorage): LocalState {
@@ -68,13 +89,18 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
     return {
       ...emptyState(),
       ...raw,
-      settings: { ...DEFAULT_SETTINGS, ...(raw.settings ?? {}) },
+      // 0.2 stored the old default (10) for everyone: only a different value was the person's own choice.
+      settings: { ...DEFAULT_SETTINGS, ...(raw.settings ?? {}), idleMinutes: typeof raw.settings?.idleMinutes === 'number' && raw.settings.idleMinutes !== 10 ? raw.settings.idleMinutes : null },
+      idleCheck: typeof raw.idleCheck === 'object' && raw.idleCheck !== null && 'phase' in raw.idleCheck ? raw.idleCheck : WATCHING,
       pinned: Array.isArray(raw.pinned) ? raw.pinned.slice(0, MAX_PINNED) : [],
     };
   } catch {
     return emptyState();
   }
 }
+
+/** Every key this app writes to its local storage (for "Clear local data"). */
+export const LOCAL_KEYS = [KEY, `${KEY}.queue`];
 
 export function saveLocal(state: LocalState, storage: Storage = localStorage): void {
   storage.setItem(KEY, JSON.stringify(state));
