@@ -5,6 +5,12 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation screenshots regenerated from the 0.4.0 UI with `pnpm screenshots` (`playwright.screenshots.config.ts`,
+  `tests/screenshots/`): placeholder Beacon `https://beacon.example.test` and neutral demo data; new images of the
+  Microsoft Store build (Settings → About, update required). The e2e tests no longer write screenshots.
+
 ## [0.4.0] - unreleased
 
 Zero-cost signing and auto-update (owner decision 2026-11-04). Plan, Beacon changes and owner steps:

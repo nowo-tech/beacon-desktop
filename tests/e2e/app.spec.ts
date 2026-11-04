@@ -2,7 +2,6 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 
 const MOCK = 'http://127.0.0.1:8787';
-const SHOTS = process.env.SCREENSHOTS === '1';
 
 async function control(path: string, body?: unknown) {
   const res = await fetch(`${MOCK}/__mock/${path}`, {
@@ -22,7 +21,6 @@ async function signIn(page: Page) {
   await page.locator('#connect').click();
   const code = await page.locator('#user-code').textContent();
   expect(code).toMatch(/^[A-Z]{4}-[A-Z]{4}$/);
-  if (SHOTS) await page.screenshot({ path: 'docs/images/desktop-device-code.png' });
   const opened = await page.evaluate(() => (window as unknown as { __timeTrack: { hooks: Hooks } }).__timeTrack.hooks.opened);
   expect(opened[0]).toContain(`code=${code}`);
   await control('device/approve', { userCode: code });
@@ -40,7 +38,6 @@ test('device sign-in, start, switch, stop, sign out', async ({ page }) => {
   await expect(page.locator('#timer-task')).toHaveText('Fix invoice rounding bug');
   await page.locator('#main [data-task="T-101"] .row-action', { hasText: 'Switch' }).click();
   await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
-  if (SHOTS) await page.screenshot({ path: 'docs/images/desktop-timer.png' });
   await page.locator('#stop').click();
   await expect(page.locator('#timer')).toContainText('Not tracking');
   const state = (await control('state')) as { entries: Record<string, { taskId: string; source: string }[]> };
