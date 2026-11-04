@@ -20,7 +20,22 @@ export function tauriPlatform(): Platform {
     secretDelete: () => invoke('secret_delete'),
     idleSeconds: () => invoke<number>('idle_seconds'),
     openUrl: (url) => openUrl(url),
-    setTray: (text, running, beaconLabel) => invoke('set_tray_status', { text, running, beaconLabel }),
+    copyText: async (text) => {
+      // The webview's async clipboard API (secure context, user gesture); no clipboard plugin / capability needed.
+      if (navigator.clipboard?.writeText !== undefined) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const area = document.createElement('textarea');
+      area.value = text;
+      document.body.append(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+    },
+    setTray: (status) => invoke('set_tray_status', { status }),
+    setTrayMenu: (menu) => invoke('set_tray_menu', { menu }),
+    setShortcut: (accelerator) => invoke('set_global_shortcut', { accelerator }),
     notify: async (title, body) => {
       let granted = await isPermissionGranted();
       if (!granted) granted = (await requestPermission()) === 'granted';
@@ -30,6 +45,7 @@ export function tauriPlatform(): Platform {
     setAutostart: (enabled) => (enabled ? enable() : disable()),
     checkUpdate: (server, token) => invoke<UpdateCheck>('check_update', { server, token }),
     installUpdate: (server, token) => invoke('install_update', { server, token }),
-    on: (event, handler) => void listen(event, handler),
+    onShortcut: (handler) => void listen('shortcut', handler),
+    onTray: (handler) => void listen<string>('tray-action', (event) => handler(event.payload)),
   };
 }

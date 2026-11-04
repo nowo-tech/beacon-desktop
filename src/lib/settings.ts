@@ -1,4 +1,5 @@
-import type { Scope, Timer } from '../api/types';
+import type { Scope, Task, Timer } from '../api/types';
+import { DEFAULT_SHORTCUT } from '../platform';
 
 /** Opt-in features. Each one is off by default and keeps a dated consent record. */
 export type Feature = 'idleDetection' | 'notifications' | 'autostart';
@@ -19,7 +20,12 @@ export interface Settings {
   idleMinutes: number;
   notifications: boolean;
   autostart: boolean;
+  /** Global shortcut (Tauri accelerator syntax). */
+  shortcut: string;
 }
+
+/** At most 9 pinned tasks (`Alt+1…9`). */
+export const MAX_PINNED = 9;
 
 /** Connection metadata. The token itself lives in the OS keychain only. */
 export interface SessionInfo {
@@ -36,20 +42,35 @@ export interface LocalState {
   activeTimer: Timer | null;
   settings: Settings;
   consents: Partial<Record<Feature, ConsentRecord>>;
+  /** Pinned tasks, local only (ids and titles as last seen). */
+  pinned: Task[];
+  /** Last task tracked on this computer, for "Resume". */
+  lastTask: Task | null;
 }
 
-export const DEFAULT_SETTINGS: Settings = { idleDetection: false, idleMinutes: 10, notifications: false, autostart: false };
+export const DEFAULT_SETTINGS: Settings = {
+  idleDetection: false,
+  idleMinutes: 10,
+  notifications: false,
+  autostart: false,
+  shortcut: DEFAULT_SHORTCUT,
+};
 
 const KEY = 'time-track-desktop';
 
 export function emptyState(): LocalState {
-  return { session: null, lastServer: null, activeTimer: null, settings: { ...DEFAULT_SETTINGS }, consents: {} };
+  return { session: null, lastServer: null, activeTimer: null, settings: { ...DEFAULT_SETTINGS }, consents: {}, pinned: [], lastTask: null };
 }
 
 export function loadLocal(storage: Storage = localStorage): LocalState {
   try {
     const raw = JSON.parse(storage.getItem(KEY) ?? '{}') as Partial<LocalState>;
-    return { ...emptyState(), ...raw, settings: { ...DEFAULT_SETTINGS, ...(raw.settings ?? {}) } };
+    return {
+      ...emptyState(),
+      ...raw,
+      settings: { ...DEFAULT_SETTINGS, ...(raw.settings ?? {}) },
+      pinned: Array.isArray(raw.pinned) ? raw.pinned.slice(0, MAX_PINNED) : [],
+    };
   } catch {
     return emptyState();
   }

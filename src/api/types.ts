@@ -50,6 +50,9 @@ export interface Task {
   title: string;
   boardId?: string | null;
   boardTitle?: string | null;
+  /** Project of the task (optional; proposed for Beacon's TaskProvider bridge, absent in TimeTrackBundle 1.9). */
+  projectId?: string | null;
+  projectTitle?: string | null;
   /**
    * Absolute URL of the task page in the host app (optional; Beacon adds it through its TaskProvider bridge, older
    * servers omit it). Clients only open it when it is https on the connected server's origin.
@@ -68,6 +71,10 @@ export interface Timer {
   taskId: string;
   taskTitle: string;
   boardId?: string | null;
+  /** Optional context, as on `Task` (absent in TimeTrackBundle 1.9). */
+  boardTitle?: string | null;
+  projectId?: string | null;
+  projectTitle?: string | null;
   startedAt: string;
   lastHeartbeatAt?: string | null;
   clientType?: string | null;

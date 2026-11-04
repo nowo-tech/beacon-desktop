@@ -20,6 +20,33 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 - English and Spanish strings; icon-only links carry an accessible name ("Open “task” in Beacon").
 - Mock server: `taskUrls` config adds `url` to tasks and timers for tests.
 
+### Changed — UX 0.2.0 (errors, core loop, tray)
+
+- Rendering by stable regions: the search field is never re-created and focus stays on the same control across
+  refreshes (typing "fix" no longer ends as "fi"; Enter on a row keeps focus on the row or moves it to Stop).
+- Error catalogue: every failure has a title, a next step and actions (Retry, Copy details, Connect again, Where do I
+  find it?); the raw server message only goes to "Copy details" (code, HTTP status, server, app version). Connect
+  preflight (`GET me` without a token): a 404 says "Not a Beacon server"; a 404 / 405 on `device/code` says "This server
+  doesn't support device sign-in yet" with Retry.
+- Server address field: plain text with `inputmode=url` and translated validation; `https://` is added when missing and
+  pasted Beacon page URLs are trimmed to the server; the typed value is never cleared by an error.
+- Device code: Copy code, Open the page again, countdown with a progress bar from `expiresIn` (announced once at one
+  minute), expired / declined states in place with "Get a new code" / "Try again".
+- Main screen: timer card with state chip, `project · board` (project only when the server sends `projectTitle`) and
+  "since HH:MM"; Today / This week totals from `entries` (link to My time); pinned (local, max 9) and recent tasks with
+  `Alt+1…9`; the running task is not repeated in the lists; Resume the last task; search with `Ctrl/⌘+K` or `/`, arrow
+  keys, Enter and Esc; `Ctrl/⌘+Shift+S` stop / resume; `Ctrl/⌘+,` settings.
+- Tray: menu translated by the UI (Stop / Resume "{last}", Switch to ▸ up to 7 tasks, Search task…, Open TimeTrack,
+  Open Beacon, My time, Settings…, Quit); title `H:MM task` and tooltip with today's total, refreshed every 30 s; icon
+  variants for running (moss dot) and stopped (grey).
+- Global shortcut: default `CommandOrControl+Alt+Shift+T` (`Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME),
+  configurable in Settings; a refused shortcut is reported there and the previous one is kept.
+- Beacon look: Beacon design tokens (light and dark), `rem` sizes, inline icons, focus outlines, reduced motion; the
+  Beacon mascot on the connect screen, while waiting for the code (CSS pulse of its antenna arcs), in empty states,
+  error states (404 / 503 / 429 / 401 illustrations) and About. Images are optimised 1x / 2x WebP in `public/mascot/`.
+- Info notices are dismissed automatically; `<html lang>` follows the UI language; consent dates use the app locale.
+- Mock server: `taskExtras`, `notFound` and `deviceExpiresIn` configs.
+
 ## [0.1.0] - 2026-11-02
 
 ### Added

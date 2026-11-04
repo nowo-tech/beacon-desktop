@@ -62,6 +62,12 @@ function freshState() {
       // `url` per task id on `tasks` and on timers started afterwards (Beacon's TaskProvider bridge); null = omitted,
       // as in TimeTrackBundle 1.9.x. Tests use it for the clients' same-origin check of "Open in Beacon".
       taskUrls: null,
+      // Extra context per task id on `tasks` and timers (e.g. {projectTitle}), as proposed for Beacon's bridge.
+      taskExtras: null,
+      // API routes answering an empty 404 (e.g. ['device/code'] = a Beacon without device sign-in, ['me'] = not Beacon).
+      notFound: [],
+      // Lifetime of device codes in seconds (0 = expired at the first poll).
+      deviceExpiresIn: 600,
     },
   };
 }
@@ -141,7 +147,8 @@ export function createMockServer(options = {}) {
 
   function withUrl(item, taskId) {
     const url = state.config.taskUrls?.[taskId];
-    return url === undefined ? item : { ...item, url };
+    const extras = state.config.taskExtras?.[taskId] ?? {};
+    return url === undefined ? { ...item, ...extras } : { ...item, ...extras, url };
   }
 
   function startTimer(userId, taskId, note, source) {
@@ -346,7 +353,7 @@ export function createMockServer(options = {}) {
           clientType: body.clientType ?? 'desktop',
           approved: null,
           scopes,
-          expiresAt: Date.now() + 600_000,
+          expiresAt: Date.now() + (state.config.deviceExpiresIn ?? 600) * 1000,
           used: false,
           lastPollAt: 0,
         });
@@ -354,7 +361,7 @@ export function createMockServer(options = {}) {
         return send(res, 200, {
           deviceCode,
           userCode: shown,
-          expiresIn: 600,
+          expiresIn: state.config.deviceExpiresIn ?? 600,
           interval: state.config.deviceInterval,
           verificationUri: state.config.verificationUri ?? `http://${host}/device`,
           verificationUriComplete: `${state.config.verificationUri ?? `http://${host}/device`}?code=${shown}`,
@@ -490,6 +497,9 @@ export function createMockServer(options = {}) {
 
     if (state.config.latencyMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, state.config.latencyMs));
+    }
+    if (state.config.notFound.includes(route)) {
+      return send(res, 404);
     }
     if (state.config.failNext) {
       const { status, error: code, retryAfter } = state.config.failNext;

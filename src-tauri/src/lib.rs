@@ -3,9 +3,10 @@
 //! Privacy by design: nothing here observes the user's activity beyond the OS "seconds since last input" counter,
 //! which never leaves the device (the UI only asks the user what to do with an idle period).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use tauri::menu::{Menu, MenuItem};
+use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent, Wry};
 use tauri_plugin_http::reqwest;
@@ -15,19 +16,88 @@ use tauri_plugin_updater::UpdaterExt;
 const KEYCHAIN_SERVICE: &str = "tech.nowo.time-track-desktop";
 const KEYCHAIN_USER: &str = "session-token";
 const TRAY_ID: &str = "main";
-const SHORTCUT: &str = "CommandOrControl+Alt+T";
+/// Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME; the UI can change it (Settings).
+const DEFAULT_SHORTCUT: &str = "CommandOrControl+Alt+Shift+T";
 
-struct TrayItems {
-    menu: Menu<Wry>,
-    status: MenuItem<Wry>,
-    stop: MenuItem<Wry>,
-    /// "Open Beacon": only in the menu while connected to an https server (the UI decides, see `set_tray_status`).
-    beacon: MenuItem<Wry>,
-    beacon_shown: Mutex<bool>,
+/// Tray state kept between UI updates: the status line item and the two icon variants.
+struct TrayState {
+    status: Mutex<Option<MenuItem<Wry>>>,
+    running: Option<Image<'static>>,
+    stopped: Option<Image<'static>>,
+    shortcut: Mutex<Option<String>>,
 }
 
-/// Position of "Open Beacon" in the tray menu (after the status line and "Open TimeTrack").
-const BEACON_POSITION: usize = 2;
+/// Tray tooltip / title / status line, sent by the UI (translated) every ~30 s and on every timer change.
+#[derive(Debug, Deserialize)]
+struct TrayStatus {
+    title: Option<String>,
+    tooltip: String,
+    status: String,
+    running: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrayMenuItem {
+    id: String,
+    label: String,
+}
+
+/// Translated tray menu, sent by the UI when it changes (see `src/platform.ts` `TrayMenu`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrayMenuSpec {
+    primary: Option<TrayMenuItem>,
+    switch_label: String,
+    switch_to: Vec<TrayMenuItem>,
+    search: String,
+    open: String,
+    open_beacon: Option<String>,
+    my_time: Option<String>,
+    settings: String,
+    quit: String,
+}
+
+/// Menu ids the UI may use (anything else is ignored): fixed actions, or `switch:<task id>`.
+fn tray_action_allowed(id: &str) -> bool {
+    matches!(
+        id,
+        "stop" | "resume" | "search" | "open-beacon" | "my-time" | "settings"
+    ) || (id.starts_with("switch:") && id.len() > 7 && id.len() <= 200)
+}
+
+/// Icon variant: running = the app icon with a moss dot (bottom right); stopped = the app icon in grey.
+fn icon_variant(base: &Image<'_>, running: bool) -> Image<'static> {
+    let (width, height) = (base.width(), base.height());
+    let mut rgba = base.rgba().to_vec();
+    let radius = (width.min(height) as f32) * 0.22;
+    let (cx, cy) = (width as f32 - radius - 1.0, height as f32 - radius - 1.0);
+    for y in 0..height {
+        for x in 0..width {
+            let i = ((y * width + x) * 4) as usize;
+            if running {
+                let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+                let d = (dx * dx + dy * dy).sqrt();
+                if d <= radius {
+                    let rim = d > radius - (radius * 0.25).max(1.0);
+                    let (r, g, b) = if rim {
+                        (255, 255, 255)
+                    } else {
+                        (0x1f, 0x6f, 0x54)
+                    };
+                    rgba[i..i + 4].copy_from_slice(&[r, g, b, 255]);
+                }
+            } else {
+                let grey =
+                    (rgba[i] as u32 * 30 + rgba[i + 1] as u32 * 59 + rgba[i + 2] as u32 * 11) / 100;
+                let grey = grey as u8;
+                rgba[i] = grey;
+                rgba[i + 1] = grey;
+                rgba[i + 2] = grey;
+            }
+        }
+    }
+    Image::new_owned(rgba, width, height)
+}
 
 fn keychain() -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER).map_err(|e| e.to_string())
@@ -65,47 +135,136 @@ fn idle_seconds() -> u64 {
         .unwrap_or(0)
 }
 
-/// Updates the tray tooltip / title (macOS, Linux), the "Stop timer" item and the "Open Beacon" item.
-/// `beacon_label` is the translated label of "Open Beacon", or `None` to remove it (not connected). The item only emits
-/// `tray-open-beacon`; the UI builds and checks the URL and opens it through the opener plugin.
+/// Updates the tray tooltip, title (macOS, Linux), status line and icon variant.
 #[tauri::command]
-fn set_tray_status(
-    app: AppHandle,
-    text: String,
-    running: bool,
-    beacon_label: Option<String>,
-) -> Result<(), String> {
+fn set_tray_status(app: AppHandle, status: TrayStatus) -> Result<(), String> {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        tray.set_tooltip(Some(&text)).map_err(|e| e.to_string())?;
-        tray.set_title(if running { Some(text.as_str()) } else { None })
+        tray.set_tooltip(Some(&status.tooltip))
             .map_err(|e| e.to_string())?;
-    }
-    if let Some(items) = app.try_state::<TrayItems>() {
-        items.status.set_text(&text).map_err(|e| e.to_string())?;
-        items.stop.set_enabled(running).map_err(|e| e.to_string())?;
-        let mut shown = items.beacon_shown.lock().map_err(|e| e.to_string())?;
-        match beacon_label {
-            Some(label) => {
-                items.beacon.set_text(&label).map_err(|e| e.to_string())?;
-                if !*shown {
-                    items
-                        .menu
-                        .insert(&items.beacon, BEACON_POSITION)
-                        .map_err(|e| e.to_string())?;
-                    *shown = true;
-                }
-            }
-            None if *shown => {
-                items
-                    .menu
-                    .remove(&items.beacon)
+        tray.set_title(status.title.as_deref())
+            .map_err(|e| e.to_string())?;
+        if let Some(state) = app.try_state::<TrayState>() {
+            let icon = if status.running {
+                &state.running
+            } else {
+                &state.stopped
+            };
+            if let Some(icon) = icon {
+                tray.set_icon(Some(icon.clone()))
                     .map_err(|e| e.to_string())?;
-                *shown = false;
             }
-            None => {}
+        }
+    }
+    if let Some(state) = app.try_state::<TrayState>() {
+        if let Some(item) = state.status.lock().map_err(|e| e.to_string())?.as_ref() {
+            item.set_text(&status.status).map_err(|e| e.to_string())?;
         }
     }
     Ok(())
+}
+
+/// Rebuilds the tray menu with the UI's translated labels and quick tasks:
+/// status · Stop / Resume · Switch to ▸ · Search task… · — · Open TimeTrack · Open Beacon · My time · — · Settings… · Quit.
+#[tauri::command]
+fn set_tray_menu(app: AppHandle, menu: TrayMenuSpec) -> Result<(), String> {
+    let err = |e: tauri::Error| e.to_string();
+    let state = app.state::<TrayState>();
+    let mut status_slot = state.status.lock().map_err(|e| e.to_string())?;
+    let status_text = match status_slot.as_ref() {
+        Some(item) => item.text().map_err(err)?,
+        None => "TimeTrack".to_string(),
+    };
+    let status =
+        MenuItem::with_id(&app, "status", &status_text, false, None::<&str>).map_err(err)?;
+    let built = Menu::new(&app).map_err(err)?;
+    built.append(&status).map_err(err)?;
+    if let Some(primary) = menu.primary.filter(|item| tray_action_allowed(&item.id)) {
+        let item =
+            MenuItem::with_id(&app, primary.id, &primary.label, true, None::<&str>).map_err(err)?;
+        built.append(&item).map_err(err)?;
+    }
+    let tasks: Vec<MenuItem<Wry>> = menu
+        .switch_to
+        .into_iter()
+        .filter(|task| tray_action_allowed(&task.id))
+        .take(7)
+        .map(|task| MenuItem::with_id(&app, task.id, &task.label, true, None::<&str>))
+        .collect::<Result<_, _>>()
+        .map_err(err)?;
+    if !tasks.is_empty() {
+        let refs: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = tasks
+            .iter()
+            .map(|item| item as &dyn tauri::menu::IsMenuItem<Wry>)
+            .collect();
+        let submenu = Submenu::with_items(&app, &menu.switch_label, true, &refs).map_err(err)?;
+        built.append(&submenu).map_err(err)?;
+    }
+    built
+        .append(&MenuItem::with_id(&app, "search", &menu.search, true, None::<&str>).map_err(err)?)
+        .map_err(err)?;
+    built
+        .append(&PredefinedMenuItem::separator(&app).map_err(err)?)
+        .map_err(err)?;
+    built
+        .append(&MenuItem::with_id(&app, "open", &menu.open, true, None::<&str>).map_err(err)?)
+        .map_err(err)?;
+    if let Some(label) = menu.open_beacon {
+        built
+            .append(
+                &MenuItem::with_id(&app, "open-beacon", &label, true, None::<&str>).map_err(err)?,
+            )
+            .map_err(err)?;
+    }
+    if let Some(label) = menu.my_time {
+        built
+            .append(&MenuItem::with_id(&app, "my-time", &label, true, None::<&str>).map_err(err)?)
+            .map_err(err)?;
+    }
+    built
+        .append(&PredefinedMenuItem::separator(&app).map_err(err)?)
+        .map_err(err)?;
+    built
+        .append(
+            &MenuItem::with_id(&app, "settings", &menu.settings, true, None::<&str>)
+                .map_err(err)?,
+        )
+        .map_err(err)?;
+    built
+        .append(&MenuItem::with_id(&app, "quit", &menu.quit, true, None::<&str>).map_err(err)?)
+        .map_err(err)?;
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        tray.set_menu(Some(built)).map_err(err)?;
+    }
+    *status_slot = Some(status);
+    Ok(())
+}
+
+/// Replaces the global shortcut. On failure (in use by another app, invalid) the previous one is registered again and
+/// the error goes back to the UI, which shows it in Settings.
+#[tauri::command]
+fn set_global_shortcut(app: AppHandle, accelerator: String) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let shortcuts = app.global_shortcut();
+    let state = app.state::<TrayState>();
+    let mut current = state.shortcut.lock().map_err(|e| e.to_string())?;
+    if current.as_deref() == Some(accelerator.as_str()) {
+        return Ok(());
+    }
+    if let Some(previous) = current.as_deref() {
+        let _ = shortcuts.unregister(previous);
+    }
+    match shortcuts.register(accelerator.as_str()) {
+        Ok(()) => {
+            *current = Some(accelerator);
+            Ok(())
+        }
+        Err(e) => {
+            if let Some(previous) = current.as_deref() {
+                let _ = shortcuts.register(previous);
+            }
+            Err(e.to_string())
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -290,27 +449,29 @@ fn show_main(app: &AppHandle) {
 }
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    // Minimal untranslated menu until the UI sends the translated one (`set_tray_menu`).
     let status = MenuItem::with_id(app, "status", "TimeTrack", false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open TimeTrack", true, None::<&str>)?;
-    let stop = MenuItem::with_id(app, "stop", "Stop timer", false, None::<&str>)?;
-    // Not in the menu until the UI reports a connected https server.
-    let beacon = MenuItem::with_id(app, "open-beacon", "Open Beacon", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&status, &open, &stop, &quit])?;
+    let menu = Menu::with_items(app, &[&status, &open, &quit])?;
+    let base = app.default_window_icon().cloned();
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("TimeTrack")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "open" => show_main(app),
-            "stop" => {
-                let _ = app.emit("tray-stop", ());
+        .on_menu_event(|app, event| {
+            let id = event.id.as_ref();
+            match id {
+                "open" => show_main(app),
+                "quit" => app.exit(0),
+                _ if tray_action_allowed(id) => {
+                    if matches!(id, "search" | "settings") {
+                        show_main(app);
+                    }
+                    let _ = app.emit("tray-action", id.to_string());
+                }
+                _ => {}
             }
-            "open-beacon" => {
-                let _ = app.emit("tray-open-beacon", ());
-            }
-            "quit" => app.exit(0),
-            _ => {}
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -322,16 +483,22 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 show_main(tray.app_handle());
             }
         });
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
+    let (running, stopped) = match &base {
+        Some(icon) => (
+            Some(icon_variant(icon, true)),
+            Some(icon_variant(icon, false)),
+        ),
+        None => (None, None),
+    };
+    if let Some(icon) = stopped.clone().or(base) {
+        builder = builder.icon(icon);
     }
     builder.build(app)?;
-    app.manage(TrayItems {
-        menu,
-        status,
-        stop,
-        beacon,
-        beacon_shown: Mutex::new(false),
+    app.manage(TrayState {
+        status: Mutex::new(Some(status)),
+        running,
+        stopped,
+        shortcut: Mutex::new(None),
     });
     Ok(())
 }
@@ -369,8 +536,13 @@ pub fn run() {
                     let _ = window.hide();
                 }
             }
-            if let Err(e) = app.global_shortcut().register(SHORTCUT) {
-                eprintln!("global shortcut {SHORTCUT} unavailable: {e}");
+            // The UI registers the configured shortcut at start (`set_global_shortcut`); this default covers the
+            // time before the webview loads. A refusal is shown in Settings by the UI.
+            if app.global_shortcut().register(DEFAULT_SHORTCUT).is_ok() {
+                *app.state::<TrayState>()
+                    .shortcut
+                    .lock()
+                    .expect("shortcut lock") = Some(DEFAULT_SHORTCUT.to_string());
             }
             Ok(())
         })
@@ -387,6 +559,8 @@ pub fn run() {
             secret_delete,
             idle_seconds,
             set_tray_status,
+            set_tray_menu,
+            set_global_shortcut,
             check_update,
             install_update
         ])
@@ -404,6 +578,47 @@ mod tests {
             updater_endpoint("https://beacon.example.com/"),
             "https://beacon.example.com/api/time-track/updates/desktop/{{target}}/{{arch}}/{{current_version}}"
         );
+    }
+
+    #[test]
+    fn tray_actions_are_allow_listed() {
+        for id in [
+            "stop",
+            "resume",
+            "search",
+            "open-beacon",
+            "my-time",
+            "settings",
+            "switch:T-1",
+        ] {
+            assert!(tray_action_allowed(id), "{id}");
+        }
+        for id in ["quit", "open", "status", "switch:", "eval", ""] {
+            assert!(!tray_action_allowed(id), "{id}");
+        }
+    }
+
+    #[test]
+    fn icon_variants_keep_size_and_mark_state() {
+        let base = Image::new_owned(vec![200; 32 * 32 * 4], 32, 32);
+        let running = icon_variant(&base, true);
+        let stopped = icon_variant(&base, false);
+        assert_eq!((running.width(), running.height()), (32, 32));
+        let dot = (24 * 32 + 24) * 4;
+        assert_eq!(&running.rgba()[dot..dot + 3], &[0x1f, 0x6f, 0x54]);
+        assert_eq!(&running.rgba()[0..4], &[200, 200, 200, 200]);
+        assert_eq!(&stopped.rgba()[0..4], &[200, 200, 200, 200]);
+    }
+
+    #[test]
+    fn tray_menu_spec_deserialises_from_the_ui() {
+        let spec: TrayMenuSpec = serde_json::from_str(
+            r#"{"primary":{"id":"stop","label":"Stop timer"},"switchLabel":"Switch to","switchTo":[{"id":"switch:T-1","label":"A"}],"search":"Search task…","open":"Open TimeTrack","openBeacon":null,"myTime":"My time","settings":"Settings…","quit":"Quit"}"#,
+        )
+        .expect("spec");
+        assert_eq!(spec.switch_to.len(), 1);
+        assert!(spec.open_beacon.is_none());
+        assert_eq!(spec.my_time.as_deref(), Some("My time"));
     }
 
     #[test]
