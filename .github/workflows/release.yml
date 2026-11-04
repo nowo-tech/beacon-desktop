@@ -10,6 +10,9 @@ name: Release
 # MSIX_* variables are set (Partner Center → Product identity).
 #
 # Runners come from repository variables, so the same workflow runs on GitHub-hosted or self-hosted runners:
+#   RELEASE_LINUX_RUNNER  JSON runs-on value for the Linux release jobs (prepare, build-linux, publish), e.g.
+#                   ["self-hosted","linux","x64","tauri-release"]: a release-only label the runner loop serves first,
+#                   so CI jobs cannot slip in between release steps. Falls back to LINUX_RUNNER.
 #   LINUX_RUNNER    JSON runs-on value, e.g. ["self-hosted","linux","x64","tauri-build"]   (default "ubuntu-22.04")
 #   WINDOWS_RUNNER  JSON runs-on value, e.g. ["self-hosted","windows","x64","tauri-build"] (default "windows-latest")
 #   MACOS_RUNNER    JSON runs-on value, e.g. ["self-hosted","macos","tauri-build"]         (default "macos-latest")
@@ -32,7 +35,7 @@ env:
 
 jobs:
   prepare:
-    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '"ubuntu-22.04"') }}
+    runs-on: ${{ fromJSON(vars.RELEASE_LINUX_RUNNER || vars.LINUX_RUNNER || '"ubuntu-22.04"') }}
     outputs:
       version: ${{ steps.flags.outputs.version }}
       updater: ${{ steps.flags.outputs.updater }}
@@ -69,7 +72,7 @@ jobs:
           - os: linux
             args: --bundles deb,appimage
             bundle: src-tauri/target/release/bundle
-    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '"ubuntu-22.04"') }}
+    runs-on: ${{ fromJSON(vars.RELEASE_LINUX_RUNNER || vars.LINUX_RUNNER || '"ubuntu-22.04"') }}
     timeout-minutes: 45
     steps: &build-steps
       - uses: actions/checkout@v7
@@ -192,7 +195,7 @@ jobs:
       ${{ !cancelled() && needs.build-linux.result == 'success'
       && contains(fromJSON('["success","skipped"]'), needs.build-windows.result)
       && contains(fromJSON('["success","skipped"]'), needs.build-macos.result) }}
-    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '"ubuntu-22.04"') }}
+    runs-on: ${{ fromJSON(vars.RELEASE_LINUX_RUNNER || vars.LINUX_RUNNER || '"ubuntu-22.04"') }}
     env:
       TIME_TRACK_S3_ENDPOINT: ${{ secrets.TIME_TRACK_S3_ENDPOINT }}
       TIME_TRACK_S3_BUCKET: ${{ secrets.TIME_TRACK_S3_BUCKET }}
