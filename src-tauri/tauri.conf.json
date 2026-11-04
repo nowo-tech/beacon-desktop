@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "node scripts/release/check-updater-key.mjs && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -38,19 +38,31 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "appimage", "msi", "nsis", "dmg", "app"],
-    "createUpdaterArtifacts": false,
+    "targets": ["deb", "appimage", "nsis", "dmg", "app"],
+    "createUpdaterArtifacts": true,
+    "publisher": "nowo.tech",
     "category": "Productivity",
     "shortDescription": "Time tracking for Beacon",
     "longDescription": "Start, stop and switch your Beacon time tracking from the tray. Records only the time you choose to track.",
     "copyright": "nowo.tech",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "macOS": {
+      "signingIdentity": "-"
+    }
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "REPLACE_WITH_TIMETRACK_UPDATER_PUBLIC_KEY",
       "endpoints": [],
-      "requireSignedVersion": true
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

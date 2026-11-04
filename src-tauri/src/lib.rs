@@ -54,6 +54,8 @@ struct TrayMenuSpec {
     open: String,
     open_beacon: Option<String>,
     my_time: Option<String>,
+    /// "Check for updates" (absent in the Microsoft Store build, where the Store updates the app).
+    check_updates: Option<String>,
     settings: String,
     quit: String,
 }
@@ -62,7 +64,7 @@ struct TrayMenuSpec {
 fn tray_action_allowed(id: &str) -> bool {
     matches!(
         id,
-        "stop" | "resume" | "search" | "open-beacon" | "my-time" | "settings"
+        "stop" | "resume" | "search" | "open-beacon" | "my-time" | "check-updates" | "settings"
     ) || (id.starts_with("switch:") && id.len() > 7 && id.len() <= 200)
 }
 
@@ -174,7 +176,8 @@ fn set_tray_status(app: AppHandle, status: TrayStatus) -> Result<(), String> {
 }
 
 /// Rebuilds the tray menu with the UI's translated labels and quick tasks:
-/// status · Stop / Resume · Switch to ▸ · Search task… · — · Open TimeTrack · Open Beacon · My time · — · Settings… · Quit.
+/// status · Stop / Resume · Switch to ▸ · Search task… · — · Open TimeTrack · Open Beacon · My time · — · Check for updates…
+/// · Settings… · Quit.
 #[tauri::command]
 fn set_tray_menu(app: AppHandle, menu: TrayMenuSpec) -> Result<(), String> {
     let err = |e: tauri::Error| e.to_string();
@@ -233,6 +236,14 @@ fn set_tray_menu(app: AppHandle, menu: TrayMenuSpec) -> Result<(), String> {
     built
         .append(&PredefinedMenuItem::separator(&app).map_err(err)?)
         .map_err(err)?;
+    if let Some(label) = menu.check_updates {
+        built
+            .append(
+                &MenuItem::with_id(&app, "check-updates", &label, true, None::<&str>)
+                    .map_err(err)?,
+            )
+            .map_err(err)?;
+    }
     built
         .append(
             &MenuItem::with_id(&app, "settings", &menu.settings, true, None::<&str>)
@@ -277,6 +288,17 @@ fn set_global_shortcut(app: AppHandle, accelerator: String) -> Result<(), String
     }
 }
 
+/// Marker committed in `tauri.conf.json` instead of the real updater public key. A build that still carries it cannot
+/// verify updates: the release check (`scripts/release/check-updater-key.mjs`) refuses it, and the app treats it as "no
+/// key" (manual download from Beacon, never a blocking screen). Keep in sync with the script.
+const PUBKEY_PLACEHOLDER: &str = "REPLACE_WITH_TIMETRACK_UPDATER_PUBLIC_KEY";
+
+/// Microsoft Store build (`TIMETRACK_CHANNEL=store` at compile time): the Store installs and updates the app, so the
+/// in-app updater is not registered and the update commands refuse to run.
+fn store_channel() -> bool {
+    matches!(option_env!("TIMETRACK_CHANNEL"), Some("store"))
+}
+
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum UpdateCheck {
@@ -289,12 +311,23 @@ enum UpdateCheck {
         version: String,
         notes: Option<String>,
         min_supported_version: Option<String>,
-        /// False when this build has no updater public key: installing cannot verify, so the UI must not block.
+        /// False when this build cannot install it by itself (no updater public key, or installed from a package the
+        /// updater does not replace: MSI, deb): the UI offers the Beacon download instead and never blocks.
         installable: bool,
     },
+    /// Store build: updates come from the Microsoft Store.
+    Disabled,
     Error {
         message: String,
     },
+}
+
+/// Download progress sent to the UI as `update-progress` events while an update downloads, then `installing`.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(tag = "phase", rename_all = "snake_case")]
+enum UpdateProgress {
+    Downloading { downloaded: u64, total: Option<u64> },
+    Installing,
 }
 
 fn updater_target() -> &'static str {
@@ -304,9 +337,32 @@ fn updater_target() -> &'static str {
     }
 }
 
+/// How this copy was installed, in the updater's names (`{{bundle_type}}`); `unknown` for a plain binary (MSIX).
+fn bundle_name(bundle: Option<tauri::utils::config::BundleType>) -> &'static str {
+    use tauri::utils::config::BundleType;
+    match bundle {
+        Some(BundleType::AppImage) => "appimage",
+        Some(BundleType::Deb) => "deb",
+        Some(BundleType::Rpm) => "rpm",
+        Some(BundleType::Msi) => "msi",
+        Some(BundleType::Nsis) => "nsis",
+        Some(BundleType::App) | Some(BundleType::Dmg) => "app",
+        _ => "unknown",
+    }
+}
+
+/// The updater replaces an AppImage, an NSIS install or a macOS `.app` with Beacon's single updater file per OS and
+/// CPU (AppImage, NSIS `-setup.exe`, `.app.tar.gz`). An MSI or deb install would get the wrong package: those users
+/// are offered the Beacon download (docs/RELEASE-PLAN-0.4.0.md, "Windows installers").
+fn bundle_self_updates(name: &str) -> bool {
+    matches!(name, "appimage" | "nsis" | "app")
+}
+
+/// Beacon's route `time_track_client_updater`. `bundle_type` is a query parameter Beacon may use to pick the file (it
+/// ignores unknown parameters today); the Tauri updater fills the `{{…}}` placeholders.
 fn updater_endpoint(server: &str) -> String {
     format!(
-        "{}/api/time-track/updates/desktop/{{{{target}}}}/{{{{arch}}}}/{{{{current_version}}}}",
+        "{}/api/time-track/updates/desktop/{{{{target}}}}/{{{{arch}}}}/{{{{current_version}}}}?bundle_type={{{{bundle_type}}}}",
         server.trim_end_matches('/')
     )
 }
@@ -342,14 +398,29 @@ fn strip_token_for_download(
     }
 }
 
-fn has_pubkey(app: &AppHandle) -> bool {
-    app.config()
-        .plugins
-        .0
-        .get("updater")
-        .and_then(|updater| updater.get("pubkey"))
-        .and_then(|key| key.as_str())
-        .is_some_and(|key| !key.trim().is_empty())
+/// A minisign public key as written by `tauri signer generate` (`.key.pub`, base64). The placeholder, an empty value
+/// or anything that is not base64 is "no key". The release check decodes it fully.
+fn usable_pubkey(candidate: Option<&str>) -> Option<String> {
+    let key = candidate?.trim();
+    let base64 = key
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='));
+    (key.len() >= 40 && key != PUBKEY_PLACEHOLDER && base64).then(|| key.to_string())
+}
+
+/// The updater public key of this build: `TAURI_UPDATER_PUBKEY` at compile time, else `plugins.updater.pubkey` of
+/// tauri.conf.json. Only the public key is ever in the repository or the binary.
+fn updater_pubkey(app: &AppHandle) -> Option<String> {
+    usable_pubkey(option_env!("TAURI_UPDATER_PUBKEY")).or_else(|| {
+        usable_pubkey(
+            app.config()
+                .plugins
+                .0
+                .get("updater")
+                .and_then(|updater| updater.get("pubkey"))
+                .and_then(|key| key.as_str()),
+        )
+    })
 }
 
 fn parse_update(body: &str, header_min: Option<String>, installable: bool) -> UpdateCheck {
@@ -370,19 +441,24 @@ fn parse_update(body: &str, header_min: Option<String>, installable: bool) -> Up
 }
 
 /// Beacon's updater route (`time_track_client_updater`). 204 = up to date, 401 = sign in again (not an error),
-/// 200 = `{version, notes, pub_date, url, signature, min_supported_version?}`.
+/// 200 = `{version, notes, pub_date, url, signature, min_supported_version?}` (Tauri v2 dynamic-server format).
 #[tauri::command]
 async fn check_update(app: AppHandle, server: String, token: String) -> UpdateCheck {
+    if store_channel() {
+        return UpdateCheck::Disabled;
+    }
     if let Err(message) = validate_server(&server) {
         return UpdateCheck::Error { message };
     }
+    let bundle = bundle_name(tauri::utils::platform::bundle_type());
     let url = updater_endpoint(&server)
         .replace("{{target}}", updater_target())
         .replace("{{arch}}", std::env::consts::ARCH)
         .replace(
             "{{current_version}}",
             &app.package_info().version.to_string(),
-        );
+        )
+        .replace("{{bundle_type}}", bundle);
     let response = match reqwest::Client::new()
         .get(&url)
         .bearer_auth(&token)
@@ -407,7 +483,11 @@ async fn check_update(app: AppHandle, server: String, token: String) -> UpdateCh
         },
         401 => UpdateCheck::Unauthorized,
         200 => match response.text().await {
-            Ok(body) => parse_update(&body, header_min, has_pubkey(&app)),
+            Ok(body) => parse_update(
+                &body,
+                header_min,
+                updater_pubkey(&app).is_some() && bundle_self_updates(bundle),
+            ),
             Err(e) => UpdateCheck::Error {
                 message: e.to_string(),
             },
@@ -418,17 +498,53 @@ async fn check_update(app: AppHandle, server: String, token: String) -> UpdateCh
     }
 }
 
-/// Downloads, verifies (minisign public key of the build) and installs the update, then restarts.
-/// The Bearer token is set at runtime through the updater builder headers.
+/// Turns the updater's chunk callbacks into at most ~100 `update-progress` events (one per percent, or per MiB when
+/// the size is unknown).
+struct ProgressThrottle {
+    downloaded: u64,
+    last_step: Option<u64>,
+}
+
+impl ProgressThrottle {
+    fn new() -> Self {
+        Self {
+            downloaded: 0,
+            last_step: None,
+        }
+    }
+
+    fn chunk(&mut self, length: usize, total: Option<u64>) -> Option<UpdateProgress> {
+        self.downloaded += length as u64;
+        let step = match total {
+            Some(total) if total > 0 => self.downloaded.min(total) * 100 / total,
+            _ => self.downloaded / (1024 * 1024),
+        };
+        if self.last_step == Some(step) {
+            return None;
+        }
+        self.last_step = Some(step);
+        Some(UpdateProgress::Downloading {
+            downloaded: self.downloaded,
+            total,
+        })
+    }
+}
+
+/// Downloads, verifies (minisign public key of the build, signed version) and installs the update, then restarts.
+/// The Bearer token is set at runtime through the updater builder headers and removed for the artifact download.
 #[tauri::command]
 async fn install_update(app: AppHandle, server: String, token: String) -> Result<(), String> {
-    let server_url = validate_server(&server)?;
-    if !has_pubkey(&app) {
-        return Err("This build cannot verify updates (no updater key).".into());
+    if store_channel() {
+        return Err("Updates come from the Microsoft Store.".into());
     }
+    let server_url = validate_server(&server)?;
+    let Some(pubkey) = updater_pubkey(&app) else {
+        return Err("This build cannot verify updates (no updater key).".into());
+    };
     let endpoint = url::Url::parse(&updater_endpoint(&server)).map_err(|e| e.to_string())?;
     let update = app
         .updater_builder()
+        .pubkey(pubkey)
         .endpoints(vec![endpoint])
         .map_err(|e| e.to_string())?
         .header("Authorization", format!("Bearer {token}"))
@@ -438,16 +554,29 @@ async fn install_update(app: AppHandle, server: String, token: String) -> Result
         .check()
         .await
         .map_err(|e| e.to_string())?;
-    if let Some(mut update) = update {
-        let download = update.download_url.clone();
-        strip_token_for_download(&server_url, &download, &mut update.headers);
-        update
-            .download_and_install(|_, _| {}, || {})
-            .await
-            .map_err(|e| e.to_string())?;
-        app.restart();
-    }
-    Ok(())
+    // Gone since the check (rolled back, or another copy already updated): the UI shows the Beacon download.
+    let Some(mut update) = update else {
+        return Err("This update is no longer offered.".into());
+    };
+    let download = update.download_url.clone();
+    strip_token_for_download(&server_url, &download, &mut update.headers);
+    let mut throttle = ProgressThrottle::new();
+    let progress = app.clone();
+    let finished = app.clone();
+    update
+        .download_and_install(
+            move |length, total| {
+                if let Some(event) = throttle.chunk(length, total) {
+                    let _ = progress.emit("update-progress", event);
+                }
+            },
+            move || {
+                let _ = finished.emit("update-progress", UpdateProgress::Installing);
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    app.restart()
 }
 
 fn show_main(app: &AppHandle) {
@@ -475,7 +604,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 "open" => show_main(app),
                 "quit" => app.exit(0),
                 _ if tray_action_allowed(id) => {
-                    if matches!(id, "search" | "settings") {
+                    if matches!(id, "search" | "settings" | "check-updates") {
                         show_main(app);
                     }
                     let _ = app.emit("tray-action", id.to_string());
@@ -517,12 +646,18 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // The Store build has no updater configuration (tauri.store.conf.json removes it) and never self-updates.
+    let builder = if store_channel() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_updater::Builder::new().build())
+    };
+    builder
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         // Registered but never enabled by default: the user opts in from Settings.
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -586,8 +721,11 @@ mod tests {
     fn endpoint_keeps_tauri_placeholders() {
         assert_eq!(
             updater_endpoint("https://beacon.example.com/"),
-            "https://beacon.example.com/api/time-track/updates/desktop/{{target}}/{{arch}}/{{current_version}}"
+            "https://beacon.example.com/api/time-track/updates/desktop/{{target}}/{{arch}}/{{current_version}}?bundle_type={{bundle_type}}"
         );
+        // The placeholders survive URL parsing (path ones are percent-encoded, which the updater also replaces).
+        let parsed = url::Url::parse(&updater_endpoint("https://beacon.example.com")).unwrap();
+        assert_eq!(parsed.query(), Some("bundle_type={{bundle_type}}"));
     }
 
     #[test]
@@ -598,6 +736,7 @@ mod tests {
             "search",
             "open-beacon",
             "my-time",
+            "check-updates",
             "settings",
             "switch:T-1",
         ] {
@@ -634,12 +773,19 @@ mod tests {
     #[test]
     fn tray_menu_spec_deserialises_from_the_ui() {
         let spec: TrayMenuSpec = serde_json::from_str(
-            r#"{"primary":{"id":"stop","label":"Stop timer"},"switchLabel":"Switch to","switchTo":[{"id":"switch:T-1","label":"A"}],"search":"Search task…","open":"Open TimeTrack","openBeacon":null,"myTime":"My time","settings":"Settings…","quit":"Quit"}"#,
+            r#"{"primary":{"id":"stop","label":"Stop timer"},"switchLabel":"Switch to","switchTo":[{"id":"switch:T-1","label":"A"}],"search":"Search task…","open":"Open TimeTrack","openBeacon":null,"myTime":"My time","checkUpdates":"Check for updates…","settings":"Settings…","quit":"Quit"}"#,
         )
         .expect("spec");
         assert_eq!(spec.switch_to.len(), 1);
         assert!(spec.open_beacon.is_none());
         assert_eq!(spec.my_time.as_deref(), Some("My time"));
+        assert_eq!(spec.check_updates.as_deref(), Some("Check for updates…"));
+        // The Store build sends no "Check for updates" item.
+        let store: TrayMenuSpec = serde_json::from_str(
+            r#"{"primary":null,"switchLabel":"Switch to","switchTo":[],"search":"s","open":"o","openBeacon":null,"myTime":null,"checkUpdates":null,"settings":"s","quit":"q"}"#,
+        )
+        .expect("store spec");
+        assert!(store.check_updates.is_none());
     }
 
     #[test]
@@ -721,5 +867,81 @@ mod tests {
             &mut same,
         );
         assert!(same.get(AUTHORIZATION).is_some());
+    }
+
+    #[test]
+    fn placeholder_or_garbage_is_no_key() {
+        assert_eq!(usable_pubkey(None), None);
+        assert_eq!(usable_pubkey(Some("")), None);
+        assert_eq!(usable_pubkey(Some("   ")), None);
+        assert_eq!(usable_pubkey(Some(PUBKEY_PLACEHOLDER)), None);
+        assert_eq!(
+            usable_pubkey(Some("not a key, has spaces and commas, long enough")),
+            None
+        );
+        // Shape of a real `tauri signer generate` public key (base64 of the minisign .pub text); not a real key.
+        let shaped =
+            "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCQ0QKUldUQUFBQUFBQUFBQQo=";
+        assert_eq!(usable_pubkey(Some(shaped)).as_deref(), Some(shaped));
+        assert_eq!(
+            usable_pubkey(Some(&format!(" {shaped}\n"))).as_deref(),
+            Some(shaped)
+        );
+    }
+
+    #[test]
+    fn only_appimage_nsis_and_app_installs_update_themselves() {
+        use tauri::utils::config::BundleType;
+        assert_eq!(bundle_name(Some(BundleType::Nsis)), "nsis");
+        assert_eq!(bundle_name(Some(BundleType::Msi)), "msi");
+        assert_eq!(bundle_name(Some(BundleType::AppImage)), "appimage");
+        assert_eq!(bundle_name(Some(BundleType::Deb)), "deb");
+        assert_eq!(bundle_name(Some(BundleType::Dmg)), "app");
+        assert_eq!(bundle_name(None), "unknown");
+        for name in ["nsis", "appimage", "app"] {
+            assert!(bundle_self_updates(name), "{name}");
+        }
+        for name in ["msi", "deb", "rpm", "unknown"] {
+            assert!(!bundle_self_updates(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn progress_is_throttled_to_percent_steps() {
+        let mut throttle = ProgressThrottle::new();
+        assert_eq!(
+            throttle.chunk(10, Some(1000)),
+            Some(UpdateProgress::Downloading {
+                downloaded: 10,
+                total: Some(1000)
+            })
+        );
+        assert_eq!(throttle.chunk(5, Some(1000)), None);
+        assert!(throttle.chunk(5, Some(1000)).is_some());
+        assert!(throttle.chunk(980, Some(1000)).is_some());
+        let mut unknown = ProgressThrottle::new();
+        assert!(unknown.chunk(100, None).is_some());
+        assert_eq!(unknown.chunk(100, None), None);
+        assert!(unknown.chunk(1024 * 1024, None).is_some());
+        let json = serde_json::to_value(UpdateProgress::Installing).unwrap();
+        assert_eq!(json["phase"], "installing");
+        let json = serde_json::to_value(UpdateProgress::Downloading {
+            downloaded: 1,
+            total: None,
+        })
+        .unwrap();
+        assert_eq!(json["phase"], "downloading");
+        assert!(json["total"].is_null());
+    }
+
+    #[test]
+    fn direct_build_is_not_the_store_channel() {
+        // Gates run without TIMETRACK_CHANNEL: the direct-download build keeps its updater.
+        assert_eq!(
+            store_channel(),
+            option_env!("TIMETRACK_CHANNEL") == Some("store")
+        );
+        let disabled = serde_json::to_value(UpdateCheck::Disabled).unwrap();
+        assert_eq!(disabled["status"], "disabled");
     }
 }

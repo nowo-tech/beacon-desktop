@@ -1,0 +1,89 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import { checkUpdaterKey, describePubkey, PLACEHOLDER } from '../../scripts/release/check-updater-key.mjs';
+import { buildManifest, escapeXml, msixVersion } from '../../scripts/store/msix-manifest.mjs';
+
+/** Shape of a `tauri signer generate` public key (base64 of the minisign .pub text). Made up: not a real key. */
+const SHAPED_KEY = Buffer.from(`untrusted comment: minisign public key: 0123456789ABCDEF\nRW${'Q'.repeat(54)}\n`).toString('base64');
+const config = (pubkey?: string) => ({ plugins: { updater: pubkey === undefined ? undefined : { pubkey } } });
+
+describe('updater key release check', () => {
+  it('the committed config carries the placeholder, and the Rust side knows the same marker', () => {
+    const conf = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+    expect(conf.plugins.updater.pubkey).toBe(PLACEHOLDER);
+    expect(conf.bundle.createUpdaterArtifacts).toBe(true);
+    expect(conf.bundle.windows.nsis.installMode).toBe('currentUser');
+    expect(conf.bundle.targets).not.toContain('msi');
+    expect(conf.build.beforeBuildCommand).toContain('check-updater-key.mjs');
+    expect(readFileSync('src-tauri/src/lib.rs', 'utf8')).toContain(`const PUBKEY_PLACEHOLDER: &str = "${PLACEHOLDER}";`);
+    const store = JSON.parse(readFileSync('src-tauri/tauri.store.conf.json', 'utf8'));
+    expect(store.plugins.updater).toBeNull();
+    expect(store.bundle.createUpdaterArtifacts).toBe(false);
+  });
+
+  it('fails a release build while the placeholder is there', () => {
+    const result = checkUpdaterKey({ config: config(PLACEHOLDER), env: {} });
+    expect(result).toMatchObject({ ok: false, level: 'error' });
+    expect(result.message).toContain('placeholder');
+    expect(checkUpdaterKey({ config: config(''), env: {} }).ok).toBe(false);
+    expect(checkUpdaterKey({ config: {}, env: { TIMETRACK_CHANNEL: 'direct' } }).ok).toBe(false);
+  });
+
+  it('allows debug, explicit unsigned and Store builds without a key', () => {
+    expect(checkUpdaterKey({ config: config(PLACEHOLDER), env: { TAURI_ENV_DEBUG: 'true' } })).toMatchObject({ ok: true, level: 'warn' });
+    expect(checkUpdaterKey({ config: config(PLACEHOLDER), env: { TIMETRACK_ALLOW_UNSIGNED: '1' } })).toMatchObject({ ok: true, level: 'warn' });
+    expect(checkUpdaterKey({ config: config(PLACEHOLDER), env: { TIMETRACK_CHANNEL: 'store' } })).toMatchObject({ ok: true, level: 'ok' });
+    expect(checkUpdaterKey({ config: config(PLACEHOLDER), env: { TIMETRACK_CHANNEL: 'beta' } })).toMatchObject({ ok: false });
+  });
+
+  it('accepts a minisign public key from the config or TAURI_UPDATER_PUBKEY (which wins)', () => {
+    expect(describePubkey(SHAPED_KEY)).toBe('0123456789ABCDEF');
+    expect(checkUpdaterKey({ config: config(SHAPED_KEY), env: {} })).toMatchObject({ ok: true, message: expect.stringContaining('tauri.conf.json') });
+    expect(checkUpdaterKey({ config: config(PLACEHOLDER), env: { TAURI_UPDATER_PUBKEY: ` ${SHAPED_KEY}\n` } })).toMatchObject({
+      ok: true,
+      message: expect.stringContaining('TAURI_UPDATER_PUBKEY'),
+    });
+  });
+
+  it('refuses a private key, a raw key line or garbage', () => {
+    const privateShaped = Buffer.from('untrusted comment: rsign encrypted secret key\nRWRTY0Iy'.padEnd(120, 'A')).toString('base64');
+    expect(checkUpdaterKey({ config: config(privateShaped), env: {} })).toMatchObject({ ok: false, level: 'error' });
+    expect(checkUpdaterKey({ config: config('RWQ' + 'Q'.repeat(53)), env: {} }).ok).toBe(false);
+    expect(checkUpdaterKey({ config: config('not base64!'), env: {} }).message).toContain('not base64');
+    expect(() => describePubkey(undefined)).toThrow();
+  });
+});
+
+describe('MSIX manifest (Microsoft Store)', () => {
+  const identity = { identityName: '12345NowoTech.TimeTrackforBeacon', publisher: 'CN=ABCDEF12-3456-7890-ABCD-EF1234567890', publisherDisplayName: 'nowo.tech' };
+
+  it('maps the version to the Store format and refuses pre-releases', () => {
+    // First part ≥ 1 (Store rule), fourth part 0, order kept.
+    expect(msixVersion('0.4.0')).toBe('1.4.0.0');
+    expect(msixVersion('0.4.1')).toBe('1.4.1.0');
+    expect(msixVersion('1.0.0')).toBe('2.0.0.0');
+    expect(msixVersion('12.0.65535')).toBe('13.0.65535.0');
+    expect(() => msixVersion('65535.0.0')).toThrow('65535');
+    expect(() => msixVersion('0.4.0-rc.1')).toThrow('MAJOR.MINOR.PATCH');
+    expect(() => msixVersion('0.70000.0')).toThrow('65535');
+  });
+
+  it('builds a full-trust desktop package with the Partner Center identity', () => {
+    const xml = buildManifest({ ...identity, version: '0.4.0' });
+    expect(xml).toContain('<Identity Name="12345NowoTech.TimeTrackforBeacon" Publisher="CN=ABCDEF12-3456-7890-ABCD-EF1234567890" Version="1.4.0.0" ProcessorArchitecture="x64" />');
+    expect(xml).toContain('EntryPoint="Windows.FullTrustApplication"');
+    expect(xml).toContain('<rescap:Capability Name="runFullTrust" />');
+    expect(xml).toContain('<DisplayName>TimeTrack for Beacon</DisplayName>');
+    expect(xml).toContain('<Resource Language="es-es" />');
+    expect(xml).toContain('MinVersion="10.0.17763.0"');
+    expect(buildManifest({ ...identity, version: '0.4.0', arch: 'arm64', displayName: 'A & B' })).toContain('<DisplayName>A &amp; B</DisplayName>');
+  });
+
+  it('refuses missing or malformed identity values', () => {
+    expect(() => buildManifest({ ...identity, identityName: 'x', version: '0.4.0' })).toThrow('MSIX_IDENTITY_NAME');
+    expect(() => buildManifest({ ...identity, publisher: 'nowo', version: '0.4.0' })).toThrow('MSIX_PUBLISHER');
+    expect(() => buildManifest({ ...identity, publisherDisplayName: ' ', version: '0.4.0' })).toThrow('MSIX_PUBLISHER_DISPLAY_NAME');
+    expect(() => buildManifest({ ...identity, version: '0.4.0', arch: 'x86' })).toThrow('arch');
+    expect(escapeXml(`<"'&>`)).toBe('&lt;&quot;&apos;&amp;&gt;');
+  });
+});

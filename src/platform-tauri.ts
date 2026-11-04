@@ -6,7 +6,7 @@ import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import type { Platform, UpdateCheck } from './platform';
+import type { Platform, UpdateCheck, UpdateProgress } from './platform';
 
 export function tauriPlatform(): Platform {
   return {
@@ -44,7 +44,14 @@ export function tauriPlatform(): Platform {
     autostartEnabled: () => isEnabled(),
     setAutostart: (enabled) => (enabled ? enable() : disable()),
     checkUpdate: (server, token) => invoke<UpdateCheck>('check_update', { server, token }),
-    installUpdate: (server, token) => invoke('install_update', { server, token }),
+    installUpdate: async (server, token, onProgress) => {
+      const stop = await listen<UpdateProgress>('update-progress', (event) => onProgress?.(event.payload));
+      try {
+        await invoke('install_update', { server, token });
+      } finally {
+        stop();
+      }
+    },
     onShortcut: (handler) => void listen('shortcut', handler),
     onTray: (handler) => void listen<string>('tray-action', (event) => handler(event.payload)),
   };

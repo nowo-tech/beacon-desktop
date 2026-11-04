@@ -1,9 +1,13 @@
 name: Release
 
 # Tag-triggered only (GitHub Free plan: 2,000 private minutes/month, macOS ×10 → the macOS job runs last, once
-# Linux and Windows succeeded). Unsigned installers in v1. Uploads to Beacon's bucket (contract §7.1):
+# Linux and Windows succeeded). Installers are not code-signed (zero cost: docs/RELEASE-PLAN-0.4.0.md); updater
+# artifacts ARE signed (minisign, Tauri updater) and required since 0.4.0: the build fails without
+# TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) or while tauri.conf.json still carries the updater public key placeholder
+# (scripts/release/check-updater-key.mjs). Uploads to Beacon's bucket (contract §7.1):
 #   time-track-clients/desktop/<version>/<file>, then time-track-clients/desktop/channel/stable.json LAST.
-# Steps whose secrets are missing are skipped with a notice.
+# The S3 upload is skipped with a notice when its secrets are missing. The Microsoft Store MSIX job runs only when the
+# MSIX_* variables are set (Partner Center → Product identity).
 on:
   push:
     tags: ['v*.*.*']
@@ -41,7 +45,9 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           have() { for v in "$@"; do [ -n "${!v}" ] || return 1; done; }
           flag() { if have "${@:3}"; then echo "$1=true" >> "$GITHUB_OUTPUT"; else echo "$1=false" >> "$GITHUB_OUTPUT"; echo "::notice title=Skipped::$2 (missing: ${*:3})"; fi; }
-          flag updater "Updater artifacts not signed: installers only, no auto-update for this release" TAURI_SIGNING_PRIVATE_KEY TAURI_UPDATER_PUBKEY
+          [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo "::error::TAURI_SIGNING_PRIVATE_KEY is missing: updater artifacts are required since 0.4.0"; exit 1; }
+          node scripts/release/check-updater-key.mjs
+          echo "updater=true" >> "$GITHUB_OUTPUT"
           flag s3 "S3 upload skipped: bundles stay as workflow artifacts" TIME_TRACK_S3_ENDPOINT TIME_TRACK_S3_BUCKET TIME_TRACK_S3_ACCESS_KEY_ID TIME_TRACK_S3_SECRET_ACCESS_KEY
 
   build:
@@ -56,7 +62,8 @@ jobs:
             bundle: src-tauri/target/release/bundle
           - os: windows
             runner: windows-latest
-            args: --bundles msi,nsis
+            # NSIS only, per-user (no UAC). MSI is not built since 0.4.0: an MSI install cannot take the NSIS updater.
+            args: --bundles nsis
             bundle: src-tauri/target/release/bundle
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -80,22 +87,21 @@ jobs:
           rustup default stable
           if [ "$RUNNER_OS" = macOS ]; then rustup target add aarch64-apple-darwin x86_64-apple-darwin; fi
       - run: pnpm install --frozen-lockfile
-      - name: Release config (updater signing only when the key exists)
-        shell: bash
-        env:
-          TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
-        run: |
-          if [ "${{ needs.prepare.outputs.updater }}" = true ]; then
-            node -e 'console.log(JSON.stringify({bundle:{createUpdaterArtifacts:true},plugins:{updater:{pubkey:process.env.TAURI_UPDATER_PUBKEY,requireSignedVersion:true}}}))' > "$RUNNER_TEMP/tauri.release.json"
-          else
-            echo '{"bundle":{"createUpdaterArtifacts":false}}' > "$RUNNER_TEMP/tauri.release.json"
-          fi
+      # The public key is in tauri.conf.json; the optional TAURI_UPDATER_PUBKEY variable overrides it (also compiled into
+      # the binary, see src-tauri/build.rs). beforeBuildCommand runs scripts/release/check-updater-key.mjs again.
       - name: Build
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm tauri build ${{ matrix.args }} --config "$RUNNER_TEMP/tauri.release.json"
+          TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
+        run: |
+          if [ -n "$TAURI_UPDATER_PUBKEY" ]; then
+            node -e 'console.log(JSON.stringify({plugins:{updater:{pubkey:process.env.TAURI_UPDATER_PUBKEY}}}))' > "$RUNNER_TEMP/tauri.release.json"
+          else
+            echo '{}' > "$RUNNER_TEMP/tauri.release.json"
+          fi
+          pnpm tauri build ${{ matrix.args }} --config "$RUNNER_TEMP/tauri.release.json"
       - name: Collect bundles and stable.json entries
         shell: bash
         run: scripts/release/collect-desktop.sh ${{ matrix.os }} "${{ needs.prepare.outputs.version }}" out "${{ matrix.bundle }}" "${{ needs.prepare.outputs.updater }}"
@@ -118,6 +124,36 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps: *build-steps
+
+  # Microsoft Store package (MSIX, unsigned: the Store re-signs it). Upload it by hand in Partner Center.
+  store-msix:
+    needs: [prepare, build]
+    if: vars.MSIX_IDENTITY_NAME != ''
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
+      MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+      MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+      TIMETRACK_STORE_URL: ${{ vars.TIMETRACK_STORE_URL }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - run: pwsh scripts/store/build-msix.ps1 -Arch x64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-store-msix
+          path: out/store/*.msix
+          retention-days: 30
 
   publish:
     needs: [prepare, build, build-macos]

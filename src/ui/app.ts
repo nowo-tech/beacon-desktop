@@ -16,7 +16,7 @@ import { elapsedSeconds, formatElapsed } from '../lib/time';
 import { appsPage, safeVerificationUri } from '../lib/urls';
 import { compareVersions, isVersion, updateRequired } from '../lib/version';
 import { withinWorkingHours } from '../lib/workingHours';
-import type { Platform, TrayMenu } from '../platform';
+import type { Platform, TrayMenu, UpdateCheck, UpdateProgress } from '../platform';
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
 
@@ -32,7 +32,19 @@ export interface AppDeps {
   searchDelayMs?: number;
   /** Auto-dismiss delay of info notices (ms). */
   noticeMs?: number;
+  /** `store`: Microsoft Store build (the Store updates the app; no in-app updater, no autostart). Default `direct`. */
+  channel?: Channel;
+  /** Store listing of the app (`https://apps.microsoft.com/detail/<product id>`), store build only. */
+  storeUrl?: string;
 }
+
+export type Channel = 'direct' | 'store';
+
+/**
+ * Update card stages: offered (Update now · Later · What's new), asking because a timer runs, waiting for the timer to
+ * stop, downloading (progress), installing (the app restarts).
+ */
+export type UpdateStage = 'offer' | 'confirm-running' | 'after-stop' | 'downloading' | 'installing';
 
 type DeviceState = 'waiting' | 'expired' | 'denied' | 'scope';
 
@@ -108,7 +120,18 @@ export class DesktopApp {
   meetingOpen = false;
   /** "Clear local data" asks for confirmation first. */
   confirmClear = false;
-  update: { version: string; min: string | null; installable: boolean } | null = null;
+  update: { version: string; min: string | null; installable: boolean; notes: string | null } | null = null;
+  updateStage: UpdateStage = 'offer';
+  updateProgress: { downloaded: number; total: number | null } | null = null;
+  /** "What's new" of the update card is open. */
+  updateNotesOpen = false;
+  /** "Later" on the update card: that version stays hidden until a manual check or the next launch. */
+  updateLater: string | null = null;
+  /** Result of the last manual "Check for updates" (shown in About). */
+  updateStatus: string | null = null;
+  /** `minSupportedVersion` of GET me: below it, the update is forced like the updater's minimum. */
+  meMinimum: string | null = null;
+  readonly channel: Channel;
   /** Non-blocking update message (no automatic update possible, or it failed): shown with a Beacon download link. */
   updateMessage: string | null = null;
   /** "Remind me later" on the update-required screen: hidden until the next launch. */
@@ -133,6 +156,7 @@ export class DesktopApp {
   readonly t: Translate;
   readonly queue: OfflineQueue;
   private lastCheck: Date | null = null;
+  private updateCheck: Promise<void> | null = null;
   private token: string | null = null;
   private abort: AbortController | null = null;
   private deviceUrl: string | null = null;
@@ -162,6 +186,7 @@ export class DesktopApp {
     private readonly deps: AppDeps = {},
   ) {
     this.storage = deps.storage ?? localStorage;
+    this.channel = deps.channel ?? 'direct';
     this.now = deps.now ?? (() => new Date());
     this.locale = deps.locale ?? detectLocale(globalThis.navigator?.language);
     this.t = createTranslator(this.locale);
@@ -376,6 +401,12 @@ export class DesktopApp {
   private setMe(me: Me): void {
     this.me = me;
     this.persist({ features: serverFeatures(me) });
+    const minimum = isVersion(me.minSupportedVersion) ? me.minSupportedVersion : null;
+    if (minimum !== this.meMinimum) {
+      this.meMinimum = minimum;
+      // A new minimum above this version forces the update (validated, never blocking without a way out).
+      if (minimum !== null && updateRequired(this.version, minimum)) void this.checkUpdates();
+    }
   }
 
   /** What the server can do: from `GET me`, else as last seen (offline start), else a 1.9 server. */
@@ -515,6 +546,8 @@ export class DesktopApp {
     const changed = previous !== null && (timer === null || timer.taskId !== previous.taskId);
     this.persist({ activeTimer: timer, ...(changed && this.state.pendingNote !== null ? { pendingNote: null } : {}) });
     await this.updateTray();
+    // "Update after I stop": the person chose it, the timer is now stopped.
+    if (timer === null && this.updateStage === 'after-stop') void this.installUpdate();
   }
 
   /** Stores the parts of a task needed to show and resume it. */
@@ -620,6 +653,7 @@ export class DesktopApp {
       open: t('trayOpen'),
       openBeacon: dashboardUrl(server) !== null ? t('openBeacon') : null,
       myTime: myTimeUrl(server) !== null ? t('myTime') : null,
+      checkUpdates: signedIn && this.channel === 'direct' ? t('trayCheckUpdates') : null,
       settings: t('traySettings'),
       quit: t('trayQuit'),
     };
@@ -638,6 +672,10 @@ export class DesktopApp {
     else if (action === 'open-beacon') this.openBeacon(dashboardUrl(server));
     else if (action === 'my-time') this.openBeacon(myTimeUrl(server));
     else if (action === 'settings' && this.state.session !== null) this.show('settings');
+    else if (action === 'check-updates' && this.state.session !== null) {
+      if (this.view !== 'update-required') this.show('main');
+      await this.checkUpdates(true);
+    }
     else if (action.startsWith('switch:')) {
       const task = this.quickTasks().find((item) => item.id === action.slice(7));
       if (task !== undefined) await this.start(task);
@@ -761,32 +799,75 @@ export class DesktopApp {
 
   // ---- updates ----------------------------------------------------------------------------------------------------
 
-  async checkUpdates(): Promise<void> {
+  /**
+   * Asks Beacon's updater (startup, every 6 h, tray / About "Check for updates"). `manual` also shows the result and
+   * brings back a version hidden with "Later". Concurrent automatic checks share one request.
+   */
+  async checkUpdates(manual = false): Promise<void> {
+    if (!manual && this.updateCheck !== null) return this.updateCheck;
+    const running = this.updateCheck;
+    const check = (async () => {
+      if (running !== null) await running;
+      await this.runUpdateCheck(manual);
+    })();
+    this.updateCheck = check;
+    try {
+      await check;
+    } finally {
+      if (this.updateCheck === check) this.updateCheck = null;
+    }
+  }
+
+  private async runUpdateCheck(manual: boolean): Promise<void> {
     const session = this.state.session;
     if (session === null || this.token === null) return;
-    const result = await this.platform.checkUpdate(session.server, this.token);
+    if (this.updateStage === 'downloading' || this.updateStage === 'installing') return;
+    if (manual) this.updateLater = null;
+    if (this.channel === 'store') {
+      this.applyStoreMinimum(manual);
+      return;
+    }
+    let result: UpdateCheck;
+    try {
+      result = await this.platform.checkUpdate(session.server, this.token);
+    } catch (error) {
+      result = { status: 'error', message: error instanceof Error ? error.message : String(error) };
+    }
     if (result.status === 'unauthorized') {
       await this.signedOut(this.t('sessionExpired'));
       return;
     }
-    if (result.status === 'error') return;
-    // Validate the server's minimum before ever blocking (audit CN D1).
-    const min = isVersion(result.min_supported_version) ? result.min_supported_version : null;
+    if (result.status === 'error' || result.status === 'disabled') {
+      if (manual) this.reportCheck(this.t('updateCheckFailed'));
+      return;
+    }
+    // Validate the server's minimum before ever blocking (audit CN D1); GET me's minimum counts too.
+    const min = this.strictestMinimum(isVersion(result.min_supported_version) ? result.min_supported_version : null);
     const below = min !== null && updateRequired(this.version, min);
     if (result.status === 'up_to_date') {
       this.update = null;
-      this.updateMessage = below ? this.t('updateUnavailable', { min }) : null;
+      this.updateStage = 'offer';
+      const unavailable = below ? this.t('updateUnavailable', { min }) : null;
+      this.updateMessage = unavailable;
+      if (manual) this.reportCheck(unavailable ?? this.t('updateUpToDate', { version: this.version }));
+      if (this.view === 'update-required') this.view = 'main';
       this.render();
       return;
     }
     const installable = result.installable !== false && isVersion(result.version);
-    this.update = { version: result.version, min, installable };
+    const notes = typeof result.notes === 'string' && result.notes.trim() !== '' ? result.notes.trim() : null;
+    if (this.update?.version !== result.version) {
+      this.updateNotesOpen = false;
+      if (this.updateStage !== 'after-stop') this.updateStage = 'offer';
+    }
+    this.update = { version: result.version, min, installable, notes };
     const satisfiable = below && isVersion(result.version) && compareVersions(min, result.version) <= 0;
     this.updateMessage = !installable
       ? this.t('updateManual', { version: result.version })
       : below && !satisfiable
         ? this.t('updateUnavailable', { min })
         : null;
+    if (manual) this.reportCheck(this.updateMessage ?? this.t('updateAvailable', { version: result.version }));
     if (below && satisfiable && installable && !this.updateDismissed) {
       this.show('update-required');
     } else {
@@ -795,15 +876,90 @@ export class DesktopApp {
     }
   }
 
+  /** The higher of the updater's minimum and GET me's (`null` when neither is set). */
+  private strictestMinimum(fromUpdater: string | null): string | null {
+    const me = this.meMinimum;
+    if (fromUpdater === null) return me;
+    if (me === null) return fromUpdater;
+    return compareVersions(me, fromUpdater) > 0 ? me : fromUpdater;
+  }
+
+  /** Store build: GET me's minimum sends the person to the Store listing (the Store installs the update). */
+  private applyStoreMinimum(manual: boolean): void {
+    const min = this.meMinimum;
+    const below = min !== null && updateRequired(this.version, min);
+    this.update = below ? { version: min, min, installable: false, notes: null } : null;
+    this.updateMessage = null;
+    if (manual) this.reportCheck(this.t('updateStoreManaged'));
+    if (below && !this.updateDismissed) {
+      this.show('update-required');
+    } else {
+      if (this.view === 'update-required') this.view = 'main';
+      this.render();
+    }
+  }
+
+  private reportCheck(text: string): void {
+    this.updateStatus = text;
+    this.setNotice(text);
+    this.render();
+  }
+
+  /** "Update now": asks first while a timer runs (update now anyway, or after I stop). */
+  updateNow(): void {
+    if (this.state.activeTimer !== null) {
+      this.updateStage = 'confirm-running';
+      this.render();
+      this.body.querySelector<HTMLButtonElement>('#update-after-stop')?.focus();
+      return;
+    }
+    void this.installUpdate();
+  }
+
+  /** "Update after I stop": installs as soon as the timer is stopped (here, from the tray or elsewhere). */
+  updateAfterStop(): void {
+    this.updateStage = 'after-stop';
+    this.announce(this.t('updateWaiting'));
+    this.render();
+    if (this.state.activeTimer === null) void this.installUpdate();
+  }
+
+  cancelUpdateChoice(): void {
+    this.updateStage = 'offer';
+    this.render();
+    this.body.querySelector<HTMLButtonElement>('#update-now')?.focus();
+  }
+
+  /** "Later": hides this version until a manual check or the next launch (the 6-hour check keeps it hidden). */
+  updateLaterClick(): void {
+    if (this.update !== null) this.updateLater = this.update.version;
+    this.updateStage = 'offer';
+    this.render();
+  }
+
+  toggleUpdateNotes(): void {
+    this.updateNotesOpen = !this.updateNotesOpen;
+    this.render();
+  }
+
   /** Never traps the user: a failed download / verification becomes a non-blocking message with a Beacon link. */
   async installUpdate(): Promise<void> {
     const session = this.state.session;
-    if (session === null || this.token === null) return;
+    if (session === null || this.token === null || this.channel === 'store') return;
+    if (this.updateStage === 'downloading' || this.updateStage === 'installing') return;
+    const version = this.update?.version ?? '';
     this.busy = true;
+    this.updateStage = 'downloading';
+    this.updateProgress = { downloaded: 0, total: null };
+    this.announce(this.t('updateDownloadingShort', { version }));
     this.render();
     try {
-      await this.platform.installUpdate(session.server, this.token);
+      await this.platform.installUpdate(session.server, this.token, (progress) => this.onUpdateProgress(progress));
+      // The real app relaunches here; keep "installing" on screen until it does.
+      this.updateStage = 'installing';
     } catch (error) {
+      this.updateStage = 'offer';
+      this.updateProgress = null;
       this.updateDismissed = true;
       this.updateMessage = this.t('updateFailed', { message: error instanceof Error ? error.message : String(error) });
       this.view = 'main';
@@ -813,9 +969,33 @@ export class DesktopApp {
     }
   }
 
+  private onUpdateProgress(progress: UpdateProgress): void {
+    if (progress.phase === 'installing') {
+      this.updateStage = 'installing';
+      this.announce(this.t('updateInstalling', { version: this.update?.version ?? '' }));
+    } else {
+      this.updateStage = 'downloading';
+      this.updateProgress = { downloaded: progress.downloaded, total: progress.total };
+    }
+    this.render();
+  }
+
+  /** Whole percent of the download, `null` while the size is unknown. */
+  updatePercent(): number | null {
+    const progress = this.updateProgress;
+    if (progress === null || progress.total === null || progress.total <= 0) return null;
+    return Math.min(100, Math.floor((progress.downloaded / progress.total) * 100));
+  }
+
   remindLater(): void {
     this.updateDismissed = true;
     this.show('main');
+  }
+
+  openStore(): void {
+    const session = this.state.session;
+    const url = this.deps.storeUrl !== undefined && this.deps.storeUrl.startsWith('https://') ? this.deps.storeUrl : session !== null ? appsPage(session.server) : null;
+    if (url !== null) void this.platform.openUrl(url);
   }
 
   openApps(): void {
@@ -1338,17 +1518,8 @@ export class DesktopApp {
 
   private renderBanners(region: HTMLElement): void {
     const t = this.t;
-    const update = this.update;
     patch(region, [
-      update !== null &&
-        update.installable &&
-        this.updateMessage === null &&
-        h(
-          'section',
-          { class: 'card update', id: 'update' },
-          h('span', {}, t('updateAvailable', { version: update.version })),
-          h('button', { class: 'primary small', id: 'install-update', on: { click: () => void this.installUpdate() } }, t('installUpdate')),
-        ),
+      this.renderUpdateCard(),
       this.updateMessage !== null &&
         h(
           'section',
@@ -1360,6 +1531,82 @@ export class DesktopApp {
       this.clampNotes.length > 0 && this.renderClamps(),
       this.offline && h('p', { class: 'muted' }, t('offlineStartNote')),
     ]);
+  }
+
+  /**
+   * "Version X is available": calm card with the small mascot (moss / mist, never alert colours), non-blocking, a named
+   * region; progress in a native <progress>; announcements through the persistent polite live region.
+   */
+  private renderUpdateCard(): HTMLElement | null {
+    const t = this.t;
+    const update = this.update;
+    if (update === null || !update.installable || this.updateMessage !== null || this.channel === 'store') return null;
+    const stage = this.updateStage;
+    if (stage === 'offer' && this.updateLater === update.version) return null;
+    const button = (id: string, kind: string, label: string, onClick: () => void, extra: Record<string, string> = {}) =>
+      h('button', { class: `${kind} small`, id, key: id, attrs: { type: 'button', ...extra }, on: { click: onClick } }, label);
+    let body: Child[];
+    if (stage === 'downloading' || stage === 'installing') {
+      const percent = this.updatePercent();
+      const progress = h('progress', { id: 'update-progress', key: 'update-progress', attrs: { max: '100', 'aria-labelledby': 'update-progress-label' } });
+      if (stage === 'downloading' && percent !== null) progress.value = percent;
+      else if (stage === 'installing') progress.value = 100;
+      body = [
+        h(
+          'p',
+          { id: 'update-progress-label' },
+          stage === 'installing'
+            ? t('updateInstalling', { version: update.version })
+            : percent !== null
+              ? t('updateDownloading', { version: update.version, percent })
+              : t('updateDownloadingShort', { version: update.version }),
+        ),
+        progress,
+      ];
+    } else if (stage === 'confirm-running') {
+      body = [
+        h('p', { id: 'update-running' }, t('updateRunningText', { task: this.state.activeTimer?.taskTitle ?? '' })),
+        h(
+          'div',
+          { class: 'choice-list', attrs: { role: 'group', 'aria-labelledby': 'update-title' } },
+          button('update-after-stop', 'primary', t('updateAfterStop'), () => this.updateAfterStop()),
+          button('update-anyway', 'secondary', t('updateAnyway'), () => void this.installUpdate()),
+          button('update-cancel', 'link', t('cancel'), () => this.cancelUpdateChoice()),
+        ),
+      ];
+    } else if (stage === 'after-stop') {
+      body = [
+        h('p', { id: 'update-waiting' }, t('updateWaiting')),
+        h(
+          'div',
+          { class: 'row-actions' },
+          button('update-anyway', 'secondary', t('updateAnyway'), () => void this.installUpdate()),
+          button('update-cancel', 'link', t('cancel'), () => this.cancelUpdateChoice()),
+        ),
+      ];
+    } else {
+      body = [
+        h('p', { class: 'muted' }, t('updateCardText', { current: this.version })),
+        h(
+          'div',
+          { class: 'row-actions' },
+          update.notes !== null &&
+            button('update-notes-toggle', 'link', t('updateWhatsNew'), () => this.toggleUpdateNotes(), {
+              'aria-expanded': this.updateNotesOpen ? 'true' : 'false',
+              'aria-controls': 'update-notes',
+            }),
+          button('update-now', 'primary', t('updateNow'), () => this.updateNow()),
+          button('update-later', 'secondary', t('updateLaterShort'), () => this.updateLaterClick()),
+        ),
+        update.notes !== null && this.updateNotesOpen && h('div', { class: 'update-notes', id: 'update-notes', attrs: { tabindex: '0', role: 'region', 'aria-label': t('updateWhatsNew') } }, update.notes),
+      ];
+    }
+    return h(
+      'section',
+      { class: 'card still-there update-card', id: 'update', key: 'update', attrs: { role: 'region', 'aria-labelledby': 'update-title' } },
+      art('mascot-small', '', 'mascot tiny'),
+      h('div', { class: 'still-there-body' }, h('h2', { id: 'update-title' }, t('updateCardTitle', { version: update.version })), ...body),
+    );
   }
 
   private renderTimer(region: HTMLElement): void {
@@ -1770,11 +2017,26 @@ export class DesktopApp {
       ),
       this.renderIdleSettings(),
       this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText'),
-      this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
+      // Store (MSIX) builds cannot register the login item the autostart plugin writes: no switch there.
+      this.channel === 'direct' && this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
       h('button', { class: 'link', id: 'open-privacy', on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
       h('section', { class: 'about', id: 'about', attrs: { 'aria-labelledby': 'about-title' } },
         art('mascot-small', '', 'mascot tiny'),
-        h('div', {}, h('h2', { id: 'about-title' }, t('about')), h('p', { class: 'muted' }, t('aboutText', { version: this.version }))),
+        h(
+          'div',
+          {},
+          h('h2', { id: 'about-title' }, t('about')),
+          h('p', { class: 'muted' }, t('aboutText', { version: this.version })),
+          ...(this.channel === 'store'
+            ? [
+                h('p', { class: 'muted', id: 'update-status' }, t('updateStoreManaged')),
+                h('button', { class: 'secondary small', id: 'open-store', attrs: { type: 'button' }, on: { click: () => this.openStore() } }, t('openStore')),
+              ]
+            : [
+                this.updateStatus !== null && h('p', { class: 'muted', id: 'update-status' }, this.updateStatus),
+                h('button', { class: 'secondary small', id: 'check-updates', key: 'check-updates', attrs: { type: 'button', disabled: this.busy }, on: { click: () => void this.checkUpdates(true) } }, t('checkUpdates')),
+              ]),
+        ),
       ),
       h('button', { class: 'danger', id: 'logout', on: { click: () => void this.logout() } }, t('logout')),
     );
@@ -1818,16 +2080,65 @@ export class DesktopApp {
 
   private renderUpdateRequired(): HTMLElement {
     const t = this.t;
+    const min = this.update?.min ?? '';
+    const timer = this.state.activeTimer;
+    const working = this.updateStage === 'downloading' || this.updateStage === 'installing';
+    const percent = this.updatePercent();
+    if (this.channel === 'store') {
+      return h(
+        'main',
+        { id: 'update-required', attrs: { role: 'alertdialog', 'aria-labelledby': 'update-required-title', 'aria-describedby': 'update-required-text' } },
+        art('mascot-small', '', 'mascot small'),
+        h('h2', { id: 'update-required-title' }, t('updateRequiredTitle')),
+        h('p', { id: 'update-required-text' }, t('updateRequiredStore', { current: this.version, min })),
+        h('button', { class: 'primary', id: 'open-store-required', on: { click: () => this.openStore() } }, t('openStore')),
+        h('button', { class: 'link', id: 'remind-later', on: { click: () => this.remindLater() } }, t('updateLater')),
+        h('button', { class: 'danger', id: 'logout-required', on: { click: () => void this.logout() } }, t('logout')),
+      );
+    }
     return h(
       'main',
-      { id: 'update-required', attrs: { role: 'alertdialog', 'aria-labelledby': 'update-required-title' } },
+      { id: 'update-required', attrs: { role: 'alertdialog', 'aria-labelledby': 'update-required-title', 'aria-describedby': 'update-required-text' } },
+      art('mascot-small', '', 'mascot small'),
       h('h2', { id: 'update-required-title' }, t('updateRequiredTitle')),
-      h('p', {}, t('updateRequiredText', { current: this.version, min: this.update?.min ?? '' })),
+      h('p', { id: 'update-required-text' }, t('updateRequiredText', { current: this.version, min })),
+      timer !== null && !working && h('p', { id: 'update-required-running' }, t('updateRequiredRunning', { task: timer.taskTitle })),
+      working &&
+        h(
+          'div',
+          { class: 'update-required-progress' },
+          h(
+            'p',
+            { id: 'update-progress-label' },
+            this.updateStage === 'installing'
+              ? t('updateInstalling', { version: this.update?.version ?? '' })
+              : percent !== null
+                ? t('updateDownloading', { version: this.update?.version ?? '', percent })
+                : t('updateDownloadingShort', { version: this.update?.version ?? '' }),
+          ),
+          (() => {
+            const bar = h('progress', { id: 'update-progress', attrs: { max: '100', 'aria-labelledby': 'update-progress-label' } });
+            if (this.updateStage === 'installing') bar.value = 100;
+            else if (percent !== null) bar.value = percent;
+            return bar;
+          })(),
+        ),
       h('button', { class: 'primary', id: 'install-required', attrs: { disabled: this.busy }, on: { click: () => void this.installUpdate() } }, t('installUpdate')),
+      timer !== null &&
+        h('button', { class: 'secondary', id: 'stop-then-update', attrs: { disabled: this.busy }, on: { click: () => void this.stopThenUpdate() } }, t('updateStopThenUpdate')),
       h('button', { class: 'secondary', id: 'download-required', on: { click: () => this.openApps() } }, t('downloadFromBeacon')),
       h('button', { class: 'link', id: 'remind-later', on: { click: () => this.remindLater() } }, t('updateLater')),
       h('button', { class: 'danger', id: 'logout-required', on: { click: () => void this.logout() } }, t('logout')),
     );
+  }
+
+  /** Forced update with a running timer: stop it (normal stop, queued when offline), then update. */
+  async stopThenUpdate(): Promise<void> {
+    this.updateStage = 'after-stop';
+    await this.stop();
+    // `setTimer(null)` starts the install; if the stop did not happen, nothing changes.
+    if (this.state.activeTimer !== null) this.updateStage = 'offer';
+    this.render();
   }
 }
 
