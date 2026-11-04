@@ -35,13 +35,13 @@ test.beforeEach(async () => {
 
 test('device sign-in, start, switch, stop, sign out', async ({ page }) => {
   await signIn(page);
-  await page.locator('[data-task="T-104"] button').click();
+  await page.locator('[data-task="T-104"] .row-action').click();
   await expect(page.locator('#timer-task')).toHaveText('Fix invoice rounding bug');
-  await page.locator('[data-task="T-101"] button', { hasText: 'Switch' }).click();
+  await page.locator('#main [data-task="T-101"] .row-action', { hasText: 'Switch' }).click();
   await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
   if (SHOTS) await page.screenshot({ path: 'docs/images/desktop-timer.png' });
   await page.locator('#stop').click();
-  await expect(page.locator('#timer')).toHaveText('No timer running.');
+  await expect(page.locator('#timer')).toContainText('Not tracking');
   const state = (await control('state')) as { entries: Record<string, { taskId: string; source: string }[]> };
   expect(Object.values(state.entries).flat().map((e) => [e.taskId, e.source])).toEqual([
     ['T-104', 'desktop'],
@@ -58,7 +58,7 @@ test('idle prompt is opt-in and only the decision is sent', async ({ page }) => 
   await page.locator('#feature-idleDetection').check();
   await expect(page.locator('#consent-idleDetection')).toContainText('Consent given on');
   await page.locator('#back').click();
-  await page.locator('[data-task="T-102"] button').click();
+  await page.locator('[data-task="T-102"] .row-action').click();
   await expect(page.locator('#timer-task')).toHaveText('Review pull request queue');
   await control('timer/backdate', { seconds: 3600 });
   await page.evaluate(() => (window as unknown as { __timeTrack: { app: AppHandle } }).__timeTrack.app.refresh());
@@ -80,7 +80,7 @@ test('idle prompt is opt-in and only the decision is sent', async ({ page }) => 
 test('offline actions are queued and synced', async ({ page, context }) => {
   await signIn(page);
   await context.setOffline(true);
-  await page.locator('[data-task="T-103"] button').click();
+  await page.locator('[data-task="T-103"] .row-action').click();
   await expect(page.locator('#offline')).toContainText('1 action(s)');
   await context.setOffline(false);
   await page.evaluate(() => (window as unknown as { __timeTrack: { app: AppHandle } }).__timeTrack.app.refresh());
@@ -116,17 +116,49 @@ test('Beacon links: Open Beacon, My time and same-origin task links on an https 
   const code = await page.locator('#user-code').textContent();
   await control('device/approve', { userCode: code });
   await expect(page.locator('#tasks li')).toHaveCount(8, { timeout: 15_000 });
-  await expect(page.getByRole('link', { name: 'Open Beacon' })).toHaveAttribute('href', 'https://beacon.test/dashboard');
-  await expect(page.getByRole('link', { name: 'My time' })).toHaveAttribute('href', 'https://beacon.test/dashboard/tasks/time');
+  await expect(page.getByRole('link', { name: 'Open Beacon', exact: true })).toHaveAttribute('href', 'https://beacon.test/dashboard');
+  await expect(page.getByRole('link', { name: 'My time', exact: true })).toHaveAttribute('href', 'https://beacon.test/dashboard/tasks/time');
   const taskLink = page.getByRole('link', { name: 'Open “Write onboarding guide” in Beacon' });
   await expect(taskLink).toHaveAttribute('href', 'https://beacon.test/dashboard/tasks/T-101');
   await expect(page.locator('[data-task="T-102"] a')).toHaveCount(0);
   await taskLink.focus();
   await page.keyboard.press('Enter');
-  await page.locator('[data-task="T-101"] button').click();
-  await expect(page.getByRole('link', { name: 'Open “Write onboarding guide” in Beacon' })).toHaveCount(2);
-  await page.getByRole('link', { name: 'Open Beacon' }).click();
+  await page.locator('[data-task="T-101"] .row-action').click();
+  // The running task is shown in the timer card only (not repeated in the list).
+  await expect(page.locator('#timer-open-in-beacon')).toHaveAttribute('href', 'https://beacon.test/dashboard/tasks/T-101');
+  await expect(page.getByRole('link', { name: 'Open “Write onboarding guide” in Beacon' })).toHaveCount(1);
+  await page.getByRole('link', { name: 'Open Beacon', exact: true }).click();
   const opened = await page.evaluate(() => (window as unknown as { __timeTrack: { hooks: Hooks } }).__timeTrack.hooks.opened);
   expect(opened.slice(1)).toEqual(['https://beacon.test/dashboard/tasks/T-101', 'https://beacon.test/dashboard']);
   expect(page.url()).toBe('http://127.0.0.1:1420/');
+});
+
+test('typing in search keeps every letter and the focus; Enter on a row keeps focus (R1)', async ({ page }) => {
+  await signIn(page);
+  await control('config', { latencyMs: 30 });
+  await page.keyboard.press('Control+k');
+  await expect(page.locator('#search')).toBeFocused();
+  await page.locator('#search').pressSequentially('fix', { delay: 50 });
+  await expect(page.locator('#tasks li')).toHaveCount(1);
+  await expect(page.locator('#search')).toHaveValue('fix');
+  await expect(page.locator('#search')).toBeFocused();
+  await page.evaluate(() => (window as unknown as { __timeTrack: { app: AppHandle } }).__timeTrack.app.refresh());
+  await expect(page.locator('#search')).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('[data-task="T-104"] .row-action')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#timer-task')).toHaveText('Fix invoice rounding bug');
+  await expect(page.locator('#stop')).toBeFocused();
+});
+
+test('connect errors are translated and keep the address (R2)', async ({ page }) => {
+  await control('config', { notFound: ['device/code'] });
+  await page.goto('/');
+  await page.locator('#server').fill(MOCK);
+  await page.locator('#connect').click();
+  await expect(page.locator('#error-title')).toHaveText("This server doesn't support device sign-in yet");
+  await expect(page.locator('#server')).toHaveValue(MOCK);
+  await control('config', { notFound: [] });
+  await page.locator('#error-retry').click();
+  await expect(page.locator('#user-code')).toHaveText(/^[A-Z]{4}-[A-Z]{4}$/);
 });

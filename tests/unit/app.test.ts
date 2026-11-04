@@ -74,12 +74,16 @@ describe('desktop app', () => {
     const ui = mount();
     await ui.app.init();
     await ui.app.connect('http://insecure.example.com');
-    expect(ui.$('#error').textContent).toContain('https://');
+    expect(ui.$('#server-problem').textContent).toContain('https://');
+    expect(ui.$<HTMLInputElement>('#server').value).toBe('http://insecure.example.com');
+    expect(ui.$('#server').getAttribute('aria-invalid')).toBe('true');
     const denied = ui.app.connect(env.url);
     await tick();
     await env.control('device/approve', { userCode: ui.$('#user-code').textContent, approve: false });
     await denied;
-    expect(ui.$('#error').textContent).toBe('The request was denied in Beacon.');
+    expect(ui.app.view).toBe('device');
+    expect(ui.$('#device-state').textContent).toBe('The connection was declined in Beacon');
+    ui.click('#cancel-device');
     const cancelled = ui.app.connect(env.url);
     await tick();
     ui.click('#cancel-device');
@@ -88,19 +92,30 @@ describe('desktop app', () => {
     expect(ui.app.error).toBeNull();
     await env.control('config', { failNext: { status: 500, error: 'boom' } });
     await ui.app.connect(env.url);
-    expect(ui.$('#error').textContent).toBe('Something went wrong: Simulated boom.');
+    expect(ui.$('#error-title').textContent).toBe('Beacon has a problem');
+    expect(ui.$('#error').textContent).not.toContain('Simulated');
+    expect(ui.$<HTMLInputElement>('#server').value).toBe(env.url);
   });
 
   it('starts, switches and stops; tray follows; tray stop works', async () => {
     const ui = await signedIn();
-    ui.root.querySelector<HTMLElement>('[data-task="T-101"] button')?.click();
+    ui.root.querySelector<HTMLElement>('[data-task="T-101"] .row-action')?.click();
     await tick();
     expect(ui.$('#timer-task').textContent).toBe('Write onboarding guide');
-    expect(ui.platform.hooks.tray).toEqual({ text: '0:00:00 · Write onboarding guide', running: true, beacon: null });
-    ui.root.querySelector<HTMLElement>('[data-task="T-102"] button')?.click();
+    expect(ui.platform.hooks.tray).toEqual({
+      title: '0:00 Write onboarding gu…',
+      tooltip: 'TimeTrack — Tracking “Write onboarding guide” · 0:00 · Today 0:00',
+      status: '● 0:00 · Write onboarding guide',
+      running: true,
+    });
+    expect(ui.platform.hooks.trayMenu?.primary).toEqual({ id: 'stop', label: 'Stop timer' });
+    expect(ui.platform.hooks.trayMenu?.openBeacon).toBeNull();
+    // The running task is not repeated in the lists.
+    expect(ui.root.querySelector('#tasks [data-task="T-101"]')).toBeNull();
+    ui.root.querySelector<HTMLElement>('[data-task="T-102"] .row-action')?.click();
     await tick();
     expect(ui.app.state.activeTimer?.taskId).toBe('T-102');
-    ui.platform.hooks.emit('tray-stop');
+    await ui.app.trayAction('stop');
     await tick();
     expect(ui.app.state.activeTimer).toBeNull();
     expect(ui.platform.hooks.tray.running).toBe(false);
@@ -112,11 +127,11 @@ describe('desktop app', () => {
     await tick();
     expect(ui.root.querySelectorAll('#tasks li')).toHaveLength(1);
     await ui.app.search('zzz');
-    expect(ui.$('#tasks').textContent).toBe('No tasks found.');
-    ui.platform.hooks.emit('shortcut');
+    expect(ui.$('#tasks-empty').textContent).toBe('No tasks match “zzz”. Only tasks you can track time on appear.');
+    ui.platform.hooks.shortcutPressed();
     expect(document.activeElement?.id).toBe('search');
     await ui.app.start({ id: 'T-900', title: 'x' });
-    expect(ui.$('#error').textContent).toBe('You cannot track time on this task.');
+    expect(ui.$('#error-title').textContent).toBe('You can’t track time on “x”'.replace('’', "'"));
     ui.app.destroy();
   });
 
@@ -313,7 +328,8 @@ describe('desktop app', () => {
     await ui.platform.secretSet(token ?? '');
     await ui.app.init();
     expect(ui.app.view).toBe('main');
-    expect(ui.$('#timer').textContent).toBe('No hay ningún temporizador en marcha.');
+    expect(ui.$('#timer').textContent).toContain('Sin registrar');
+    expect(document.documentElement.lang).toBe('es');
     ui.click('#open-settings');
     await ui.app.setFeature('autostart', true);
     expect(await ui.platform.autostartEnabled()).toBe(true);
@@ -343,10 +359,10 @@ describe('desktop app', () => {
     await again.app.logout();
     expect(again.app.view).toBe('login');
     await again.app.connect(env.url.replace('127.0.0.1', 'localhost'));
-    expect(again.$('#error').textContent).toContain('cannot be reached');
+    expect(again.$('#error-title').textContent).toBe(`Can't reach ${new URL(env.url.replace('127.0.0.1', 'localhost')).host}`);
     again.app.render();
-    (again.app as unknown as { fail(e: unknown): void }).fail('plain');
-    expect(again.$('#error').textContent).toBe('Something went wrong: plain');
+    (again.app as unknown as { fail(e: unknown, stage: string): void }).fail('plain', 'action');
+    expect(again.$('#error-title').textContent).toBe('That could not be completed');
     again.app.view = 'loading';
     again.app.render();
   });
@@ -375,8 +391,9 @@ describe('desktop app', () => {
       const nav = ui.$('header nav');
       expect(nav.getAttribute('aria-label')).toBe('Beacon links');
       expect(ui.$<HTMLAnchorElement>('#open-beacon').href).toBe(`${HTTPS}/dashboard`);
+      expect(ui.$('#open-beacon').getAttribute('aria-label')).toBe('Open Beacon');
       expect(ui.$<HTMLAnchorElement>('#open-my-time').href).toBe(`${HTTPS}/dashboard/tasks/time`);
-      expect([...nav.children].map((el) => el.id)).toEqual(['open-beacon', 'open-my-time', 'open-settings']);
+      expect([...nav.children].map((el) => el.id)).toEqual(['open-beacon', 'open-settings']);
       const links = [...ui.root.querySelectorAll<HTMLAnchorElement>('#tasks a.beacon-link')];
       expect(links.map((a) => a.closest('li')?.getAttribute('data-task'))).toEqual(['T-101']);
       expect(links[0].getAttribute('aria-label')).toBe('Open “Write onboarding guide” in Beacon');
@@ -385,14 +402,18 @@ describe('desktop app', () => {
       expect(links[0].querySelector('[aria-hidden="true"]')).not.toBeNull();
       // Focus order inside a row: title, link, start button.
       const row = links[0].closest('li') as HTMLElement;
-      expect([...row.children].map((el) => el.tagName)).toEqual(['SPAN', 'A', 'BUTTON']);
+      expect([...row.children].map((el) => el.tagName)).toEqual(['BUTTON', 'SPAN', 'A', 'BUTTON']);
       ui.click('#open-beacon');
       ui.click('#open-my-time');
       links[0].click();
       expect(ui.platform.hooks.opened).toEqual([`${HTTPS}/dashboard`, `${HTTPS}/dashboard/tasks/time`, `${HTTPS}/dashboard/tasks/T-101`]);
-      expect(ui.platform.hooks.tray.beacon).toBe('Open Beacon');
-      ui.platform.hooks.emit('tray-open-beacon');
+      expect(ui.platform.hooks.trayMenu?.openBeacon).toBe('Open Beacon');
+      expect(ui.platform.hooks.trayMenu?.myTime).toBe('My time');
+      await ui.app.trayAction('open-beacon');
       expect(ui.platform.hooks.opened.at(-1)).toBe(`${HTTPS}/dashboard`);
+      await ui.app.trayAction('my-time');
+      expect(ui.platform.hooks.opened.at(-1)).toBe(`${HTTPS}/dashboard/tasks/time`);
+      ui.platform.hooks.opened.pop();
       ui.app.openBeacon('https://evil.test/dashboard');
       ui.app.openBeacon(null);
       expect(ui.platform.hooks.opened).toHaveLength(4);
@@ -407,7 +428,7 @@ describe('desktop app', () => {
       const link = ui.$<HTMLAnchorElement>('#timer-open-in-beacon');
       expect(link.href).toBe(`${HTTPS}/dashboard/tasks/T-101`);
       expect(link.getAttribute('aria-label')).toBe('Abrir «Write onboarding guide» en Beacon');
-      expect(ui.$('#open-beacon').textContent).toBe('Abrir Beacon');
+      expect(ui.$('#open-beacon').getAttribute('aria-label')).toBe('Abrir Beacon');
       expect(ui.$('#open-my-time').textContent).toBe('Mi tiempo');
       link.click();
       expect(ui.platform.hooks.opened.at(-1)).toBe(`${HTTPS}/dashboard/tasks/T-101`);
@@ -421,7 +442,7 @@ describe('desktop app', () => {
       expect(ui.$<HTMLAnchorElement>('#timer-open-in-beacon').href).toBe(`${HTTPS}/dashboard/tasks/T-101`);
       await ui.app.refresh();
       expect(ui.$('#timer-open-in-beacon')).toBeNull();
-      expect(ui.root.querySelectorAll('a.beacon-link.icon')).toHaveLength(0);
+      expect(ui.root.querySelectorAll('#main a.beacon-link.icon')).toHaveLength(0);
       ui.app.destroy();
     });
 
@@ -429,17 +450,17 @@ describe('desktop app', () => {
       const ui = mount({ fetchImpl: proxy });
       await ui.app.init();
       expect(ui.root.querySelectorAll('a.beacon-link')).toHaveLength(0);
-      ui.platform.hooks.emit('tray-open-beacon');
+      await ui.app.trayAction('open-beacon');
       expect(ui.platform.hooks.opened).toHaveLength(0);
       const http = await signedIn();
       expect(http.root.querySelectorAll('a.beacon-link')).toHaveLength(0);
-      expect(http.platform.hooks.tray.beacon).toBeNull();
-      http.platform.hooks.emit('tray-open-beacon');
+      expect(http.platform.hooks.trayMenu?.openBeacon).toBeNull();
+      await http.app.trayAction('open-beacon');
       expect(http.platform.hooks.opened.filter((url) => url.includes('/dashboard'))).toHaveLength(0);
       const https = await signedIn({ fetchImpl: proxy }, HTTPS);
-      expect(https.platform.hooks.tray.beacon).toBe('Open Beacon');
+      expect(https.platform.hooks.trayMenu?.openBeacon).toBe('Open Beacon');
       await https.app.logout();
-      expect(https.platform.hooks.tray.beacon).toBeNull();
+      expect(https.platform.hooks.trayMenu?.openBeacon).toBeNull();
       expect(https.root.querySelectorAll('a.beacon-link')).toHaveLength(0);
     });
   });

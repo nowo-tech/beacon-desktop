@@ -15,8 +15,11 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 ## Stored on this computer
 
 - The session token, in the OS keychain.
-- Server URL, your e-mail, the running timer, queued offline actions, your settings and the date of each consent
-  decision, in the app's local storage. Signing out deletes the token, the timer and the queue.
+- Server URL, your e-mail, the running timer, queued offline actions, the tasks you pin and the last task you tracked
+  (id and title, to resume it), your settings and the date of each consent decision, in the app's local storage.
+  Signing out deletes the token, the timer and the queue.
+- Today / This week totals and recent tasks are computed on this computer from your own entries (`entries:read`, the
+  same data Beacon shows you); nothing extra is sent.
 
 ## Optional features (off by default, dated consent, revocable in Settings)
 

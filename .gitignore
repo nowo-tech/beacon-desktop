@@ -8,3 +8,4 @@ src-tauri/gen/schemas/
 *.pem
 *.key
 .env
+scripts/icons/preview-*.png

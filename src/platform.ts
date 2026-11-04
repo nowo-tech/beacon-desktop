@@ -15,7 +15,41 @@ export type UpdateCheck =
     }
   | { status: 'error'; message: string };
 
-export type PlatformEvent = 'tray-stop' | 'tray-open-beacon' | 'shortcut';
+/** Tray tooltip and title (title: macOS menu bar / Linux AppIndicator label; `null` hides it). */
+export interface TrayStatus {
+  title: string | null;
+  tooltip: string;
+  /** Status line at the top of the tray menu (disabled item). */
+  status: string;
+  running: boolean;
+}
+
+export interface TrayMenuItem {
+  id: string;
+  label: string;
+}
+
+/**
+ * Tray menu, translated by the UI. Each item emits `tray-action` with its id: `stop`, `resume`, `switch:<taskId>`,
+ * `search`, `open`, `open-beacon`, `my-time`, `settings` (`quit` is handled natively).
+ */
+export interface TrayMenu {
+  /** Stop timer / Resume "{last}" (absent when there is nothing to stop or resume). */
+  primary: TrayMenuItem | null;
+  /** "Switch to ▸" submenu label and its tasks (pinned + recent, at most 7; absent when empty). */
+  switchLabel: string;
+  switchTo: TrayMenuItem[];
+  search: string;
+  open: string;
+  /** Present only while connected to an https server (see lib/beacon.ts). */
+  openBeacon: string | null;
+  myTime: string | null;
+  settings: string;
+  quit: string;
+}
+
+/** Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME, so the default adds Shift. */
+export const DEFAULT_SHORTCUT = 'CommandOrControl+Alt+Shift+T';
 
 export interface Platform {
   readonly kind: 'tauri' | 'browser';
@@ -28,43 +62,57 @@ export interface Platform {
   /** Seconds since the last input, read locally from the OS. Never sent. */
   idleSeconds(): Promise<number>;
   openUrl(url: string): Promise<void>;
-  /**
-   * Tray status text, "Stop timer" enabled state and the "Open Beacon" item: `beaconLabel` is its translated label, or
-   * `null` to hide it (not connected, or the server is not https).
-   */
-  setTray(text: string, running: boolean, beaconLabel: string | null): Promise<void>;
+  copyText(text: string): Promise<void>;
+  setTray(status: TrayStatus): Promise<void>;
+  setTrayMenu(menu: TrayMenu): Promise<void>;
+  /** Registers the global shortcut (replacing the previous one). Rejects when the OS refuses it (in use, invalid). */
+  setShortcut(accelerator: string): Promise<void>;
   notify(title: string, body: string): Promise<void>;
   autostartEnabled(): Promise<boolean>;
   setAutostart(enabled: boolean): Promise<void>;
   checkUpdate(server: string, token: string): Promise<UpdateCheck>;
   installUpdate(server: string, token: string): Promise<void>;
-  /** Tray "Stop timer", tray "Open Beacon" and the global shortcut. */
-  on(event: PlatformEvent, handler: () => void): void;
+  /** The global shortcut was pressed (the window is already shown). */
+  onShortcut(handler: () => void): void;
+  /** A tray menu item was chosen (see `TrayMenu`). */
+  onTray(handler: (action: string) => void): void;
 }
 
 /** Test / development hooks of the browser fallback (set from Playwright through `window.__timeTrack`). */
 export interface BrowserHooks {
   idleSeconds: number;
   opened: string[];
+  copied: string[];
   notifications: string[];
-  tray: { text: string; running: boolean; beacon: string | null };
+  tray: TrayStatus;
+  trayMenu: TrayMenu | null;
+  shortcut: string | null;
+  /** Accelerators the fake OS refuses. */
+  refusedShortcuts: string[];
   installable: boolean;
   installError: string | null;
-  emit(event: PlatformEvent): void;
+  shortcutPressed(): void;
+  trayAction(action: string): void;
 }
 
 export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o) => globalThis.fetch(i, o)): Platform & { hooks: BrowserHooks } {
   let secret: string | null = null;
   let autostart = false;
-  const handlers: Record<string, (() => void)[]> = {};
+  const shortcutHandlers: (() => void)[] = [];
+  const trayHandlers: ((action: string) => void)[] = [];
   const hooks: BrowserHooks = {
     idleSeconds: 0,
     opened: [],
+    copied: [],
     notifications: [],
-    tray: { text: '', running: false, beacon: null },
+    tray: { title: null, tooltip: '', status: '', running: false },
+    trayMenu: null,
+    shortcut: null,
+    refusedShortcuts: [],
     installable: true,
     installError: null,
-    emit: (event) => (handlers[event] ?? []).forEach((handler) => handler()),
+    shortcutPressed: () => shortcutHandlers.forEach((handler) => handler()),
+    trayAction: (action) => trayHandlers.forEach((handler) => handler(action)),
   };
   return {
     kind: 'browser',
@@ -77,7 +125,13 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     secretDelete: async () => void (secret = null),
     idleSeconds: async () => hooks.idleSeconds,
     openUrl: async (url) => void hooks.opened.push(url),
-    setTray: async (text, running, beacon) => void (hooks.tray = { text, running, beacon }),
+    copyText: async (text) => void hooks.copied.push(text),
+    setTray: async (status) => void (hooks.tray = status),
+    setTrayMenu: async (menu) => void (hooks.trayMenu = menu),
+    setShortcut: async (accelerator) => {
+      if (hooks.refusedShortcuts.includes(accelerator)) throw new Error(`${accelerator} is already registered`);
+      hooks.shortcut = accelerator;
+    },
     notify: async (title, body) => void hooks.notifications.push(`${title}: ${body}`),
     autostartEnabled: async () => autostart,
     setAutostart: async (enabled) => void (autostart = enabled),
@@ -95,6 +149,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     installUpdate: async () => {
       if (hooks.installError !== null) throw new Error(hooks.installError);
     },
-    on: (event, handler) => void (handlers[event] ??= []).push(handler),
+    onShortcut: (handler) => void shortcutHandlers.push(handler),
+    onTray: (handler) => void trayHandlers.push(handler),
   };
 }

@@ -30,7 +30,11 @@ Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile 
 
 ## Features
 
-- Tray timer (elapsed time and task; "Stop timer" in the tray menu) and global shortcut **Ctrl/Cmd + Alt + T**.
+- Tray timer (`H:MM` and task, tooltip with today's total) with a translated menu: Stop / Resume, Switch to (pinned and
+  recent tasks), Search task…, Open Beacon, My time. Global shortcut **Ctrl/Cmd + Alt + Shift + T**, configurable in
+  Settings.
+- Pinned and recent tasks (`Alt+1…9`), Resume the last task, Today / This week totals, search with `Ctrl/Cmd + K`, arrow
+  keys and Enter.
 - Device-flow sign-in (no password typed in the app); `401` asks you to sign in again.
 - Task search, start / stop / switch. Offline queue: actions taken offline are sent when the connection returns (a stop
   keeps its original time; a start begins when it reaches the server).
