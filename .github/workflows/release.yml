@@ -8,6 +8,14 @@ name: Release
 #   time-track-clients/desktop/<version>/<file>, then time-track-clients/desktop/channel/stable.json LAST.
 # The S3 upload is skipped with a notice when its secrets are missing. The Microsoft Store MSIX job runs only when the
 # MSIX_* variables are set (Partner Center → Product identity).
+#
+# Runners come from repository variables, so the same workflow runs on GitHub-hosted or self-hosted runners:
+#   LINUX_RUNNER    JSON runs-on value, e.g. ["self-hosted","linux","x64","tauri-build"]   (default "ubuntu-22.04")
+#   WINDOWS_RUNNER  JSON runs-on value, e.g. ["self-hosted","windows","x64","tauri-build"] (default "windows-latest")
+#   MACOS_RUNNER    JSON runs-on value, e.g. ["self-hosted","macos","tauri-build"]         (default "macos-latest")
+#   WINDOWS_BUILD / MACOS_BUILD = false skip that platform: stable.json then has no entries for it in this version.
+# Self-hosted runners must be ephemeral and repo-scoped (no pull_request trigger here, so forks never reach them);
+# Linux ones need the Tauri system libraries, rustup and the AWS CLI preinstalled (the apt step runs on hosted only).
 on:
   push:
     tags: ['v*.*.*']
@@ -24,13 +32,16 @@ env:
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '"ubuntu-22.04"') }}
     outputs:
       version: ${{ steps.flags.outputs.version }}
       updater: ${{ steps.flags.outputs.updater }}
       s3: ${{ steps.flags.outputs.s3 }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
       - id: flags
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -50,26 +61,20 @@ jobs:
           echo "updater=true" >> "$GITHUB_OUTPUT"
           flag s3 "S3 upload skipped: bundles stay as workflow artifacts" TIME_TRACK_S3_ENDPOINT TIME_TRACK_S3_BUCKET TIME_TRACK_S3_ACCESS_KEY_ID TIME_TRACK_S3_SECRET_ACCESS_KEY
 
-  build:
+  build-linux:
     needs: prepare
     strategy:
-      fail-fast: true
       matrix:
         include:
           - os: linux
-            runner: ubuntu-22.04
             args: --bundles deb,appimage
             bundle: src-tauri/target/release/bundle
-          - os: windows
-            runner: windows-latest
-            # NSIS only, per-user (no UAC). MSI is not built since 0.4.0: an MSI install cannot take the NSIS updater.
-            args: --bundles nsis
-            bundle: src-tauri/target/release/bundle
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '"ubuntu-22.04"') }}
     timeout-minutes: 45
     steps: &build-steps
       - uses: actions/checkout@v7
-      - if: runner.os == 'Linux'
+      # Self-hosted Linux runners ship these libraries in their image (no sudo there).
+      - if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
@@ -110,26 +115,47 @@ jobs:
           name: desktop-${{ matrix.os }}
           path: out/
           retention-days: 30
+      # Ephemeral runners are discarded anyway; a reused one must not keep build trees between jobs.
+      - name: Clean build tree (self-hosted)
+        if: always() && runner.environment == 'self-hosted'
+        shell: bash
+        run: rm -rf src-tauri/target out node_modules dist "$RUNNER_TEMP/tauri.release.json"
 
-  # Last: macOS minutes count ×10, so it only runs after Linux and Windows succeeded.
+  build-windows:
+    needs: prepare
+    if: vars.WINDOWS_BUILD != 'false'
+    strategy:
+      matrix:
+        include:
+          - os: windows
+            # NSIS only, per-user (no UAC). MSI is not built since 0.4.0: an MSI install cannot take the NSIS updater.
+            args: --bundles nsis
+            bundle: src-tauri/target/release/bundle
+    runs-on: ${{ fromJSON(vars.WINDOWS_RUNNER || '"windows-latest"') }}
+    timeout-minutes: 45
+    steps: *build-steps
+
+  # Last: macOS minutes count ×10, so it only runs after Linux and Windows succeeded (or Windows was switched off).
   build-macos:
-    needs: [prepare, build]
+    needs: [prepare, build-linux, build-windows]
+    if: >-
+      ${{ !cancelled() && vars.MACOS_BUILD != 'false' && needs.build-linux.result == 'success'
+      && contains(fromJSON('["success","skipped"]'), needs.build-windows.result) }}
     strategy:
       matrix:
         include:
           - os: darwin
-            runner: macos-latest
             args: --target universal-apple-darwin --bundles app,dmg
             bundle: src-tauri/target/universal-apple-darwin/release/bundle
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ fromJSON(vars.MACOS_RUNNER || '"macos-latest"') }}
     timeout-minutes: 45
     steps: *build-steps
 
   # Microsoft Store package (MSIX, unsigned: the Store re-signs it). Upload it by hand in Partner Center.
   store-msix:
-    needs: [prepare, build]
-    if: vars.MSIX_IDENTITY_NAME != ''
-    runs-on: windows-latest
+    needs: [prepare, build-windows]
+    if: vars.MSIX_IDENTITY_NAME != '' && vars.WINDOWS_BUILD != 'false'
+    runs-on: ${{ fromJSON(vars.WINDOWS_RUNNER || '"windows-latest"') }}
     timeout-minutes: 45
     env:
       MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
@@ -154,10 +180,19 @@ jobs:
           name: desktop-store-msix
           path: out/store/*.msix
           retention-days: 30
+      - name: Clean build tree (self-hosted)
+        if: always() && runner.environment == 'self-hosted'
+        shell: bash
+        run: rm -rf src-tauri/target out node_modules dist
 
+  # A switched-off (skipped) Windows / macOS build simply leaves its platform out of stable.json for this version.
   publish:
-    needs: [prepare, build, build-macos]
-    runs-on: ubuntu-latest
+    needs: [prepare, build-linux, build-windows, build-macos]
+    if: >-
+      ${{ !cancelled() && needs.build-linux.result == 'success'
+      && contains(fromJSON('["success","skipped"]'), needs.build-windows.result)
+      && contains(fromJSON('["success","skipped"]'), needs.build-macos.result) }}
+    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '"ubuntu-22.04"') }}
     env:
       TIME_TRACK_S3_ENDPOINT: ${{ secrets.TIME_TRACK_S3_ENDPOINT }}
       TIME_TRACK_S3_BUCKET: ${{ secrets.TIME_TRACK_S3_BUCKET }}
@@ -167,6 +202,9 @@ jobs:
       MIN_SUPPORTED_VERSION: ${{ vars.TIME_TRACK_MIN_SUPPORTED_VERSION }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
       - uses: actions/download-artifact@v8
         with:
           pattern: desktop-*
