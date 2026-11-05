@@ -69,7 +69,9 @@ impl Probe {
         }
     }
 
-    /// The holders an OS named (the microphone is in use when there is one).
+    /// The holders an OS named (the microphone is in use when there is one). The Windows and Linux detectors use it;
+    /// macOS builds its probe from CoreAudio and only the tests call it there.
+    #[cfg_attr(all(target_os = "macos", not(test)), allow(dead_code))]
     pub fn named(holders: Vec<String>) -> Self {
         Self {
             in_use: !holders.is_empty(),
