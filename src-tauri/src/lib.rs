@@ -167,9 +167,19 @@ fn secret_set(window: tauri::Window, token: String) -> Result<(), String> {
     keychain()?.set_password(&token).map_err(|e| e.to_string())
 }
 
+/// True when a session token is stored (`beacon_bind` then refuses to switch servers).
+pub(crate) fn has_session_token() -> bool {
+    keychain().is_ok_and(|entry| entry.get_password().is_ok())
+}
+
+/// Signs out locally: deletes the token and unbinds the server (net.rs, FY-L1).
 #[tauri::command]
-fn secret_delete(window: tauri::Window) -> Result<(), String> {
+fn secret_delete(
+    window: tauri::Window,
+    bound: tauri::State<'_, net::BoundServer>,
+) -> Result<(), String> {
     only_from(&window, "main")?;
+    bound.clear();
     match keychain()?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(e.to_string()),
@@ -432,22 +442,16 @@ fn updater_endpoint(server: &str) -> String {
     )
 }
 
-/// The server the user signed in to must be https (or loopback http) without userinfo; validated again in Rust
-/// because `server` comes from the webview.
+/// The server the user signed in to must be https (or, in debug builds, loopback http) without userinfo; validated
+/// again in Rust because `server` comes from the webview. Same rule as `beacon_fetch` (net.rs).
 fn validate_server(server: &str) -> Result<url::Url, String> {
-    let url = url::Url::parse(server).map_err(|e| e.to_string())?;
-    let loopback = matches!(
-        url.host_str(),
-        Some("localhost") | Some("127.0.0.1") | Some("[::1]")
-    );
-    let scheme_ok = url.scheme() == "https" || (url.scheme() == "http" && loopback);
-    if !scheme_ok
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.host_str().is_none()
-    {
-        return Err("invalid server URL".into());
-    }
+    net::validate_url(server).map_err(|_| "invalid server URL".to_string())
+}
+
+/// The updater commands talk to the bound server only (net.rs, FY-L1): `server` comes from the webview.
+fn bound_server(bound: &net::BoundServer, server: &str) -> Result<url::Url, String> {
+    let url = validate_server(server)?;
+    net::require_origin(bound.origin().as_ref(), &url)?;
     Ok(url)
 }
 
@@ -520,7 +524,8 @@ async fn check_update(
     if store_channel() {
         return UpdateCheck::Disabled;
     }
-    if let Err(message) = validate_server(&server) {
+    // `State` borrows the request: an async command returning a plain value takes the state from the app handle.
+    if let Err(message) = bound_server(&app.state::<net::BoundServer>(), &server) {
         return UpdateCheck::Error { message };
     }
     let bundle = bundle_name(tauri::utils::platform::bundle_type());
@@ -558,7 +563,7 @@ async fn check_update(
                 updater_pubkey(&app).is_some() && bundle_self_updates(bundle),
             ),
             Err(e) => UpdateCheck::Error {
-                message: e.to_string(),
+                message: net::describe_error(e),
             },
         },
         status => UpdateCheck::Error {
@@ -605,6 +610,7 @@ impl ProgressThrottle {
 async fn install_update(
     app: AppHandle,
     window: tauri::Window,
+    bound: tauri::State<'_, net::BoundServer>,
     server: String,
     token: String,
 ) -> Result<(), String> {
@@ -612,7 +618,7 @@ async fn install_update(
     if store_channel() {
         return Err("Updates come from the Microsoft Store.".into());
     }
-    let server_url = validate_server(&server)?;
+    let server_url = bound_server(&bound, &server)?;
     let Some(pubkey) = updater_pubkey(&app) else {
         return Err("This build cannot verify updates (no updater key).".into());
     };
@@ -842,6 +848,7 @@ pub fn run() {
             app.manage(HeartbeatState(Mutex::new(heartbeat::Heartbeat::new())));
             app.manage(MainFocus::default());
             app.manage(prompt::PromptState::default());
+            app.manage(net::BoundServer::default());
             build_tray(app)?;
             spawn_heartbeat(app.handle().clone());
             // Started at login (opt-in autostart passes --hidden): stay in the tray.
@@ -892,6 +899,7 @@ pub fn run() {
             check_update,
             install_update,
             net::beacon_fetch,
+            net::beacon_bind,
             net::connection_security,
             set_wake_plan,
             notify_friendly,
@@ -1123,10 +1131,29 @@ mod tests {
     #[test]
     fn validates_server() {
         assert!(validate_server("https://beacon.example.com").is_ok());
-        assert!(validate_server("http://127.0.0.1:8787").is_ok());
+        // Loopback http in debug builds only (net::validate_url_with covers the release rule).
+        assert_eq!(
+            validate_server("http://127.0.0.1:8787").is_ok(),
+            cfg!(debug_assertions)
+        );
         assert!(validate_server("http://beacon.example.com").is_err());
         assert!(validate_server("https://user:pw@beacon.example.com").is_err());
         assert!(validate_server("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn updater_commands_need_the_bound_server() {
+        let bound = net::BoundServer::default();
+        assert!(bound_server(&bound, "https://beacon.example.com").is_err());
+        bound
+            .bind(
+                &url::Url::parse("https://beacon.example.com").unwrap(),
+                false,
+            )
+            .unwrap();
+        assert!(bound_server(&bound, "https://beacon.example.com/").is_ok());
+        assert!(bound_server(&bound, "https://beacon.example.com:8443").is_err());
+        assert!(bound_server(&bound, "https://evil.example").is_err());
     }
 
     #[test]

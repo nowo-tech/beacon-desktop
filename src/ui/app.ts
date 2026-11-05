@@ -179,6 +179,8 @@ export class DesktopApp {
   offline = false;
   /** TLS pinning state of the connected server, shown in Settings (`null`: unknown or not asked yet). */
   connectionSecurity: ConnectionSecurity | null = null;
+  /** This build's pin set expired for the signed-in server (FY-I1): a card in the main view until dismissed. */
+  pinExpired = false;
   busy = false;
   query = '';
   version = '0.0.0';
@@ -282,9 +284,18 @@ export class DesktopApp {
       await this.updateTray();
       return;
     }
+    try {
+      await this.platform.bindServer(this.state.session.server);
+    } catch {
+      // The saved server is not allowed by this build (e.g. loopback http in a release build): sign in again.
+      this.show('login');
+      await this.updateTray();
+      return;
+    }
     this.show('main');
     await this.refresh();
     await this.checkUpdates();
+    await this.checkPinExpiry();
   }
 
   destroy(): void {
@@ -332,6 +343,30 @@ export class DesktopApp {
     if (this.view === 'settings') this.render();
   }
 
+  /**
+   * The pin set of this build expired (FY-I1): a card in the main view and, once per pin set version, a desktop
+   * notification, so "update the app" is seen without opening Settings.
+   */
+  async checkPinExpiry(): Promise<void> {
+    await this.loadConnectionSecurity();
+    const security = this.connectionSecurity;
+    if (security?.status !== 'expired') return;
+    this.pinExpired = true;
+    this.render();
+    if (this.state.settings.pinExpiryNotified === security.pinSetVersion) return;
+    this.persist({ settings: { ...this.state.settings, pinExpiryNotified: security.pinSetVersion } });
+    try {
+      await this.platform.notify(this.t('pinExpiredTitle'), this.t('connPinExpired', { host: hostOf(this.state.session?.server) }));
+    } catch {
+      // The card in the main view is enough.
+    }
+  }
+
+  dismissPinExpired(): void {
+    this.pinExpired = false;
+    this.render();
+  }
+
   /** Info notice in the status region (optionally with a mascot moment); dismissed after a few seconds. */
   setNotice(text: string | null, art: Moment | null = null): void {
     this.notice = text;
@@ -373,6 +408,7 @@ export class DesktopApp {
     await this.guard(
       async () => {
         try {
+          await this.platform.bindServer(server);
           await preflight(this.platform.fetch, server);
           stage = 'deviceCode';
           const login = await runDeviceFlow(api, {
@@ -406,6 +442,7 @@ export class DesktopApp {
           this.welcome = true;
           this.setNotice(null);
           await this.load(api);
+          await this.checkPinExpiry();
         } catch (error) {
           if (error instanceof DeviceFlowError) {
             if (error.reason === 'cancelled') return;
@@ -2141,6 +2178,7 @@ export class DesktopApp {
     patch(region, [
       this.promptInWindow() && this.state.idleCheck.phase !== 'watching' && this.renderPromptElsewhere(),
       this.nativeNotice !== null && this.renderNativeNotice(),
+      this.pinExpired && this.renderPinExpired(),
       this.renderUpdateCard(),
       this.welcome && this.error === null && this.renderWelcome(),
       this.longRunning() && this.renderLongRunning(),
@@ -2189,6 +2227,18 @@ export class DesktopApp {
         h('button', { class: 'secondary small', id: 'native-notice-ok', key: 'native-notice-ok', attrs: { type: 'button' }, on: { click: () => this.dismissNativeNotice() } }, t('gotIt')),
         intro && h('button', { class: 'link', id: 'native-notice-in-app', key: 'native-notice-in-app', attrs: { type: 'button' }, on: { click: () => this.setDesktopNotifications(false) } }, t('nativeKeepInApp')),
       ),
+    );
+  }
+
+  /** The pin set of this build expired: update the app (the line in Settings says the same). */
+  private renderPinExpired(): HTMLElement {
+    const t = this.t;
+    return h(
+      'section',
+      { class: 'card native-notice', id: 'pin-expired', key: 'pin-expired', attrs: { role: 'region', 'aria-labelledby': 'pin-expired-title' } },
+      h('h2', { id: 'pin-expired-title' }, t('pinExpiredTitle')),
+      h('p', { class: 'muted', id: 'pin-expired-text' }, t('connPinExpired', { host: hostOf(this.state.session?.server) })),
+      h('div', { class: 'row-actions' }, h('button', { class: 'secondary small', id: 'pin-expired-ok', key: 'pin-expired-ok', attrs: { type: 'button' }, on: { click: () => this.dismissPinExpired() } }, t('gotIt'))),
     );
   }
 

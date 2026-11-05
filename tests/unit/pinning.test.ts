@@ -124,11 +124,10 @@ describe('app: pin mismatch and the Settings line', () => {
     await env.control('config', { deviceInterval: 1 });
   });
 
-  async function signedIn() {
+  async function signedIn(platform = browserPlatform('0.5.0', nodeFetch)) {
     document.body.replaceChildren();
     const root = document.createElement('div');
     document.body.append(root);
-    const platform = browserPlatform('0.5.0', nodeFetch);
     const app = new DesktopApp(root, platform, { storage: localStorage, locale: 'es', sleep: () => new Promise((resolve) => setTimeout(resolve, 5)), searchDelayMs: 5 });
     const $ = (selector: string) => root.querySelector(selector) as HTMLElement | null;
     await app.init();
@@ -183,6 +182,73 @@ describe('app: pin mismatch and the Settings line', () => {
     ui.app.show('settings');
     await tick();
     expect(ui.$('#connection-security')).toBeNull();
+    ui.app.destroy();
+  });
+
+  it('binds the server before signing in and again at start-up; signing out unbinds it (FY-L1)', async () => {
+    const platform = browserPlatform('0.5.0', nodeFetch);
+    const ui = await signedIn(platform);
+    expect(platform.hooks.boundServer).toBe(env.url);
+    // Signed in: another server cannot be bound until sign-out.
+    await expect(platform.bindServer('https://other.example')).rejects.toThrow('sign out first');
+    ui.app.destroy();
+    // Restart: unbound in Rust until the UI binds the saved server.
+    platform.hooks.boundServer = null;
+    const root = document.createElement('div');
+    document.body.replaceChildren(root);
+    const again = new DesktopApp(root, platform, { storage: localStorage, locale: 'es', sleep: () => Promise.resolve(), searchDelayMs: 5 });
+    await again.init();
+    expect(again.view).toBe('main');
+    expect(platform.hooks.boundServer).toBe(env.url);
+    await again.logout();
+    expect(platform.hooks.boundServer).toBeNull();
+    again.destroy();
+  });
+
+  it('a saved server this build refuses to bind sends the user to sign in', async () => {
+    const platform = browserPlatform('0.5.0', nodeFetch);
+    const ui = await signedIn(platform);
+    ui.app.destroy();
+    platform.bindServer = () => Promise.reject(new Error('invalid URL'));
+    const root = document.createElement('div');
+    document.body.replaceChildren(root);
+    const again = new DesktopApp(root, platform, { storage: localStorage, locale: 'es', sleep: () => Promise.resolve(), searchDelayMs: 5 });
+    await again.init();
+    expect(again.view).toBe('login');
+    again.destroy();
+  });
+
+  it('an expired pin set shows a card in the main view and one desktop notification per pin set (FY-I1)', async () => {
+    const platform = browserPlatform('0.5.0', nodeFetch);
+    platform.hooks.connectionSecurity = { status: 'expired', pinSetVersion: 1 };
+    const ui = await signedIn(platform);
+    await tick();
+    expect(ui.$('#pin-expired-title')?.textContent).toBe('Actualiza TimeTrack: la fijación de certificados ha caducado');
+    expect(ui.$('#pin-expired-text')?.textContent).toContain('actualiza la app');
+    expect(platform.hooks.notifications).toHaveLength(1);
+    expect(platform.hooks.notifications[0]).toContain('la fijación de certificados ha caducado');
+    expect(ui.app.state.settings.pinExpiryNotified).toBe(1);
+    ui.$('#pin-expired-ok')?.click();
+    expect(ui.$('#pin-expired')).toBeNull();
+    // Again (a restart): the card comes back, the notification does not.
+    await ui.app.checkPinExpiry();
+    expect(ui.$('#pin-expired')).not.toBeNull();
+    expect(platform.hooks.notifications).toHaveLength(1);
+    // A failing notification never breaks the check.
+    platform.hooks.connectionSecurity = { status: 'expired', pinSetVersion: 2 };
+    platform.notify = () => Promise.reject(new Error('no notifications'));
+    await ui.app.checkPinExpiry();
+    expect(ui.app.state.settings.pinExpiryNotified).toBe(2);
+    ui.app.destroy();
+  });
+
+  it('a pinned or unpinned server shows no expiry card', async () => {
+    const platform = browserPlatform('0.5.0', nodeFetch);
+    platform.hooks.connectionSecurity = { status: 'pinned', pinSetVersion: 1 };
+    const ui = await signedIn(platform);
+    await tick();
+    expect(ui.$('#pin-expired')).toBeNull();
+    expect(platform.hooks.notifications).toHaveLength(0);
     ui.app.destroy();
   });
 });

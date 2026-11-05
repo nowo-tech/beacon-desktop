@@ -2,9 +2,13 @@
 //! the updater) uses the pinned TLS configuration of `pinning.rs`. The webview itself cannot reach the network (CSP
 //! `connect-src ipc:`, no HTTP plugin), so there is no unpinned path to Beacon.
 //!
+//! Every request is bound to the origin (scheme, host, port) of the Beacon server the app is signed in to (or signing
+//! in to): `beacon_fetch`, the update check and the updater refuse any other origin, so the Bearer token never goes
+//! anywhere else (audit FY-L1). Plain `http://` is accepted for loopback development servers in debug builds only.
+//!
 //! No redirects (the Bearer token stays bound to the configured server), no cookies, no request or response logging.
 
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -38,21 +42,104 @@ pub fn client() -> &'static reqwest::Client {
     &CLIENT
 }
 
-/// The server URL rule of the app: https, or http on loopback only; no userinfo.
+/// Plain `http://` is accepted for local development servers only, and only in debug builds (FY-L1).
+pub const ALLOW_LOOPBACK_HTTP: bool = cfg!(debug_assertions);
+
+/// The loopback names a development server may use over plain http: the same set as the UI's server field
+/// (`localhost`, `127.0.0.1`, `[::1]`).
+pub fn is_dev_loopback(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+}
+
+/// The server URL rule of the app: https, or (debug builds only) http on loopback; no userinfo.
 pub fn validate_url(value: &str) -> Result<url::Url, String> {
+    validate_url_with(value, ALLOW_LOOPBACK_HTTP)
+}
+
+/// [`validate_url`] with the http-on-loopback switch explicit (tests check the release rule in debug builds).
+pub fn validate_url_with(value: &str, allow_loopback_http: bool) -> Result<url::Url, String> {
     let url = url::Url::parse(value).map_err(|_| "invalid URL".to_string())?;
     let host = url.host_str().ok_or("invalid URL")?;
-    let scheme_ok =
-        url.scheme() == "https" || (url.scheme() == "http" && pinning::is_loopback(host));
+    let scheme_ok = url.scheme() == "https"
+        || (allow_loopback_http && url.scheme() == "http" && is_dev_loopback(host));
     if !scheme_ok || !url.username().is_empty() || url.password().is_some() {
         return Err("invalid URL".into());
     }
     Ok(url)
 }
 
+/// Refusal text when a request targets another origin than the bound server.
+pub const OTHER_ORIGIN: &str = "request outside the signed-in Beacon server";
+
+/// The origin of the Beacon server the app is signed in to (or signing in to). Held in Rust, managed by Tauri.
+#[derive(Default)]
+pub struct BoundServer(Mutex<Option<url::Origin>>);
+
+impl BoundServer {
+    pub fn origin(&self) -> Option<url::Origin> {
+        self.0.lock().ok().and_then(|bound| bound.clone())
+    }
+
+    /// Binds `server`. Rebinding to another origin while a session token is stored is refused: the UI signs out
+    /// first (`secret_delete` clears the binding).
+    pub fn bind(&self, server: &url::Url, signed_in: bool) -> Result<(), String> {
+        let mut bound = self.0.lock().map_err(|_| "state unavailable")?;
+        let origin = server.origin();
+        if signed_in && bound.as_ref().is_some_and(|current| *current != origin) {
+            return Err("signed in to another server: sign out first".into());
+        }
+        *bound = Some(origin);
+        Ok(())
+    }
+
+    pub fn clear(&self) {
+        if let Ok(mut bound) = self.0.lock() {
+            *bound = None;
+        }
+    }
+}
+
+/// `url` must have exactly the bound origin (scheme, host, port); nothing is sent before a server is bound.
+pub fn require_origin(bound: Option<&url::Origin>, url: &url::Url) -> Result<(), String> {
+    match bound {
+        Some(origin) if *origin == url.origin() => Ok(()),
+        Some(_) => Err(OTHER_ORIGIN.into()),
+        None => Err("no Beacon server bound: sign in first".into()),
+    }
+}
+
 /// A reqwest error as text for the UI: the pin mismatch keeps its marker, the URL is never included.
 pub fn describe_error(error: reqwest::Error) -> String {
     error_text(&error.without_url())
+}
+
+/// Removes the query string (and fragment) of every URL in `text`: the updater's errors can carry the pre-signed
+/// object-storage URL of the artifact, whose query holds the signature (FY-I2). "Copy details" never gets it.
+pub fn redact_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = ["https://", "http://"]
+        .iter()
+        .filter_map(|scheme| rest.find(scheme))
+        .min()
+    {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start..];
+        let end = tail
+            .find(|c: char| c.is_whitespace() || matches!(c, ')' | '"' | '\'' | '>' | ','))
+            .unwrap_or(tail.len());
+        let url = &tail[..end];
+        match url.find(['?', '#']) {
+            Some(cut) => {
+                out.push_str(&url[..cut]);
+                out.push_str("?[redacted]");
+            }
+            None => out.push_str(url),
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// An error and its causes as one line; a pin mismatch is reduced to its marker, host and pin set version.
@@ -67,6 +154,7 @@ pub fn error_text(error: &(dyn std::error::Error + 'static)) -> String {
         }
         source = cause.source();
     }
+    let text = redact_urls(&text);
     // "…: invalid peer certificate: Other(OtherError(beacon_untrusted_certificate: … (pin set v1)))" → the
     // PinMismatch text only.
     let Some(start) = text.find(UNTRUSTED_MARKER) else {
@@ -101,12 +189,15 @@ pub struct FetchResponse {
     pub body: String,
 }
 
-/// Sends one request with `client`. Errors are strings for the UI (see [`describe_error`]).
+/// Sends one request with `client`, only to the `bound` server origin (so the `Authorization` header never reaches
+/// another origin). Errors are strings for the UI (see [`describe_error`]).
 pub async fn send(
     client: &reqwest::Client,
     request: FetchRequest,
+    bound: Option<&url::Origin>,
 ) -> Result<FetchResponse, String> {
     let url = validate_url(&request.url)?;
+    require_origin(bound, &url)?;
     let method = match request.method.to_ascii_uppercase().as_str() {
         "GET" => reqwest::Method::GET,
         "POST" => reqwest::Method::POST,
@@ -148,14 +239,29 @@ pub async fn send(
     })
 }
 
-/// Every Beacon API call of the UI (src/lib/nativeFetch.ts): pinned TLS, no redirects, main window only.
+/// Every Beacon API call of the UI (src/lib/nativeFetch.ts): pinned TLS, no redirects, bound server origin only, main
+/// window only.
 #[tauri::command]
 pub async fn beacon_fetch(
     window: tauri::Window,
+    bound: tauri::State<'_, BoundServer>,
     request: FetchRequest,
 ) -> Result<FetchResponse, String> {
     crate::only_from(&window, "main")?;
-    send(client(), request).await
+    let origin = bound.origin();
+    send(client(), request, origin.as_ref()).await
+}
+
+/// Binds the Beacon server the UI signs in to (before the sign-in requests) or is signed in to (at start-up).
+#[tauri::command]
+pub fn beacon_bind(
+    window: tauri::Window,
+    bound: tauri::State<'_, BoundServer>,
+    server: String,
+) -> Result<(), String> {
+    crate::only_from(&window, "main")?;
+    let url = validate_url(&server)?;
+    bound.bind(&url, crate::has_session_token())
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -260,6 +366,13 @@ mod tests {
             .unwrap()
     }
 
+    /// The origin the UI bound (`beacon_bind`) for the mock server.
+    fn bound(port: u16) -> url::Origin {
+        url::Url::parse(&format!("https://{HOST}:{port}/"))
+            .unwrap()
+            .origin()
+    }
+
     fn request(port: u16) -> FetchRequest {
         FetchRequest {
             url: format!("https://{HOST}:{port}/api/time-track/me"),
@@ -283,7 +396,9 @@ mod tests {
             pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
             port,
         );
-        let response = send(&client, request(port)).await.unwrap();
+        let response = send(&client, request(port), Some(&bound(port)))
+            .await
+            .unwrap();
         assert_eq!(response.status, 200);
         assert_eq!(response.status_text, "OK");
         assert!(response
@@ -317,7 +432,9 @@ mod tests {
             pin_set(&[HOST], &[&official.spki_pin], "2999-01-01"),
             port,
         );
-        let error = send(&client, request(port)).await.unwrap_err();
+        let error = send(&client, request(port), Some(&bound(port)))
+            .await
+            .unwrap_err();
         assert_eq!(
             error,
             format!("{UNTRUSTED_MARKER}: unexpected certificate for {HOST} (pin set v9)")
@@ -341,7 +458,13 @@ mod tests {
             pin_set(&[HOST], &[&root.spki_pin], "2999-01-01"),
             port,
         );
-        assert_eq!(send(&client, request(port)).await.unwrap().status, 200);
+        assert_eq!(
+            send(&client, request(port), Some(&bound(port)))
+                .await
+                .unwrap()
+                .status,
+            200
+        );
     }
 
     #[tokio::test]
@@ -359,7 +482,13 @@ mod tests {
             ),
             port,
         );
-        assert_eq!(send(&client, request(port)).await.unwrap().status, 200);
+        assert_eq!(
+            send(&client, request(port), Some(&bound(port)))
+                .await
+                .unwrap()
+                .status,
+            200
+        );
     }
 
     #[tokio::test]
@@ -373,7 +502,9 @@ mod tests {
             pin_set(&[HOST], &[&trusted.spki_pin], "2999-01-01"),
             port,
         );
-        let error = send(&client, request(port)).await.unwrap_err();
+        let error = send(&client, request(port), Some(&bound(port)))
+            .await
+            .unwrap_err();
         assert!(!error.contains(UNTRUSTED_MARKER), "{error}");
         assert!(error.to_lowercase().contains("certificate"), "{error}");
     }
@@ -381,6 +512,9 @@ mod tests {
     #[tokio::test]
     async fn requests_are_validated_before_sending() {
         let client = build_client(pinning::shipped_client_config()).unwrap();
+        let example = url::Url::parse("https://beacon.example.com")
+            .unwrap()
+            .origin();
         for (url, method) in [
             ("http://beacon.example.com/api", "GET"),
             ("https://user:pw@beacon.example.com/api", "GET"),
@@ -393,7 +527,10 @@ mod tests {
                 headers: vec![],
                 body: None,
             };
-            assert!(send(&client, request).await.is_err(), "{url} {method}");
+            assert!(
+                send(&client, request, Some(&example)).await.is_err(),
+                "{url} {method}"
+            );
         }
         let bad_header = FetchRequest {
             url: "https://beacon.example.com/api".into(),
@@ -401,7 +538,97 @@ mod tests {
             headers: vec![("Authorization".into(), "Bearer \n".into())],
             body: Some("{}".into()),
         };
-        assert!(send(&client, bad_header).await.is_err());
+        assert!(send(&client, bad_header, Some(&example)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn other_origins_are_refused_and_never_get_the_token() {
+        let ca = TestCa::new("E2E Root");
+        let (leaf, key) = ca.leaf(HOST);
+        // Up to three connections, none expected.
+        let (port, seen) = mock_server(vec![leaf], &key, 3);
+        let client = client_for(
+            ca.roots(),
+            pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
+            port,
+        );
+        // Bound to another host, to the same host on another port, to http of the same host, or to nothing.
+        let other_host = url::Url::parse("https://beacon.elsewhere.example")
+            .unwrap()
+            .origin();
+        let other_port = url::Url::parse(&format!("https://{HOST}:{}/", port.wrapping_add(1)))
+            .unwrap()
+            .origin();
+        let other_scheme = url::Url::parse(&format!("http://{HOST}:{port}/"))
+            .unwrap()
+            .origin();
+        for origin in [Some(&other_host), Some(&other_port), Some(&other_scheme)] {
+            let error = send(&client, request(port), origin).await.unwrap_err();
+            assert_eq!(error, OTHER_ORIGIN);
+        }
+        let error = send(&client, request(port), None).await.unwrap_err();
+        assert!(error.contains("sign in"), "{error}");
+        // Nothing (no Authorization header) reached the server.
+        assert!(seen
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .is_err());
+    }
+
+    #[test]
+    fn origin_binding_rules() {
+        let server = BoundServer::default();
+        let a = url::Url::parse("https://beacon.a.example/").unwrap();
+        let a_path = url::Url::parse("https://beacon.a.example:443/api/time-track/me").unwrap();
+        let b = url::Url::parse("https://beacon.b.example/").unwrap();
+        assert!(require_origin(server.origin().as_ref(), &a).is_err());
+        // Signing in: any server may be bound while no token is stored.
+        server.bind(&a, false).unwrap();
+        server.bind(&b, false).unwrap();
+        server.bind(&a, false).unwrap();
+        assert!(require_origin(server.origin().as_ref(), &a_path).is_ok());
+        assert_eq!(
+            require_origin(server.origin().as_ref(), &b),
+            Err(OTHER_ORIGIN.to_string())
+        );
+        // Signed in: the same server again is fine (start-up), another one is refused until sign-out.
+        server.bind(&a, true).unwrap();
+        assert!(server.bind(&b, true).is_err());
+        assert_eq!(server.origin(), Some(a.origin()));
+        server.clear();
+        assert_eq!(server.origin(), None);
+        server.bind(&b, true).unwrap();
+        assert!(require_origin(server.origin().as_ref(), &b).is_ok());
+    }
+
+    #[test]
+    fn error_text_redacts_presigned_urls() {
+        let text = "error sending request for url (https://s3.example.com/time-track-clients/desktop/0.5.1/app.AppImage.tar.gz?X-Amz-Credential=AKIDEXAMPLE&X-Amz-Signature=deadbeef): connection reset";
+        let redacted = redact_urls(text);
+        assert_eq!(
+            redacted,
+            "error sending request for url (https://s3.example.com/time-track-clients/desktop/0.5.1/app.AppImage.tar.gz?[redacted]): connection reset"
+        );
+        assert!(!redacted.contains("X-Amz"));
+        assert_eq!(redact_urls("no url here"), "no url here");
+        assert_eq!(
+            redact_urls("http://localhost:8000/a#frag and https://b.example/c"),
+            "http://localhost:8000/a?[redacted] and https://b.example/c"
+        );
+        #[derive(Debug)]
+        struct Failed;
+        impl std::fmt::Display for Failed {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(
+                    f,
+                    "download failed: https://s3.example.com/x?X-Amz-Signature=abc"
+                )
+            }
+        }
+        impl std::error::Error for Failed {}
+        assert_eq!(
+            error_text(&Failed),
+            "download failed: https://s3.example.com/x?[redacted]"
+        );
     }
 
     #[test]
@@ -441,12 +668,29 @@ mod tests {
     }
 
     #[test]
-    fn loopback_http_is_allowed() {
-        assert!(validate_url("http://localhost:8000").is_ok());
-        assert!(validate_url("http://127.0.0.1:8000").is_ok());
-        assert!(validate_url("http://[::1]:8000").is_ok());
-        assert!(validate_url("http://beacon.example.com").is_err());
-        assert!(validate_url("https://beacon.example.com").is_ok());
+    fn loopback_http_only_in_debug_builds() {
+        // Debug rule (`cargo test` and `tauri dev`).
+        assert!(validate_url_with("http://localhost:8000", true).is_ok());
+        assert!(validate_url_with("http://127.0.0.1:8000", true).is_ok());
+        assert!(validate_url_with("http://[::1]:8000", true).is_ok());
+        // Aligned with the UI: no `*.localhost`, no other 127/8 address.
+        assert!(validate_url_with("http://app.localhost:8000", true).is_err());
+        assert!(validate_url_with("http://127.0.0.2:8000", true).is_err());
+        assert!(validate_url_with("http://beacon.example.com", true).is_err());
+        // Release rule: https only.
+        for url in [
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "http://[::1]:8000",
+        ] {
+            assert!(validate_url_with(url, false).is_err(), "{url}");
+        }
+        assert!(validate_url_with("https://localhost:8443", false).is_ok());
+        assert!(validate_url_with("https://beacon.example.com", false).is_ok());
+        assert_eq!(
+            validate_url("http://localhost:8000").is_ok(),
+            cfg!(debug_assertions)
+        );
     }
 
     #[test]

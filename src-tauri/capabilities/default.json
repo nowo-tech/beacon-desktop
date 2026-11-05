@@ -25,6 +25,7 @@
     "allow-check-update",
     "allow-install-update",
     "allow-beacon-fetch",
+    "allow-beacon-bind",
     "allow-connection-security",
     "allow-set-wake-plan",
     "allow-notify-friendly",

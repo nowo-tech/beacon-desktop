@@ -45,6 +45,8 @@ export interface Settings {
   scheduleReminders: boolean;
   /** "Shall we start?" this many minutes before the start time (`LEAD_CHOICES`). */
   scheduleLeadMinutes: number;
+  /** Pin set version whose expiry was already announced with a desktop notification (once per version). */
+  pinExpiryNotified: number | null;
 }
 
 /**
@@ -104,6 +106,7 @@ export const DEFAULT_SETTINGS: Settings = {
   nativeIntroSeen: false,
   scheduleReminders: true,
   scheduleLeadMinutes: DEFAULT_LEAD_MINUTES,
+  pinExpiryNotified: null,
 };
 
 const KEY = 'time-track-desktop';
@@ -144,6 +147,7 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
         nativeIntroSeen: raw.settings?.nativeIntroSeen === true,
         scheduleReminders: typeof raw.settings?.scheduleReminders === 'boolean' ? raw.settings.scheduleReminders : DEFAULT_SETTINGS.scheduleReminders,
         scheduleLeadMinutes: LEAD_CHOICES.includes(raw.settings?.scheduleLeadMinutes as number) ? (raw.settings?.scheduleLeadMinutes as number) : DEFAULT_SETTINGS.scheduleLeadMinutes,
+        pinExpiryNotified: typeof raw.settings?.pinExpiryNotified === 'number' ? raw.settings.pinExpiryNotified : null,
       },
       messages: sanitizeMessages(raw.messages),
       schedule: sanitizeSchedule(raw.schedule),

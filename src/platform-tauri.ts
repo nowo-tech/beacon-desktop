@@ -37,6 +37,8 @@ export function tauriPlatform(): Platform {
     // No redirects: the Bearer token stays bound to the configured server (audit CN D8).
     fetch: nativeFetch((request: NativeRequest) => invoke<NativeResponse>('beacon_fetch', { request })),
     connectionSecurity: (server) => invoke<ConnectionSecurity>('connection_security', { server }),
+    // Every request and the updater are bound to this origin in Rust (audit FY-L1).
+    bindServer: (server) => invoke('beacon_bind', { server }),
     appVersion: () => getVersion(),
     hostName: async () => (navigator.platform.toLowerCase().includes('mac') ? 'Mac' : navigator.platform.toLowerCase().includes('win') ? 'Windows PC' : 'Linux PC'),
     secretGet: () => invoke<string | null>('secret_get'),

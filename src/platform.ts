@@ -133,6 +133,11 @@ export interface Platform {
   fetch: typeof fetch;
   /** TLS pinning state for `server`; `null` when the host does not know (plain browser: the browser validates TLS). */
   connectionSecurity(server: string): Promise<ConnectionSecurity | null>;
+  /**
+   * Binds `fetch` and the updater to `server`'s origin (Rust `beacon_bind`): before the sign-in requests and at
+   * start-up. Requests to any other origin are refused; switching servers needs `secretDelete` first.
+   */
+  bindServer(server: string): Promise<void>;
   appVersion(): Promise<string>;
   hostName(): Promise<string>;
   secretGet(): Promise<string | null>;
@@ -215,6 +220,8 @@ export interface BrowserHooks {
   promptFails: boolean;
   /** What the fake host answers for the connection's TLS pinning (`null`: unknown, nothing shown). */
   connectionSecurity: ConnectionSecurity | null;
+  /** The server the app bound (`bindServer`), `null` after `secretDelete`. */
+  boundServer: string | null;
   shortcutPressed(): void;
   trayAction(action: string): void;
   /** The fake heartbeat fires. */
@@ -264,6 +271,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     promptFocused: 0,
     promptFails: false,
     connectionSecurity: null,
+    boundServer: null,
     shortcutPressed: () => shortcutHandlers.forEach((handler) => handler()),
     trayAction: (action) => trayHandlers.forEach((handler) => handler(action)),
     wake: (reason = 'tick') => wakeHandlers.forEach((handler) => handler(reason)),
@@ -288,8 +296,17 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     appVersion: async () => version,
     hostName: async () => 'Browser',
     secretGet: async () => secret,
+    bindServer: async (server) => {
+      if (secret !== null && hooks.boundServer !== null && new URL(hooks.boundServer).origin !== new URL(server).origin) {
+        throw new Error('signed in to another server: sign out first');
+      }
+      hooks.boundServer = server;
+    },
     secretSet: async (token) => void (secret = token),
-    secretDelete: async () => void (secret = null),
+    secretDelete: async () => {
+      secret = null;
+      hooks.boundServer = null;
+    },
     idleSeconds: async () => hooks.idleSeconds,
     openUrl: async (url) => void hooks.opened.push(url),
     copyText: async (text) => void hooks.copied.push(text),

@@ -280,6 +280,7 @@
   "connPinned": "Secure connection: {host} is verified against the certificate keys built into the app (set {version}).",
   "connNotPinned": "Connection not pinned: {host} is checked with standard TLS validation only.",
   "connPinExpired": "Certificate pinning of this version has expired: update the app. {host} is checked with standard TLS validation meanwhile.",
+  "pinExpiredTitle": "Update TimeTrack: certificate pinning has expired",
   "scheduleTitle": "My schedule",
   "scheduleReminders": "Working-hours reminders",
   "scheduleRemindersHelp": "A note at your start time, at lunch and at the end of the day, with a button to start or stop the timer. None on holidays or vacations, and never hours late after the computer slept.",

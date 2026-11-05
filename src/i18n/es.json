@@ -280,6 +280,7 @@
   "connPinned": "Conexión segura: {host} se verifica con las claves de certificado incluidas en la app (conjunto {version}).",
   "connNotPinned": "Conexión no fijada: {host} se comprueba solo con la validación TLS estándar.",
   "connPinExpired": "La fijación de certificados de esta versión ha caducado: actualiza la app. Mientras tanto, {host} se comprueba con la validación TLS estándar.",
+  "pinExpiredTitle": "Actualiza TimeTrack: la fijación de certificados ha caducado",
   "scheduleTitle": "Mi horario",
   "scheduleReminders": "Recordatorios de horario",
   "scheduleRemindersHelp": "Un aviso a tu hora de entrada, al ir a comer y al terminar la jornada, con un botón para empezar o parar el temporizador. Nunca en vacaciones ni festivos, ni horas tarde si el equipo estuvo en reposo.",
