@@ -5,6 +5,9 @@ export default defineConfig({
   test: {
     include: ['tests/unit/**/*.test.ts'],
     environment: 'node',
+    // Friendly messages and schedule reminders depend on the local time: every test gets the same zone (tests that
+    // need another one pass it explicitly).
+    env: { TZ: 'UTC' },
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts', 'scripts/**/*.mjs'],

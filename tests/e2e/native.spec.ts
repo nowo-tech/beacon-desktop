@@ -49,15 +49,39 @@ async function startLongTimer(page: Page, seconds: number) {
   await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
 }
 
+/**
+ * Friendly messages depend on the time of day (coffee at 15:00, lunch, late work…) and on the working hours: the
+ * tests that assert one run on a fixed clock, Tuesday 3 November 2026 14:00 UTC (no moment due in English), with no
+ * working hours on the mock. Call before `signIn`.
+ */
+const QUIET_HOUR = new Date('2026-11-03T14:00:00Z');
+async function quietClock(page: Page) {
+  await page.clock.setFixedTime(QUIET_HOUR);
+}
+
+/** A timer on T-101 that has run `seconds` by the fixed clock (the mock's own clock is the real one). */
+async function runningFor(page: Page, seconds: number) {
+  await page.locator('[data-task="T-101"] .row-action').click();
+  await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
+  await page.evaluate((ago) => {
+    const app = (window as unknown as { __timeTrack: { app: { state: { activeTimer: { startedAt: string } | null }; render(): void } } }).__timeTrack.app;
+    app.state = { ...app.state, activeTimer: { ...(app.state.activeTimer as { startedAt: string }), startedAt: new Date(Date.now() - ago * 1000).toISOString() } };
+    app.render();
+  }, seconds);
+}
+
+test.use({ timezoneId: 'UTC' });
+
 test.beforeEach(async () => {
   await control('reset', {});
   await control('config', { deviceInterval: 1 });
 });
 
 test('a friendly message goes out as a desktop notification, not as a toast; the window explains it once', async ({ page }) => {
+  await quietClock(page);
   await signIn(page);
   await page.evaluate(() => void ((window as unknown as Tt).__timeTrack.hooks.notificationPermission = 'granted'));
-  await startLongTimer(page, 2 * 3600 + 60);
+  await runningFor(page, 2 * 3600 + 60);
   await page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.wake('tick'));
   await expect.poll(() => page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.friendly.length)).toBe(1);
   const [sent] = await page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.friendly);
@@ -73,9 +97,10 @@ test('a friendly message goes out as a desktop notification, not as a toast; the
 });
 
 test('denied by the OS: the toast stays and Settings says so', async ({ page }) => {
+  await quietClock(page);
   await signIn(page);
   await page.evaluate(() => void ((window as unknown as Tt).__timeTrack.hooks.notificationPermission = 'denied'));
-  await startLongTimer(page, 2 * 3600 + 60);
+  await runningFor(page, 2 * 3600 + 60);
   await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.tick());
   await expect(page.locator('#cheer')).toBeVisible();
   await expect(page.getByRole('region', { name: 'Desktop notifications are off' })).toBeVisible();
@@ -128,8 +153,9 @@ test('tray: pause friendly messages for an hour and resume', async ({ page }) =>
 });
 
 test('the in-app toast never covers the last task rows', async ({ page }) => {
+  await quietClock(page);
   await signIn(page);
-  await startLongTimer(page, 2 * 3600 + 60);
+  await runningFor(page, 2 * 3600 + 60);
   await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.tick());
   const toast = page.locator('#cheer');
   await expect(toast).toBeVisible();

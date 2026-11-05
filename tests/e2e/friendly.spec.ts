@@ -20,6 +20,8 @@ async function signIn(page: Page) {
   await expect(page.locator('#tasks li')).toHaveCount(8, { timeout: 15_000 });
 }
 
+test.use({ timezoneId: 'UTC' });
+
 test.beforeEach(async () => {
   await control('reset', {});
   await control('config', { deviceInterval: 1 });
@@ -28,11 +30,17 @@ test.beforeEach(async () => {
 for (const scheme of ['light', 'dark'] as const) {
   test(`cheer card (${scheme}): non-blocking, never takes focus, accessible, dismissible, follows Settings`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
+    // A fixed, quiet hour (no coffee / lunch / late moment in English, no working hours on the mock), so the card is
+    // the 2 h milestone whatever time CI runs.
+    await page.clock.setFixedTime(new Date('2026-11-03T14:00:00Z'));
     await signIn(page);
     await page.locator('[data-task="T-101"] .row-action').click();
     await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
-    await control('timer/backdate', { seconds: 2 * 3600 + 60 });
-    await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
+    await page.evaluate(() => {
+      const app = (window as unknown as { __timeTrack: { app: { state: { activeTimer: { startedAt: string } | null }; render(): void } } }).__timeTrack.app;
+      app.state = { ...app.state, activeTimer: { ...(app.state.activeTimer as { startedAt: string }), startedAt: new Date(Date.now() - (2 * 3600 + 60) * 1000).toISOString() } };
+      app.render();
+    });
     await page.locator('#search').focus();
     await page.keyboard.type('onb');
     await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.tick());
