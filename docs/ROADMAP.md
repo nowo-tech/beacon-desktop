@@ -20,7 +20,7 @@ Scales used below:
 
 | # | Item | Status | Value | Effort | Privacy | Owner |
 |---|---|---|---|---|---|---|
-| 1 | **Continue last, global shortcut and time in the tray**: one click or `Ctrl/Cmd+Alt+T` (window hidden or not) starts the last task again; the tray shows the elapsed time (macOS menu-bar title, tooltip everywhere), refreshed by the Rust heartbeat | Done / 0.5.0 | High | S | 0 | desktop |
+| 1 | **Continue last, global shortcut and time in the tray**: one click or `Ctrl/Cmd+Alt+T` (`Ctrl+Alt+Shift+R` on Linux; window hidden or not) starts the last task again; the tray shows the elapsed time (macOS menu-bar title, tooltip everywhere), refreshed by the Rust heartbeat | Done / 0.5.0 | High | S | 0 | desktop |
 | 2 | **Three answers on return from idle**: keep · discard (stop at the idle start) · reassign to another task or a quick "Meeting", from pinned, recent or a search | Done / 0.5.0 (desktop) | High | S | 0 | desktop (extension to follow) |
 | 3 | **"Working without a timer?"** reminder during working hours (Start last / Choose task, at most every 45 min) and **pause on screen lock or sleep** with the same three answers on return | Done / 0.5.0 | High | S | 0–1 (OS signals stay local) | desktop |
 | 4 | **Estimate, remaining and logged time** of the task in the timer card and the task rows | Next, after 0.5.0 — waiting for the API: TimeTrackBundle's `GET tasks` / `GET timer` do not publish the estimate or the time logged yet (request below) | High | S | 0 | TimeTrackBundle, then desktop and extension |

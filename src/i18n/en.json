@@ -364,7 +364,7 @@
   "reassignSave": "Move the time here",
   "helpersTitle": "Continue, reminders and lock",
   "resumeShortcutLabel": "“Continue last” shortcut",
-  "resumeShortcutHelp": "Starts your last task again (a new entry) from any app, even with TimeTrack hidden in the tray. Format: CommandOrControl+Alt+T.",
+  "resumeShortcutHelp": "Starts your last task again (a new entry) from any app, even with TimeTrack hidden in the tray. Default: Ctrl+Alt+T (⌘⌥T on macOS, Ctrl+Alt+Shift+R on Linux). Format: CommandOrControl+Alt+T.",
   "shortcutSame": "“{shortcut}” is already the other shortcut: choose a different one.",
   "nudgeSwitch": "Remind me when I work without a timer during my working hours",
   "nudgeMinutes": "After (minutes of activity)",

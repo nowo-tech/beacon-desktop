@@ -20,7 +20,7 @@ import {
 } from '../../src/lib/nudge';
 import { type Week, EMPTY_SCHEDULE, mergeWeek } from '../../src/lib/schedule';
 import { DEFAULT_SETTINGS, loadLocal, migrateResumeShortcut } from '../../src/lib/settings';
-import { DEFAULT_RESUME_SHORTCUT, OLD_DEFAULT_RESUME_SHORTCUT } from '../../src/platform';
+import { DEFAULT_RESUME_SHORTCUT, defaultResumeShortcut, hostOs, LINUX_RESUME_SHORTCUT, OLD_DEFAULT_RESUME_SHORTCUT } from '../../src/platform';
 import { shortcutLabel } from '../../src/ui/app';
 
 const T0 = Date.parse('2026-11-03T13:45:00Z');
@@ -236,26 +236,42 @@ describe('"Working without a timer?"', () => {
 describe('settings of the quick wins', () => {
   const storage = (value: unknown) => ({ getItem: () => JSON.stringify(value), setItem: () => undefined }) as unknown as Storage;
 
-  it('defaults: the "Continue last" shortcut, the nudge after 10 minutes and the pause on lock, all on', () => {
-    expect(DEFAULT_SETTINGS).toMatchObject({ resumeShortcut: DEFAULT_RESUME_SHORTCUT, nudgeWithoutTimer: true, nudgeMinutes: 10, pauseOnLock: true });
-    // Owner decision 2026-11-05: ⌘⌥Space is Finder search on macOS.
+  it('defaults: the "Continue last" shortcut of this system, the nudge after 10 minutes and the pause on lock, all on', () => {
+    expect(DEFAULT_SETTINGS).toMatchObject({ resumeShortcut: defaultResumeShortcut(), nudgeWithoutTimer: true, nudgeMinutes: 10, pauseOnLock: true });
+    // Owner decision 2026-11-05: ⌘⌥Space is Finder search on macOS; Ctrl+Alt+T opens a terminal on Ubuntu / GNOME.
     expect(DEFAULT_RESUME_SHORTCUT).toBe('CommandOrControl+Alt+T');
-    expect(DEFAULT_RESUME_SHORTCUT).not.toBe(DEFAULT_SETTINGS.shortcut);
+    expect(LINUX_RESUME_SHORTCUT).toBe('CommandOrControl+Alt+Shift+R');
+    expect(defaultResumeShortcut('windows')).toBe('CommandOrControl+Alt+T');
+    expect(defaultResumeShortcut('mac')).toBe('CommandOrControl+Alt+T');
+    expect(defaultResumeShortcut('other')).toBe('CommandOrControl+Alt+T');
+    expect(defaultResumeShortcut('linux')).toBe('CommandOrControl+Alt+Shift+R');
+    // Never the same keys as the window shortcut (Ctrl+Alt+Shift+T), on any system.
+    for (const os of ['windows', 'mac', 'linux', 'other'] as const) expect(defaultResumeShortcut(os).toLowerCase()).not.toBe(DEFAULT_SETTINGS.shortcut.toLowerCase());
+    // happy-dom reports X11 / Linux.
+    expect(hostOs()).toBe('linux');
+    expect(hostOs({ platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' })).toBe('windows');
+    expect(hostOs({ platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)' })).toBe('mac');
+    expect(hostOs({ platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; Linux x86_64)' })).toBe('linux');
+    expect(hostOs({})).toBe('other');
     expect(loadLocal(storage({})).nudge).toEqual(EMPTY_NUDGE);
   });
 
-  it('moves a stored "Continue last" shortcut still on the old default to the new one, keeps custom ones', () => {
+  it("moves a stored 'Continue last' shortcut still on the old default to its system's new default, keeps custom ones", () => {
     expect(OLD_DEFAULT_RESUME_SHORTCUT).toBe('CommandOrControl+Alt+Space');
     for (const old of ['CommandOrControl+Alt+Space', 'commandorcontrol+alt+space', 'CmdOrCtrl+Alt+Space', ' CommandOrControl + Alt + Space ']) {
-      expect(migrateResumeShortcut(old)).toBe('CommandOrControl+Alt+T');
-      expect(loadLocal(storage({ settings: { resumeShortcut: old } })).settings.resumeShortcut).toBe('CommandOrControl+Alt+T');
+      expect(migrateResumeShortcut(old, 'windows')).toBe('CommandOrControl+Alt+T');
+      expect(migrateResumeShortcut(old, 'mac')).toBe('CommandOrControl+Alt+T');
+      expect(migrateResumeShortcut(old, 'linux')).toBe('CommandOrControl+Alt+Shift+R');
+      // loadLocal uses this system (Linux under happy-dom).
+      expect(loadLocal(storage({ settings: { resumeShortcut: old } })).settings.resumeShortcut).toBe('CommandOrControl+Alt+Shift+R');
     }
     for (const custom of ['Alt+F9', 'Control+Alt+Space', 'CommandOrControl+Shift+Space', 'CommandOrControl+Alt+T']) {
-      expect(migrateResumeShortcut(custom)).toBe(custom);
+      for (const os of ['windows', 'mac', 'linux'] as const) expect(migrateResumeShortcut(custom, os)).toBe(custom);
       expect(loadLocal(storage({ settings: { resumeShortcut: custom } })).settings.resumeShortcut).toBe(custom);
     }
-    expect(migrateResumeShortcut(undefined)).toBe('CommandOrControl+Alt+T');
-    expect(migrateResumeShortcut(42)).toBe('CommandOrControl+Alt+T');
+    expect(migrateResumeShortcut(undefined, 'mac')).toBe('CommandOrControl+Alt+T');
+    expect(migrateResumeShortcut(42, 'linux')).toBe('CommandOrControl+Alt+Shift+R');
+    expect(migrateResumeShortcut('  ')).toBe(defaultResumeShortcut());
     // The "open" shortcut is not touched.
     expect(loadLocal(storage({ settings: { shortcut: 'CommandOrControl+Alt+Space' } })).settings.shortcut).toBe('CommandOrControl+Alt+Space');
   });
@@ -265,7 +281,7 @@ describe('settings of the quick wins', () => {
     expect(kept.settings).toMatchObject({ resumeShortcut: 'Alt+F9', nudgeWithoutTimer: false, nudgeMinutes: 20, pauseOnLock: false });
     expect(kept.nudge.lastAt).toBe(at(0).toISOString());
     const dropped = loadLocal(storage({ settings: { resumeShortcut: '  ', nudgeWithoutTimer: 'yes', nudgeMinutes: 7, pauseOnLock: 1 } }));
-    expect(dropped.settings).toMatchObject({ resumeShortcut: DEFAULT_RESUME_SHORTCUT, nudgeWithoutTimer: true, nudgeMinutes: 10, pauseOnLock: true });
+    expect(dropped.settings).toMatchObject({ resumeShortcut: defaultResumeShortcut(), nudgeWithoutTimer: true, nudgeMinutes: 10, pauseOnLock: true });
   });
 
   it('shows shortcuts as people read them', () => {
@@ -273,6 +289,7 @@ describe('settings of the quick wins', () => {
     expect(shortcutLabel('CommandOrControl+Alt+Space', true)).toBe('⌘⌥Space');
     expect(shortcutLabel('CommandOrControl+Alt+T', false)).toBe('Ctrl+Alt+T');
     expect(shortcutLabel('CommandOrControl+Alt+T', true)).toBe('⌘⌥T');
+    expect(shortcutLabel('CommandOrControl+Alt+Shift+R', false)).toBe('Ctrl+Alt+Shift+R');
     expect(shortcutLabel('Control+Shift+F9', false)).toBe('Ctrl+Shift+F9');
     expect(shortcutLabel('Super + Option + K', true)).toBe('⌘⌥K');
     expect(shortcutLabel('Cmd+Ctrl+X', false)).toBe('Cmd+Ctrl+X');

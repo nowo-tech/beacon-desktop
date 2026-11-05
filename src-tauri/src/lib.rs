@@ -35,8 +35,9 @@ const TRAY_ID: &str = "main";
 /// Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME; the UI can change it (Settings).
 const DEFAULT_SHORTCUT: &str = "CommandOrControl+Alt+Shift+T";
 /// Shortcut slots of `set_global_shortcut`: show the window and search, or "Continue the last task" (registered by the
-/// UI at start; default `CommandOrControl+Alt+T` since 0.5.0 (the previews' `CommandOrControl+Alt+Space` is Finder search
-/// on macOS; the UI migrates it), Settings can change it).
+/// UI at start; default `CommandOrControl+Alt+T` on Windows / macOS and `CommandOrControl+Alt+Shift+R` on Linux, where
+/// Ctrl+Alt+T opens a terminal; the previews' `CommandOrControl+Alt+Space` is Finder search on macOS and the UI migrates
+/// it; Settings can change it).
 const SLOT_OPEN: &str = "open";
 const SLOT_RESUME: &str = "resume";
 

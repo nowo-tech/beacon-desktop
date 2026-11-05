@@ -155,10 +155,28 @@ export interface WindowHost {
 
 /** Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME, so the default adds Shift. */
 export const DEFAULT_SHORTCUT = 'CommandOrControl+Alt+Shift+T';
-/** Default "Continue the last task" shortcut (Ctrl+Alt+T, ⌘⌥T on macOS). */
+/** Default "Continue the last task" shortcut on Windows and macOS (Ctrl+Alt+T, ⌘⌥T). */
 export const DEFAULT_RESUME_SHORTCUT = 'CommandOrControl+Alt+T';
+/** On Linux Ctrl+Alt+T opens a terminal (Ubuntu / GNOME), so "R" for resume: Ctrl+Alt+Shift+R. */
+export const LINUX_RESUME_SHORTCUT = 'CommandOrControl+Alt+Shift+R';
 /** The 0.5.0 previews' default (⌘⌥Space is taken by Finder search on macOS); migrated to the new one on load. */
 export const OLD_DEFAULT_RESUME_SHORTCUT = 'CommandOrControl+Alt+Space';
+
+export type HostOs = 'windows' | 'mac' | 'linux' | 'other';
+
+/** The system the window runs on, from the webview's navigator (`other` when it cannot tell). */
+export function hostOs(nav: { platform?: string; userAgent?: string } | undefined = globalThis.navigator): HostOs {
+  const text = `${nav?.platform ?? ''} ${nav?.userAgent ?? ''}`;
+  if (/mac/i.test(text)) return 'mac';
+  if (/win/i.test(text)) return 'windows';
+  if (/linux|x11|bsd/i.test(text)) return 'linux';
+  return 'other';
+}
+
+/** The default "Continue last" shortcut of a system (owner decision 2026-11-05). */
+export function defaultResumeShortcut(os: HostOs = hostOs()): string {
+  return os === 'linux' ? LINUX_RESUME_SHORTCUT : DEFAULT_RESUME_SHORTCUT;
+}
 
 export interface Platform {
   readonly kind: 'tauri' | 'browser';

@@ -10,9 +10,10 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 the update (that copy was installed for all users in Program Files). Approve it to remove the old copy, or decline and
 remove *TimeTrack* 0.1.0 later from Settings → Apps. Installing 0.5.0 by hand asks before removing it.
 
-**"Continue last" shortcut:** the default is now **Ctrl+Alt+T** (⌘⌥T on macOS); ⌘⌥Space of the previews is Finder
-search on macOS. A stored shortcut still at the old default moves to the new one, any other is kept. On Ubuntu /
-GNOME Ctrl+Alt+T opens a terminal: if Settings says the shortcut is in use, choose another one there.
+**"Continue last" shortcut:** the default is now **Ctrl+Alt+T** on Windows, **⌘⌥T** on macOS (⌘⌥Space of the
+previews is Finder search) and **Ctrl+Alt+Shift+R** on Linux (Ctrl+Alt+T opens a terminal on Ubuntu / GNOME; the
+window shortcut stays Ctrl+Alt+Shift+T). A stored shortcut still at the old default moves to the new default of its
+system, any other is kept.
 
 ### Added
 
@@ -39,7 +40,7 @@ GNOME Ctrl+Alt+T opens a terminal: if Settings says the shortcut is in use, choo
   `pnpm screenshots:layout` writes Spanish review screenshots of both views and the width in between. The mock
   server gets `POST /__mock/entries/seed`.
 - **Continue last** (desktop quick win Q1–Q3): the stopped timer card's button now reads *Continue last* and shows the
-  global shortcut; a second global shortcut (`set_global_shortcut` slot `resume`, default `CommandOrControl+Alt+T`,
+  global shortcut; a second global shortcut (`set_global_shortcut` slot `resume`, default `CommandOrControl+Alt+T`, `CommandOrControl+Alt+Shift+R` on Linux,
   Settings → *Continue, reminders and lock*) starts the last task again as a new entry with the window hidden. The
   tray's elapsed time is refreshed every minute by the Rust heartbeat (`tray_clock.rs`; `set_tray_status` takes an
   optional `clock` with the start and the translated templates): menu-bar title on macOS, tooltip everywhere.

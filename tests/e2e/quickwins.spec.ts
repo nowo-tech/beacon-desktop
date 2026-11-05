@@ -154,7 +154,8 @@ test('Settings: the "Continue last" shortcut, the nudge and the lock switches ar
   await signIn(page);
   await page.keyboard.press('Control+,');
   await expect(page.locator('#helpers-title')).toHaveText('Continue, reminders and lock');
-  await expect(page.locator('#resume-shortcut')).toHaveValue('CommandOrControl+Alt+T');
+  // Linux default (Ctrl+Alt+T is the terminal there); the e2e browser runs on Linux.
+  await expect(page.locator('#resume-shortcut')).toHaveValue('CommandOrControl+Alt+Shift+R');
   await expect(page.getByLabel('Remind me when I work without a timer during my working hours')).toBeChecked();
   await expect(page.getByLabel('Pause on screen lock or sleep')).toBeChecked();
   expect(await axe(page)).toEqual([]);

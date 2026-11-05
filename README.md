@@ -187,8 +187,8 @@ tasks in Beacon*.
 ### Continue, three answers on return, lock pause and "working without a timer?"
 
 - **Continue last**: one click on the stopped timer card, or the global shortcut **Ctrl/Cmd + Alt + T**
-  (configurable in Settings, works with the window hidden in the tray; on Ubuntu / GNOME Ctrl+Alt+T opens a terminal,
-  so choose another one if Settings says it is in use), starts the last task again as a new entry. The
+  (**Ctrl + Alt + Shift + R** on Linux, where Ctrl+Alt+T opens a terminal; configurable in Settings, works with the
+  window hidden in the tray), starts the last task again as a new entry. The
   tray shows the running time on its own (macOS menu-bar title, tooltip on every system), refreshed every minute by the
   Rust heartbeat (`src-tauri/src/tray_clock.rs`).
 - **Three answers on return from idle** (the "Still there?" prompt, its own window or the in-app modal): **Keep** ·

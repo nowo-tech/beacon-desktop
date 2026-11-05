@@ -1,5 +1,5 @@
 import type { Scope, Task, Timer } from '../api/types';
-import { DEFAULT_RESUME_SHORTCUT, DEFAULT_SHORTCUT, OLD_DEFAULT_RESUME_SHORTCUT } from '../platform';
+import { defaultResumeShortcut, DEFAULT_SHORTCUT, type HostOs, hostOs, OLD_DEFAULT_RESUME_SHORTCUT } from '../platform';
 import { EMPTY_MESSAGES, type MessageState, sanitizeMessages } from './friendly';
 import { type IdleCheckState, WATCHING } from './idleCheck';
 import { DEFAULT_NUDGE_MINUTES, EMPTY_NUDGE, NUDGE_MINUTES_CHOICES, type NudgeState, sanitizeNudge } from './nudge';
@@ -126,7 +126,7 @@ export const DEFAULT_SETTINGS: Settings = {
   nativeIntroSeen: false,
   scheduleReminders: true,
   scheduleLeadMinutes: DEFAULT_LEAD_MINUTES,
-  resumeShortcut: DEFAULT_RESUME_SHORTCUT,
+  resumeShortcut: defaultResumeShortcut(),
   nudgeWithoutTimer: true,
   nudgeMinutes: DEFAULT_NUDGE_MINUTES,
   pauseOnLock: true,
@@ -159,12 +159,14 @@ export function emptyState(): LocalState {
 
 /**
  * The stored "Continue last" shortcut: the 0.5.0 previews defaulted to `CommandOrControl+Alt+Space` (Spotlight /
- * Finder search on macOS), so that value becomes the new default; any other shortcut the person set is kept.
+ * Finder search on macOS), so that value becomes this system's new default (`CommandOrControl+Alt+T` on Windows and
+ * macOS, `CommandOrControl+Alt+Shift+R` on Linux); any other shortcut the person set is kept.
  */
-export function migrateResumeShortcut(raw: unknown): string {
-  if (typeof raw !== 'string' || raw.trim() === '') return DEFAULT_RESUME_SHORTCUT;
+export function migrateResumeShortcut(raw: unknown, os: HostOs = hostOs()): string {
+  const fresh = defaultResumeShortcut(os);
+  if (typeof raw !== 'string' || raw.trim() === '') return fresh;
   const keys = (value: string) => value.toLowerCase().replace(/\s+/g, '').replace(/^cmdorctrl\+/, 'commandorcontrol+');
-  return keys(raw) === keys(OLD_DEFAULT_RESUME_SHORTCUT) ? DEFAULT_RESUME_SHORTCUT : raw;
+  return keys(raw) === keys(OLD_DEFAULT_RESUME_SHORTCUT) ? fresh : raw;
 }
 
 export function loadLocal(storage: Storage = localStorage): LocalState {

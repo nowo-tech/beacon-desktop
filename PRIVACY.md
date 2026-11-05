@@ -82,7 +82,7 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 
 ## "Continue last" shortcut and the tray clock
 
-- The global shortcut (Settings, `Ctrl+Alt+T` / `⌘⌥T` by default) is registered with your operating system
+- The global shortcut (Settings; by default `Ctrl+Alt+T`, `⌘⌥T` on macOS, `Ctrl+Alt+Shift+R` on Linux) is registered with your operating system
   only to know when *you* press it; no other key is read.
 - The tray shows the elapsed time of the running timer (macOS menu bar, tooltip everywhere), refreshed by the app's
   background heartbeat from the start time it already has. Nothing is sent for it.
