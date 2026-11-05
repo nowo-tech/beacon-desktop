@@ -57,7 +57,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE_WITH_TIMETRACK_UPDATER_PUBLIC_KEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIzOUU3RjkwNkM5MjM4OTMKUldTVE9KSnNrSCtlc3hMOHlWQlo0a3BkUlVaMHZ4b2ZpbWR5b3ZBamttMS9zTFdZa2Joa0NXNGUK",
       "endpoints": [],
       "requireSignedVersion": true,
       "windows": {

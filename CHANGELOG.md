@@ -32,7 +32,7 @@ Likely 0.5.0.
   `tests/screenshots/`): placeholder Beacon `https://beacon.example.test` and neutral demo data; new images of the
   Microsoft Store build (Settings → About, update required). The e2e tests no longer write screenshots.
 
-## [0.4.0] - unreleased
+## [0.4.0] - 2026-11-04
 
 Zero-cost signing and auto-update (owner decision 2026-11-04). Plan, Beacon changes and owner steps:
 [docs/RELEASE-PLAN-0.4.0.md](docs/RELEASE-PLAN-0.4.0.md).
@@ -64,7 +64,7 @@ Zero-cost signing and auto-update (owner decision 2026-11-04). Plan, Beacon chan
   they cannot use (the updater request carries `bundle_type`).
 - macOS bundles are ad-hoc signed (`signingIdentity: "-"`), so Apple Silicon shows the normal "cannot verify" prompt
   instead of "damaged".
-- The updater public key is committed in `tauri.conf.json` (placeholder until the owner adds it); the
+- The updater public key is committed in `tauri.conf.json` (the owner's minisign key, B39E7F906C923893); the
   `TAURI_UPDATER_PUBKEY` variable is now an optional override (also compiled in). The release workflow requires the
   signing key instead of skipping updater artifacts.
 - Release workflow runners come from repository variables (`LINUX_RUNNER`, `WINDOWS_RUNNER`, `MACOS_RUNNER`, JSON
