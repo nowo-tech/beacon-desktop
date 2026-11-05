@@ -5160,7 +5160,9 @@ version = "0.1.0"
 dependencies = [
  "core-foundation 0.10.1",
  "block2",
+ "core-foundation-sys",
  "keyring",
+ "libc",
  "notify-rust",
  "objc2-app-kit",
  "objc2-foundation",

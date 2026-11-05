@@ -25,6 +25,7 @@
     "screenshots:schedule": "SCHEDULE_SCREENS=${SCHEDULE_SCREENS:-out/schedule-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/schedule.spec.ts",
     "screenshots:layout": "LAYOUT_SCREENS=${LAYOUT_SCREENS:-out/layout-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/layout.spec.ts",
     "screenshots:links": "LINKS_SCREENS=${LINKS_SCREENS:-out/links-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/links.spec.ts",
+    "screenshots:meetings": "MEETING_SCREENS=${MEETING_SCREENS:-out/meeting-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/meetings.spec.ts",
     "mock": "node mock-server/server.mjs",
     "release:check": "node scripts/release/check-updater-key.mjs",
     "store:manifest": "node scripts/store/msix-manifest.mjs"

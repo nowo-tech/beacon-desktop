@@ -183,6 +183,7 @@ says so. Next to My time, a running task's link and *Open the page again* there 
 click (long press) on any Beacon link offers *Open in the browser* / *Copy link*; if no browser can be opened the link
 is copied instead. When the list is empty the mascot says what to do next: *Pin a task*, *Start a timer* or *Open the
 tasks in Beacon*.
+
 ### Continue, three answers on return, lock pause and "working without a timer?"
 
 - **Continue last**: one click on the stopped timer card, or the global shortcut **Ctrl/Cmd + Alt + Space**
@@ -200,6 +201,35 @@ tasks in Beacon*.
 - **"Working without a timer?"** (on by default): during your working hours, after N minutes of input (10 by default)
   with no timer, a friendly notification with *Start <last task>* and *Choose task*, at most once every 45 minutes,
   in the seven message languages.
+
+### Meeting detection (opt-in)
+
+Settings → **Meetings** → *Notice when I'm in a call and ask what to record it as* (off by default, dated consent).
+When Teams, Zoom, Webex, Slack, Discord, Skype, GoTo, Jitsi Meet or a browser (Google Meet, Jitsi or any web call) has
+held the microphone for 2 minutes (1, 2, 5 or 10, configurable), the app asks, as a desktop notification with the
+teamwork pose and in the window: "Looks like you're in a meeting (Teams). Which meeting is it?" — *Choose task*
+(meeting-like tasks first, then pinned and recent, or a search), *Generic meeting* (your generic meeting task, chosen
+once and changeable in Settings), *Not a meeting* or *Don't ask for this app*. With a non-meeting timer running it
+offers *Switch to the meeting* instead; with a meeting-like task already running (`taskKind`) it does not ask. When
+the microphone has been free for a minute: "Meeting over (32 min). Back to <previous task>?" with *Back* and *Stop*.
+During the call the "Still there?" prompt uses its softer meeting wording and longer countdown. Questions follow the
+1 h pause ("do not disturb"), wait while "Still there?" is open, come at most every 10 minutes, and, with no timer
+running, only within your working day (Settings → My schedule, days off).
+
+What is read, per OS (`src-tauri/src/meeting/`, every 20 s from the heartbeat, only while the switch is on):
+
+| OS | Microphone in use | Which app |
+|---|---|---|
+| Windows 10 / 11 | `HKCU\…\CapabilityAccessManager\ConsentStore\microphone`: an app with `LastUsedTimeStop = 0` | Its package family name (`MSTeams_8wekyb3d8bbwe`) or executable path (`NonPackaged`) |
+| macOS 14+ | CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere` on the default input | The audio process objects (`kAudioHardwarePropertyProcessObjectList`) with *running input*, by bundle id |
+| macOS 13 and older | The same | Known meeting apps among the running processes (a guess, `source: fallback`) |
+| Linux | `pactl list source-outputs` (PulseAudio, PipeWire-Pulse), not corked; `pw-dump` without `pactl` | `application.process.binary` |
+
+The identity is reduced at once to a fixed app id (`teams`, `zoom`, …, `browser`) or dropped: paths and unknown apps
+never reach the UI. No window titles, URLs, chats or audio are read; nothing about it is stored beyond the call's
+state (app id, start, end, the answer) in local storage, and nothing is sent (only the timer you choose). Settings
+shows what the last check found. `pnpm screenshots:meetings` (`MEETING_SCREENS=<dir>`) renders the questions and the
+settings in Spanish, light and dark.
 
 Everything stays on this computer except the entries you confirm — see [PRIVACY.md](PRIVACY.md). What comes next, and
 what TimeTrack deliberately will not do: [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -231,6 +261,9 @@ required" screen send you to the Store listing instead.
   The working-hours reminders add no command: their *Start* / *Stop* / *Resume* button travels in `notify_friendly`
   (ids allow-listed in Rust, `notify::ACTION_IDS`) and a press comes back as a `notification-action` event emitted
   to the `main` window only; the next reminder instant rides on `set_wake_plan` (`reminderAt`).
+  Meeting detection adds no command and no permission either: the UI turns it on with `set_wake_plan`
+  (`micEverySeconds`), the heartbeat sends `mic` events (known app ids only) to the `main` window, and its
+  notification buttons (`meeting-generic`, `meeting-switch`, `meeting-back`, `meeting-stop`) join `notify::ACTION_IDS`.
 - `src-tauri/capabilities/prompt.json`, window `prompt` (the "Still there?" window): `core:event:allow-listen` /
   `allow-unlisten` (its content) and `prompt_view`, `prompt_answer`, `prompt_show_main` ("Open TimeTrack"). No
   keychain, updater, tray, network, opener, notification, window or autostart permission.

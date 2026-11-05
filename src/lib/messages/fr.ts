@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows, type NudgeCatalog } from './types';
+import { f, hm, type Keywords, type MeetingCatalog, type NudgeCatalog, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** Français (tutoiement) : déjeuner vers midi, pause café à 10 h et à 16 h. */
 export const pools: Pools = {
@@ -236,4 +236,15 @@ export const nudge: NudgeCatalog = {
   title: 'Vous travaillez sans minuteur ?',
   lastTask: 'Dernière tâche : {task}.',
   actions: { resume: 'Lancer {task}', choose: 'Choisir une tâche' },
+};
+
+/** Meeting detection: the question while a call goes on, and the one when it ends. */
+export const meetings: MeetingCatalog = {
+  titles: { ask: 'Réunion ?', ended: 'Réunion terminée' },
+  ask: 'On dirait que tu es en réunion ({app}). C\'est quelle réunion ?',
+  askSwitch: 'On dirait que tu es en réunion ({app}) et le chrono tourne encore sur {task}. On passe à la réunion ?',
+  ended: 'Réunion terminée ({minutes} min). Revenir à {task} ?',
+  endedStop: 'Réunion terminée ({minutes} min). J\'arrête le chrono ?',
+  browser: 'appel dans le navigateur',
+  actions: { choose: 'Choisir une tâche', generic: 'Réunion générique', switch: 'Passer à la réunion', notMeeting: 'Pas une réunion', mute: 'Ne plus demander pour cette app', back: 'Revenir', stop: 'Arrêter' },
 };

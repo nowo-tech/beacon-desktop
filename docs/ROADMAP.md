@@ -20,9 +20,9 @@ Scales used below:
 
 | # | Item | Status | Value | Effort | Privacy | Owner |
 |---|---|---|---|---|---|---|
-| 1 | **Continue last, global shortcut and time in the tray**: one click or `Ctrl/Cmd+Alt+Space` (window hidden or not) starts the last task again; the tray shows the elapsed time (macOS menu-bar title, tooltip everywhere), refreshed by the Rust heartbeat | In progress / 0.5.x | High | S | 0 | desktop |
-| 2 | **Three answers on return from idle**: keep · discard (stop at the idle start) · reassign to another task or a quick "Meeting", from pinned, recent or a search | In progress / 0.5.x | High | S | 0 | desktop (extension to follow) |
-| 3 | **"Working without a timer?"** reminder during working hours (Start last / Choose task, at most every 45 min) and **pause on screen lock or sleep** with the same three answers on return | In progress / 0.5.x | High | S | 0–1 (OS signals stay local) | desktop |
+| 1 | **Continue last, global shortcut and time in the tray**: one click or `Ctrl/Cmd+Alt+Space` (window hidden or not) starts the last task again; the tray shows the elapsed time (macOS menu-bar title, tooltip everywhere), refreshed by the Rust heartbeat | Done / 0.5.0 | High | S | 0 | desktop |
+| 2 | **Three answers on return from idle**: keep · discard (stop at the idle start) · reassign to another task or a quick "Meeting", from pinned, recent or a search | Done / 0.5.0 (desktop) | High | S | 0 | desktop (extension to follow) |
+| 3 | **"Working without a timer?"** reminder during working hours (Start last / Choose task, at most every 45 min) and **pause on screen lock or sleep** with the same three answers on return | Done / 0.5.0 | High | S | 0–1 (OS signals stay local) | desktop |
 | 4 | **Estimate, remaining and logged time** of the task in the timer card and the task rows | In progress / 0.5.x — waiting for the API: TimeTrackBundle's `GET tasks` / `GET timer` do not publish the estimate or the time logged yet (request below) | High | S | 0 | TimeTrackBundle, then desktop and extension |
 | 5 | **Timer button inside Beacon's task cards** through the browser extension: start, stop and see the remaining time on the card itself | Planned | High | M | 0 | extension (Beacon markup hooks) |
 | 6 | **Calendar suggestions** (Google / Microsoft 365, read-only OAuth): an event whose title has the task key is proposed as an entry; dailies are grouped | Planned | High | M | 1 | desktop and extension (suggestions confirmed by the user) |
@@ -30,6 +30,31 @@ Scales used below:
 | 8 | **Optional Pomodoro, personal goals and focus mode** tied to the mascot (breaks it announces, daily / weekly goal with a kind progress in the tray, "do not disturb" during a block). Off by default, never rankings or comparisons with others | Planned | Medium | S–M | 0 | desktop and extension |
 | 9 | **Private local timeline** (opt-in): app and window title, and the domain from the extension, recorded **only on this computer** with pause, exclusion list, deletion and short retention (e.g. 14 days); one click turns it into a **timesheet draft** the user edits and confirms | Planned | High | L | 2 | desktop and extension |
 | 10 | **Working day, hours balance, holidays and overtime** (contracted hours, Spain's RDL 8/2019 working-time record) and **budget vs actual** per project with 80 % / 100 % alerts | Planned | High | L | 0–1 | Beacon / TimeTrackBundle |
+
+### Also in 0.5.0: meeting detection
+
+| Item | Status | Privacy risk | Owner |
+|---|---|---|---|
+| **Meeting detection** (opt-in): notice a call in Teams, Zoom, Webex, Slack, a browser (Google Meet, Jitsi…) and similar apps from the microphone being in use, ask which meeting it is (a task, the generic meeting, "not a meeting", "don't ask for this app") and offer to go back to the previous task when the call ends | Done / 0.5.0 | 1 (local only, opt-in) | desktop |
+
+#### Meeting detection and the "not doing" rules
+
+Meeting detection reads an activity signal, so it follows the rule below for anything near monitoring:
+
+- **Opt-in**: off by default, turned on in Settings with a dated consent record, revocable at any time (turning it off
+  stops the checks and deletes the call's state).
+- **Local-first**: the microphone state and the app's identity are read on the computer every 20 seconds and reduced
+  at once to a fixed app name (Teams, Zoom, …, "browser"); nothing about the call is stored beyond its state in local
+  storage, and **nothing is sent to the server**. Only the timer action the person chooses reaches Beacon, as any
+  manual action does.
+- **Transparent**: Settings explains exactly what is read and shows what the last check found; PRIVACY.md lists it.
+- **Minimal** (GDPR art. 5(1)(c)): only "is the microphone in use" and "which meeting app holds it". **No window
+  titles, URLs, chats, participants or audio** — a Google Meet tab is only "a browser call".
+- **Not employer monitoring** (Estatuto de los Trabajadores art. 20.3; LOPDGDD art. 87, privacy in the use of digital
+  devices at work): it only helps the worker record their own time; the employer sees nothing the worker did not
+  record.
+- Calendar integration, window titles or URLs to name the meeting automatically are **not** part of it; any such idea
+  would be a separate, opt-in item reviewed with a DPIA first.
 
 ### API request for item 4 (TimeTrackBundle)
 
@@ -80,7 +105,8 @@ excluded on purpose:
 |---|---|
 | **Screenshots** (even blurred) | They capture personal data and third parties' data (mail, health, chats) far beyond what time tracking needs. |
 | **Keyboard / mouse activity scores visible to managers** | They measure movement, not work: reading, thinking and meetings score low; they invite "mouse jigglers" and are the most resented bossware metric. |
-| **Sending URLs or app usage to the server** | That is surveillance of browsing and private life. If the local timeline (item 9) comes, it stays on the computer. |
+| **Sending URLs, window titles or app usage to the server** | That is surveillance of browsing and private life. If the local timeline (item 9) comes, it stays on the computer; meeting detection reads the microphone holder locally and sends nothing. |
+| **Recording or analysing audio** | Meeting detection never opens the microphone or reads its level. |
 | **GPS, webcam or kiosk photos** | Location and biometric data are high-risk and disproportionate for office or remote work. |
 | **Forced timers** (no manual entries) | It treats people as suspects and blocks the legitimate correction of a forgotten timer; kind reminders and approval work better. |
 | **Peer rankings or leaderboards** | They reward hours, not results, push presenteeism and clash with wellbeing. Personal goals are fine; comparisons are not. |

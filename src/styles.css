@@ -388,3 +388,17 @@ input[type='time'], input[type='date'] { font: inherit; padding: 0.25rem 0.375re
 .reassign-option:hover, .reassign-option:has(input:checked) { background: var(--mist); }
 .reassign-option input { accent-color: var(--moss); flex: none; }
 .toast-actions { display: flex; flex-wrap: wrap; gap: 0.375rem; margin-top: 0.375rem; }
+/* Meeting detection (0.5.x): the question's answers and its short task picker; Settings → Meetings. */
+.toast-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.75rem; }
+.toast-link { font-size: 0.8125rem; padding: 0.125rem 0; }
+.meeting-toast .toast-art { align-self: flex-start; }
+.meeting-picker { display: grid; gap: 0.375rem; width: 100%; justify-self: stretch; min-width: 0; }
+.meeting-picker .help { margin: 0; font-size: 0.8125rem; }
+.meeting-picker input[type='search'] { font: inherit; font-size: 0.875rem; width: 100%; min-width: 0; box-sizing: border-box; padding: 0.25rem 0.5rem; border: 1px solid var(--control-border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); }
+.meeting-tasks { display: grid; gap: 0.125rem; max-height: 10rem; overflow-y: auto; }
+.meeting-tasks li { display: flex; align-items: center; gap: 0.375rem; min-width: 0; }
+.meeting-task { display: block; text-align: left; font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+.meeting-picker #meeting-picker-cancel { justify-self: start; }
+.meeting-badge { border-color: var(--moss); color: var(--moss-deep); background: var(--mist); }
+.meeting-options { display: grid; gap: 0.375rem; }
+.meeting-muted-list li { padding: 0.125rem 0; }

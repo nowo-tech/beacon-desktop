@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows, type NudgeCatalog } from './types';
+import { f, hm, type Keywords, type MeetingCatalog, type NudgeCatalog, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** English. */
 export const pools: Pools = {
@@ -236,4 +236,15 @@ export const nudge: NudgeCatalog = {
   title: 'Working without a timer?',
   lastTask: 'Last task: {task}.',
   actions: { resume: 'Start {task}', choose: 'Choose task' },
+};
+
+/** Meeting detection: the question while a call goes on, and the one when it ends. */
+export const meetings: MeetingCatalog = {
+  titles: { ask: 'Meeting?', ended: 'Meeting over' },
+  ask: 'Looks like you\'re in a meeting ({app}). Which meeting is it?',
+  askSwitch: 'Looks like you\'re in a meeting ({app}) and the clock is still on {task}. Switch to the meeting?',
+  ended: 'Meeting over ({minutes} min). Back to {task}?',
+  endedStop: 'Meeting over ({minutes} min). Stop the timer?',
+  browser: 'browser call',
+  actions: { choose: 'Choose task', generic: 'Generic meeting', switch: 'Switch to the meeting', notMeeting: 'Not a meeting', mute: 'Don\'t ask for this app', back: 'Back', stop: 'Stop' },
 };

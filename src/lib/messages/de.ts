@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows, type NudgeCatalog } from './types';
+import { f, hm, type Keywords, type MeetingCatalog, type NudgeCatalog, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** Deutsch (du): Kaffee und Kuchen am Nachmittag, früher Mittag. */
 export const pools: Pools = {
@@ -236,4 +236,15 @@ export const nudge: NudgeCatalog = {
   title: 'Arbeit ohne Timer?',
   lastTask: 'Letzte Aufgabe: {task}.',
   actions: { resume: '{task} starten', choose: 'Aufgabe wählen' },
+};
+
+/** Meeting detection: the question while a call goes on, and the one when it ends. */
+export const meetings: MeetingCatalog = {
+  titles: { ask: 'Meeting?', ended: 'Meeting beendet' },
+  ask: 'Sieht nach einem Meeting aus ({app}). Welches Meeting ist es?',
+  askSwitch: 'Sieht nach einem Meeting aus ({app}), und die Uhr läuft noch auf {task}. Zum Meeting wechseln?',
+  ended: 'Meeting beendet ({minutes} Min.). Zurück zu {task}?',
+  endedStop: 'Meeting beendet ({minutes} Min.). Uhr stoppen?',
+  browser: 'Anruf im Browser',
+  actions: { choose: 'Aufgabe wählen', generic: 'Allgemeines Meeting', switch: 'Zum Meeting wechseln', notMeeting: 'Kein Meeting', mute: 'Bei dieser App nicht fragen', back: 'Zurück', stop: 'Stoppen' },
 };

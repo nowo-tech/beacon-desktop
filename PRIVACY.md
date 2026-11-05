@@ -16,7 +16,8 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - The search text you type in the "Reassign" task picker (the same `tasks` search as the main search field).
 - The app version, platform, architecture and installer kind (for example `nsis` or `appimage`) when it checks for
   updates. The Microsoft Store build never checks with Beacon: the Store updates it.
-- Nothing else: no screenshots, keystrokes, applications, window titles, URLs, activity or idle state.
+- Nothing else: no screenshots, keystrokes, applications, window titles, URLs, activity or idle state. With meeting
+  detection on, which meeting app holds the microphone is checked on this computer and never sent (below).
 
 ## Stored on this computer
 
@@ -108,6 +109,32 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - As desktop notifications, their title, line, picture and button label are handed to your operating system like the
   friendly messages. Pressing *Start* / *Stop* / *Resume* does what the same button in the app does (`timer/start`,
   `timer/stop`).
+
+## Meeting detection (off by default, dated consent)
+
+- **What is read, and only while you have it on** (Settings → Meetings): every 20 seconds, on this computer, whether
+  the microphone is in use and which app holds it — on Windows the per-user microphone "recent activity" store
+  (`CapabilityAccessManager\ConsentStore\microphone`, the same list Windows shows in its privacy settings), on macOS
+  CoreAudio (is the default input running, and which audio processes record), on Linux the sound server's recording
+  streams (`pactl` / `pw-dump`, the `application.process.binary` of each). The app's identity is reduced at once to a
+  fixed name (Teams, Zoom, Webex, Slack, Discord, Skype, GoTo, Jitsi Meet, or "browser"); any other app and every path
+  are dropped there and then.
+- **Never read**: window titles, web addresses (a Google Meet tab is only "a browser call"), chats, participants,
+  calendar entries, audio or its level. The microphone is never opened by the app.
+- **Stored on this computer**: the call in progress (app name, start, when the microphone was released, when the last
+  question was asked), the task you chose for it and the one running before (id and title, to offer "Back to …"), your
+  generic meeting task and the apps you said not to ask about. Signing out deletes the call; turning the feature off
+  deletes it too.
+- **Sent**: nothing about the call. Only what you choose in the question reaches Beacon, as any other timer action
+  (`timer/start`, `timer/switch`, `timer/stop`).
+- The questions are desktop notifications like the friendly messages (title, line, pose and one button handed to your
+  OS) and a card in the window. They follow the 1 h pause, never come while "Still there?" is open, at most every 10
+  minutes, and, with no timer running, only within your working day and not on days off.
+- Why this stays within the rules of `docs/ROADMAP.md` ("Deliberately NOT doing"): it is opt-in, local-first and
+  transparent (Settings shows what the last check found), it reads the minimum needed to ask one question (GDPR art.
+  5(1)(c), data minimisation), it is no monitoring tool for the employer (Estatuto de los Trabajadores art. 20.3:
+  nothing reaches the employer unless you record it yourself) and it respects privacy in the use of digital devices at
+  work (LOPDGDD art. 87).
 
 ## Optional features (off by default, dated consent, revocable in Settings)
 

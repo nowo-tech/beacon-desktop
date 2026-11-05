@@ -1,0 +1,22 @@
+Windows Registry Editor Version 5.00
+
+; Zoom desktop and Google Meet in Chrome both hold the microphone (values anonymised).
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone]
+"Value"="Allow"
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\MSTeams_8wekyb3d8bbwe]
+"Value"="Allow"
+"LastUsedTimeStart"=hex(b):5e,4d,3c,2b,1f,4e,dc,01
+"LastUsedTimeStop"=hex(b):5e,4d,3c,9b,1f,4e,dc,01
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\NonPackaged]
+"Value"="Allow"
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\NonPackaged\C:#Users#ana#AppData#Roaming#Zoom#bin#Zoom.exe]
+"LastUsedTimeStart"=hex(b):00,11,22,33,2f,4e,dc,01
+"LastUsedTimeStop"=hex(b):00,00,00,00,00,00,00,00
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\NonPackaged\C:#Program Files#Google#Chrome#Application#chrome.exe]
+"LastUsedTimeStart"=hex(b):00,aa,bb,cc,2f,4e,dc,01
+"LastUsedTimeStop"=hex(b):00,00,00,00,00,00,00,00

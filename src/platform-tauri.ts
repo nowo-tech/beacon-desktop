@@ -112,6 +112,8 @@ export function tauriPlatform(): Platform {
     setWakePlan: (plan) => invoke('set_wake_plan', { plan }),
     // A button of a working-hours reminder notification (src-tauri/src/notify.rs, known ids only).
     onNotificationAction: (handler) => void listen<string>('notification-action', (event) => handler(event.payload)),
+    // Meeting detection: what holds the microphone, from the heartbeat (src-tauri/src/meeting, app ids only).
+    onMic: (handler) => void listen<unknown>('mic', (event) => handler(event.payload)),
     promptWindow: promptHost,
     windowHost: windowHost(),
     // Title bar / native menus follow the app's theme; `null` hands it back to the system (capability core:window:allow-set-theme).

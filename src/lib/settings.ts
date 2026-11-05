@@ -4,12 +4,13 @@ import { EMPTY_MESSAGES, type MessageState, sanitizeMessages } from './friendly'
 import { type BrowserChoice, sanitizeBrowser, SYSTEM_BROWSER } from './links';
 import { type IdleCheckState, WATCHING } from './idleCheck';
 import { DEFAULT_NUDGE_MINUTES, EMPTY_NUDGE, NUDGE_MINUTES_CHOICES, type NudgeState, sanitizeNudge } from './nudge';
+import { DEFAULT_MIN_CALL_MINUTES, type MeetingApp, type MeetingState, MIN_CALL_CHOICES, NO_MEETING, sanitizeMeeting, sanitizeMuted, sanitizeTaskRef, type TaskRef } from './meetings';
 import { DEFAULT_LEAD_MINUTES, EMPTY_SCHEDULE, LEAD_CHOICES, sanitizeSchedule, type ScheduleState } from './schedule';
 import type { ServerFeatures } from './serverFeatures';
 import { isTheme, type ThemePreference } from './theme';
 
 /** Opt-in features. Each one is off by default and keeps a dated consent record. */
-export type Feature = 'idleDetection' | 'notifications' | 'autostart';
+export type Feature = 'idleDetection' | 'notifications' | 'autostart' | 'meetingDetection';
 
 export interface ConsentRecord {
   granted: boolean;
@@ -57,6 +58,14 @@ export interface Settings {
   nudgeMinutes: number;
   /** A screen lock or system sleep counts as idle, and the return asks what to do with it (on by default). */
   pauseOnLock: boolean;
+  /** Meeting detection (opt-in, off by default, dated consent): notice calls (microphone in use by a meeting app). */
+  meetingDetection: boolean;
+  /** Ask what a call is once it lasted this many minutes (`MIN_CALL_CHOICES`). */
+  meetingMinMinutes: number;
+  /** The task "Generic meeting" starts (chosen once, changeable in Settings). */
+  meetingGeneric: TaskRef | null;
+  /** Apps whose calls are never asked about ("Don't ask for this app"). */
+  meetingMuted: MeetingApp[];
 }
 
 /**
@@ -102,6 +111,8 @@ export interface LocalState {
   schedule: ScheduleState;
   /** "Working without a timer?": current stretch and last nudge. Local only. */
   nudge: NudgeState;
+  /** Meeting detection: the call going on and the question about it (app id and times only). Local only. */
+  meeting: MeetingState;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -123,6 +134,10 @@ export const DEFAULT_SETTINGS: Settings = {
   nudgeWithoutTimer: true,
   nudgeMinutes: DEFAULT_NUDGE_MINUTES,
   pauseOnLock: true,
+  meetingDetection: false,
+  meetingMinMinutes: DEFAULT_MIN_CALL_MINUTES,
+  meetingGeneric: null,
+  meetingMuted: [],
 };
 
 const KEY = 'time-track-desktop';
@@ -142,6 +157,7 @@ export function emptyState(): LocalState {
     messages: { ...EMPTY_MESSAGES },
     schedule: { ...EMPTY_SCHEDULE },
     nudge: { ...EMPTY_NUDGE },
+    meeting: { ...NO_MEETING },
   };
 }
 
@@ -169,7 +185,12 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
         nudgeWithoutTimer: typeof raw.settings?.nudgeWithoutTimer === 'boolean' ? raw.settings.nudgeWithoutTimer : DEFAULT_SETTINGS.nudgeWithoutTimer,
         nudgeMinutes: NUDGE_MINUTES_CHOICES.includes(raw.settings?.nudgeMinutes as number) ? (raw.settings?.nudgeMinutes as number) : DEFAULT_SETTINGS.nudgeMinutes,
         pauseOnLock: typeof raw.settings?.pauseOnLock === 'boolean' ? raw.settings.pauseOnLock : DEFAULT_SETTINGS.pauseOnLock,
+        meetingDetection: raw.settings?.meetingDetection === true,
+        meetingMinMinutes: MIN_CALL_CHOICES.includes(raw.settings?.meetingMinMinutes as number) ? (raw.settings?.meetingMinMinutes as number) : DEFAULT_SETTINGS.meetingMinMinutes,
+        meetingGeneric: sanitizeTaskRef(raw.settings?.meetingGeneric),
+        meetingMuted: sanitizeMuted(raw.settings?.meetingMuted),
       },
+      meeting: sanitizeMeeting(raw.meeting),
       messages: sanitizeMessages(raw.messages),
       schedule: sanitizeSchedule(raw.schedule),
       nudge: sanitizeNudge(raw.nudge),

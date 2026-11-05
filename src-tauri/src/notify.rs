@@ -40,13 +40,18 @@ pub struct NoteAction {
     pub label: String,
 }
 
-/// The only button ids the UI may ask for (`src/lib/reminders.ts`, `src/lib/nudge.ts`).
-pub const ACTION_IDS: [&str; 5] = [
+/// The only button ids the UI may ask for (`src/lib/reminders.ts`, `src/lib/nudge.ts`, and the meeting questions of
+/// `src/lib/meetings.ts`).
+pub const ACTION_IDS: [&str; 9] = [
     "schedule-start",
     "schedule-stop",
     "schedule-resume",
     "nudge-resume",
     "nudge-choose",
+    "meeting-generic",
+    "meeting-switch",
+    "meeting-back",
+    "meeting-stop",
 ];
 /// Buttons that need the window (the task picker).
 const SHOWS_WINDOW: [&str; 1] = ["nudge-choose"];
@@ -449,6 +454,11 @@ mod tests {
             })
         );
         assert_eq!(checked_action(&note("open-url", "Go")), None);
+        assert_eq!(
+            checked_action(&note("meeting-back", "Volver")).map(|a| a.id),
+            Some("meeting-back".to_string())
+        );
+        assert_eq!(checked_action(&note("meeting-open-url", "Go")), None);
         assert_eq!(checked_action(&note("schedule-start", "  ")), None);
         let long = checked_action(&note("schedule-resume", &"x".repeat(60))).unwrap();
         assert_eq!(long.label.chars().count(), LABEL_MAX);
