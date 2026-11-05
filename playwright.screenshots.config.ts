@@ -12,7 +12,7 @@ export default defineConfig({
   reporter: 'list',
   use: { viewport: { width: 400, height: 640 }, locale: 'en-US', timezoneId: 'UTC' },
   projects: [
-    { name: 'direct', testMatch: ['direct.spec.ts', 'moments.spec.ts', 'friendly.spec.ts', 'native.spec.ts', 'schedule.spec.ts'], use: { baseURL: 'http://127.0.0.1:1420' } },
+    { name: 'direct', testMatch: ['direct.spec.ts', 'moments.spec.ts', 'friendly.spec.ts', 'native.spec.ts', 'schedule.spec.ts', 'meetings.spec.ts'], use: { baseURL: 'http://127.0.0.1:1420' } },
     { name: 'store', testMatch: 'store.spec.ts', use: { baseURL: 'http://127.0.0.1:1421' } },
   ],
   webServer: [

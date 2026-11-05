@@ -115,6 +115,24 @@ Likely 0.5.0.
     Settings → My schedule, the four reminders as Windows toasts and the in-app toast, light and dark, in Spanish.
   - Mock server: `daysOff` and `locale` on `GET me` (config).
 
+- **Meeting detection** (opt-in, off by default, dated consent; Settings → Meetings): when a known meeting app (Teams,
+  Zoom, Webex, Slack, Discord, Skype, GoTo, Jitsi Meet) or a browser call holds the microphone for 2 minutes
+  (configurable 1 / 2 / 5 / 10), a desktop notification (falling back to an in-app toast) with the teamwork pose asks
+  "Looks like you're in a meeting (Teams). Which meeting is it?": *Choose task* (meeting-like tasks first, pinned,
+  recent, search), *Generic meeting* (asked once, then remembered), *Not a meeting*, *Don't ask for this app*; with a
+  non-meeting timer running, *Switch to the meeting*. Nothing is asked while a meeting-like task already runs. When the
+  microphone stays free for a minute: "Meeting over (32 min). Back to <previous task>?" with *Back* / *Stop*. During
+  the call the "Still there?" prompt is the softer meeting one. Questions respect the 1 h pause, the "Still there?"
+  question, working hours / days off (with no timer running) and a 10-minute gap. Texts in the seven message languages,
+  UI in English and Spanish.
+  - Rust: `src-tauri/src/meeting/` with a `MicDetector` per OS (Windows microphone consent store via `winreg`, macOS
+    CoreAudio default input + process objects on 14+ with a running-apps fallback, Linux `pactl` / `pw-dump`), pure
+    parsers tested on recorded fixtures (`src-tauri/tests/fixtures/meeting/`). Polled by the heartbeat every 20 s
+    (`WakePlan.micEverySeconds`, clamped to 15–30 s) only while the switch is on; `mic` events carry app ids only. No
+    new command or capability.
+  - UI: `src/lib/meetings.ts` (state machine: debounce, end grace, rate limit, notes), `src/ui/meetings.ts` (toast,
+    picker, Settings), `pnpm screenshots:meetings`.
+
 ### Security
 
 - App commands are ACL-scoped (security review 2026-11-05, FN-L1): `build.rs` declares them in the app manifest
