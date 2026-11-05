@@ -1,11 +1,19 @@
-//! TimeTrack desktop shell: tray, global shortcut, OS keychain, local idle time and the Beacon updater.
+//! TimeTrack desktop shell: tray, global shortcut, OS keychain, local idle time, the Beacon updater, the wall-clock
+//! heartbeat (`heartbeat.rs`), native friendly-message notifications (`notify.rs`) and the "Still there?" window
+//! (`prompt.rs`). Closing the window keeps the app (and the timer, the idle check and the messages) running in the tray.
 //!
 //! Privacy by design: nothing here observes the user's activity beyond the OS "seconds since last input" counter,
 //! which never leaves the device. The UI reads it every 30 s while a timer runs, only to decide when to ask "Still
 //! there?"; it is not stored, logged or sent (only the user's answer is).
 
+mod heartbeat;
+mod notify;
+mod pose_art;
+mod prompt;
+
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -56,6 +64,10 @@ struct TrayMenuSpec {
     my_time: Option<String>,
     /// "Check for updates" (absent in the Microsoft Store build, where the Store updates the app).
     check_updates: Option<String>,
+    /// "Pause friendly messages for 1 h" (`pause-friendly`) or "Friendly messages paused until …" (`resume-friendly`);
+    /// absent with both message switches off.
+    #[serde(default)]
+    pause_friendly: Option<TrayMenuItem>,
     settings: String,
     quit: String,
 }
@@ -64,7 +76,15 @@ struct TrayMenuSpec {
 fn tray_action_allowed(id: &str) -> bool {
     matches!(
         id,
-        "stop" | "resume" | "search" | "open-beacon" | "my-time" | "check-updates" | "settings"
+        "stop"
+            | "resume"
+            | "search"
+            | "open-beacon"
+            | "my-time"
+            | "check-updates"
+            | "settings"
+            | "pause-friendly"
+            | "resume-friendly"
     ) || (id.starts_with("switch:") && id.len() > 7 && id.len() <= 200)
 }
 
@@ -176,8 +196,8 @@ fn set_tray_status(app: AppHandle, status: TrayStatus) -> Result<(), String> {
 }
 
 /// Rebuilds the tray menu with the UI's translated labels and quick tasks:
-/// status · Stop / Resume · Switch to ▸ · Search task… · — · Open TimeTrack · Open Beacon · My time · — · Check for updates…
-/// · Settings… · Quit.
+/// status · Stop / Resume · Switch to ▸ · Search task… · — · Open TimeTrack · Open Beacon · My time · — · Pause friendly
+/// messages 1 h · Check for updates… · Settings… · Quit.
 #[tauri::command]
 fn set_tray_menu(app: AppHandle, menu: TrayMenuSpec) -> Result<(), String> {
     let err = |e: tauri::Error| e.to_string();
@@ -236,6 +256,16 @@ fn set_tray_menu(app: AppHandle, menu: TrayMenuSpec) -> Result<(), String> {
     built
         .append(&PredefinedMenuItem::separator(&app).map_err(err)?)
         .map_err(err)?;
+    if let Some(item) = menu
+        .pause_friendly
+        .filter(|item| tray_action_allowed(&item.id))
+    {
+        built
+            .append(
+                &MenuItem::with_id(&app, item.id, &item.label, true, None::<&str>).map_err(err)?,
+            )
+            .map_err(err)?;
+    }
     if let Some(label) = menu.check_updates {
         built
             .append(
@@ -579,12 +609,88 @@ async fn install_update(app: AppHandle, server: String, token: String) -> Result
     app.restart()
 }
 
-fn show_main(app: &AppHandle) {
+pub(crate) fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+/// When the main window last lost the focus. A click on the tray icon takes the focus from the window first (Windows),
+/// so "the window was focused a moment ago" counts as focused.
+#[derive(Default)]
+struct MainFocus {
+    blurred_at: Mutex<Option<Instant>>,
+}
+
+const RECENT_FOCUS: Duration = Duration::from_millis(600);
+
+/// Left click on the tray icon: hide a window the person is looking at, otherwise bring it forward.
+fn tray_click_hides(
+    visible: bool,
+    minimized: bool,
+    focused: bool,
+    blurred_ago: Option<Duration>,
+) -> bool {
+    visible && !minimized && (focused || blurred_ago.is_some_and(|ago| ago < RECENT_FOCUS))
+}
+
+fn toggle_main(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let blurred_ago = app
+        .try_state::<MainFocus>()
+        .and_then(|state| state.blurred_at.lock().ok().and_then(|at| *at))
+        .map(|at| at.elapsed());
+    let hide = tray_click_hides(
+        window.is_visible().unwrap_or(false),
+        window.is_minimized().unwrap_or(false),
+        window.is_focused().unwrap_or(false),
+        blurred_ago,
+    );
+    if hide {
+        let _ = window.hide();
+    } else {
+        show_main(app);
+    }
+}
+
+/// Heartbeat state shared by the thread and `set_wake_plan`.
+struct HeartbeatState(Mutex<heartbeat::Heartbeat>);
+
+/// What the UI wants to be woken for besides the 30 s tick: the end of the countdown, the idle threshold.
+#[tauri::command]
+fn set_wake_plan(app: AppHandle, plan: heartbeat::WakePlan) -> Result<(), String> {
+    app.state::<HeartbeatState>()
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .set_plan(plan);
+    Ok(())
+}
+
+/// Polls the wall clock every second and wakes the main window (`wake` events) on time, hidden or not.
+fn spawn_heartbeat(app: AppHandle) {
+    let _ = std::thread::Builder::new()
+        .name("heartbeat".into())
+        .spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(heartbeat::POLL_MS));
+            let wake = match app.state::<HeartbeatState>().0.lock() {
+                Ok(mut beat) => beat.poll(heartbeat::now_ms(), idle_seconds),
+                Err(_) => None,
+            };
+            if let Some(wake) = wake {
+                let _ = app.emit_to("main", "wake", wake);
+            }
+        });
+}
+
+/// A friendly message as a native notification (see notify.rs). An error makes the UI show it inside the app.
+#[tauri::command]
+fn notify_friendly(app: AppHandle, note: notify::FriendlyNote) -> Result<(), String> {
+    notify::show(&app, &note)
 }
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
@@ -619,7 +725,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 ..
             } = event
             {
-                show_main(tray.app_handle());
+                toggle_main(tray.app_handle());
             }
         });
     let (running, stopped) = match &base {
@@ -674,7 +780,11 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            app.manage(HeartbeatState(Mutex::new(heartbeat::Heartbeat::new())));
+            app.manage(MainFocus::default());
+            app.manage(prompt::PromptState::default());
             build_tray(app)?;
+            spawn_heartbeat(app.handle().clone());
             // Started at login (opt-in autostart passes --hidden): stay in the tray.
             if std::env::args().any(|arg| arg == "--hidden") {
                 if let Some(window) = app.get_webview_window("main") {
@@ -691,12 +801,26 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            // Closing the window keeps the tray timer running; "Quit" is in the tray menu.
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            // Closing (or minimising) the main window keeps the app in the tray: the timer, the idle check and the
+            // friendly messages go on (heartbeat thread). "Quit" is in the tray menu.
+            WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
                 api.prevent_close();
                 let _ = window.hide();
             }
+            // The "Still there?" window needs an answer: closing it is refused (the main window closes it).
+            WindowEvent::CloseRequested { api, .. } if window.label() == prompt::LABEL => {
+                api.prevent_close();
+                let _ = window.set_focus();
+            }
+            WindowEvent::Focused(focused) if window.label() == "main" => {
+                if let Some(state) = window.app_handle().try_state::<MainFocus>() {
+                    if let Ok(mut at) = state.blurred_at.lock() {
+                        *at = (!focused).then(Instant::now);
+                    }
+                }
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             secret_get,
@@ -707,7 +831,14 @@ pub fn run() {
             set_tray_menu,
             set_global_shortcut,
             check_update,
-            install_update
+            install_update,
+            set_wake_plan,
+            notify_friendly,
+            prompt::prompt_open,
+            prompt::prompt_view,
+            prompt::prompt_answer,
+            prompt::prompt_focus,
+            prompt::prompt_close
         ])
         .run(tauri::generate_context!())
         .expect("error while running TimeTrack");
@@ -738,6 +869,8 @@ mod tests {
             "my-time",
             "check-updates",
             "settings",
+            "pause-friendly",
+            "resume-friendly",
             "switch:T-1",
         ] {
             assert!(tray_action_allowed(id), "{id}");
@@ -786,6 +919,36 @@ mod tests {
         )
         .expect("store spec");
         assert!(store.check_updates.is_none());
+    }
+
+    #[test]
+    fn tray_menu_spec_accepts_the_pause_item_and_older_uis_without_it() {
+        let spec: TrayMenuSpec = serde_json::from_str(
+            r#"{"primary":null,"switchLabel":"s","switchTo":[],"search":"s","open":"o","openBeacon":null,"myTime":null,"checkUpdates":null,"pauseFriendly":{"id":"pause-friendly","label":"Pause friendly messages for 1 h"},"settings":"s","quit":"q"}"#,
+        )
+        .expect("spec");
+        assert_eq!(
+            spec.pause_friendly.map(|item| item.id).as_deref(),
+            Some("pause-friendly")
+        );
+        let old: TrayMenuSpec = serde_json::from_str(
+            r#"{"primary":null,"switchLabel":"s","switchTo":[],"search":"s","open":"o","openBeacon":null,"myTime":null,"checkUpdates":null,"settings":"s","quit":"q"}"#,
+        )
+        .expect("old spec");
+        assert!(old.pause_friendly.is_none());
+    }
+
+    #[test]
+    fn tray_click_toggles_the_window() {
+        let ms = Duration::from_millis;
+        // Looking at it (focused, or it lost the focus to the tray click a moment ago): hide.
+        assert!(tray_click_hides(true, false, true, None));
+        assert!(tray_click_hides(true, false, false, Some(ms(120))));
+        // Hidden, minimised, or behind other windows for a while: bring it forward.
+        assert!(!tray_click_hides(false, false, false, None));
+        assert!(!tray_click_hides(true, true, false, Some(ms(10))));
+        assert!(!tray_click_hides(true, false, false, Some(ms(5_000))));
+        assert!(!tray_click_hides(true, false, false, None));
     }
 
     #[test]

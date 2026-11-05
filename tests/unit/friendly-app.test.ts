@@ -176,7 +176,7 @@ describe('friendly messages in the app', () => {
     ui.app.destroy();
   });
 
-  it('no card without a running timer or outside the main view', async () => {
+  it('no card without a running timer; on another view it is planned (desktop notification) but no toast is drawn', async () => {
     const ui = await signedIn();
     ui.app.checkFriendly();
     expect(ui.$('#cheer')).toBeNull();
@@ -184,7 +184,8 @@ describe('friendly messages in the app', () => {
     running(ui, 121);
     ui.app.show('settings');
     ui.app.checkFriendly();
-    expect(ui.app.state.messages.card).toBeNull();
+    expect(ui.app.state.messages.card?.kind).toBe('milestone');
+    expect(ui.$('#cheer')).toBeNull();
     ui.app.dismissCheer();
     ui.app.destroy();
   });

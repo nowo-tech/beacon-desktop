@@ -30,9 +30,12 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 
 ## "Still there?" check
 
-- While a timer runs, the app reads the OS "seconds since last input" counter every 30 seconds, on this computer, only
-  to decide when to ask whether you are still there. The counter is never stored, logged or sent. Screen lock and sleep
-  count as idle.
+- While a timer runs and nobody was asked yet, the app reads the OS "seconds since last input" counter once a second
+  (in its background heartbeat, so the question comes on time even with the window closed to the tray), on this
+  computer, only to decide when to ask whether you are still there. The counter is never stored, logged or sent.
+  Screen lock and sleep count as idle.
+- The question opens in its own small window in the middle of the screen, on top of other windows; it holds only what
+  the main window shows there and sends nothing itself.
 - Your organisation turns it on or off and sets the wait (TimeTrackBundle 1.10, `GET me`); you can make the wait
   longer in Settings. With a server that does not say (1.9), it is off until you turn it on (dated consent).
 - With no answer, the timer stops at your last input and the app asks you about that time when you are back.
@@ -43,6 +46,12 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
   lunch, late work, Friday afternoon, weekend) are chosen on this computer from the running timer's start and the
   clock, in your Beacon language and time zone when the server says (`me.locale`, `me.workingHours.timezone`). Nothing
   about them is sent. Settings → Friendly messages turns them off.
+- They appear as **desktop notifications** (Windows Action Center, macOS Notification Center, the Linux notification
+  service): the title, the line and the mascot picture are handed to your operating system, which may keep them in
+  its notification history on this computer like any other app's. Nothing goes to a server. The pictures are written
+  once to the app's cache folder (the OS needs a file). Settings → Friendly messages → *Show them as desktop
+  notifications* keeps them inside the app instead; if the OS refuses them, they stay inside the app and Settings says
+  so. *Pause for 1 h* (also in the tray menu) silences them for an hour.
 - To recognise meetings and dailies, the name, type and labels of the running task (as Beacon sent them) are matched
   against a word list on this computer; nothing extra is stored or sent.
 

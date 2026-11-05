@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type Titles, w, type Windows } from './types';
 
 /** Nederlands (je): vroege lunch, koffie om tien en om drie. */
 export const pools: Pools = {
@@ -117,8 +117,8 @@ export const pools: Pools = {
     f('Al {hours} uur. De robot haalt de pompons tevoorschijn!', 'cheer-up'),
   ],
   overtime: [
-    w('{hours} uur op de klok. Batterij bijna leeg: tijd voor een echte pauze.', 'overtime'),
-    w('Dat is een heel lange zit. Neem alsjeblieft tien minuten afstand.', 'overtime'),
+    w('Al lang op de klok. Batterij bijna leeg: tijd voor een echte pauze.', 'overtime'),
+    w('Dat is een heel lange zit. Neem alsjeblieft een paar minuten afstand.', 'overtime'),
     w('Zelfs robots laden op. Misschien is het jouw beurt?', 'rest'),
     w('Lange dag! Rek je uit, drink water en kijk of je kunt afronden.', 'stretch'),
     w('De zandloper zegt dat het al een tijd is. Een pauze doet wonderen.', 'overtime'),
@@ -167,4 +167,20 @@ export const keywords: Keywords = {
   meeting: ['vergadering', 'overleg', 'meeting', 'call', 'gesprek', 'sync', '1:1'],
   technical: ['sprint review', 'sprintreview', 'refinement', 'planning', 'retro', 'retrospective', 'demo', 'technisch'],
   training: ['training', 'cursus', 'workshop', 'opleiding'],
+};
+
+/** Titles of the desktop notifications (short; the line is the body). */
+export const titles: Titles = {
+  cheer: 'Goed bezig',
+  milestone: 'Mijlpaal!',
+  overtime: 'Tijd voor pauze',
+  earlyBird: 'Vroege start',
+  coffee: 'Koffiepauze?',
+  lunch: 'Lunchtijd',
+  lateWork: 'Het wordt laat',
+  friday: 'Fijne vrijdag',
+  weekend: 'Weekendmodus',
+  weekendRest: 'Geniet van je weekend',
+  meetingAfter: 'Na de meeting',
+  dailyDone: 'Daily klaar',
 };

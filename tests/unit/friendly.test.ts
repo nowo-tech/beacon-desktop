@@ -393,7 +393,10 @@ describe('cards', () => {
     const card = { kind: 'lunch', line: 2, locale: 'es', entry: 'e', shownAt: '2026-11-03T10:00:00Z' };
     expect(
       sanitizeMessages({ recent: { idle: [1, -1, 'x', 2.5, 3], bogus: [1], lunch: 'no' }, idleLine: 4, card, lastShownAt: 'nope', seen: ['a', 3] }),
-    ).toEqual({ recent: { idle: [1, 3] }, idleLine: 4, card: { ...card, dismissed: false }, lastShownAt: null, seen: ['a'], afterMeeting: null });
+    ).toEqual({ recent: { idle: [1, 3] }, idleLine: 4, card: { ...card, dismissed: false }, lastShownAt: null, seen: ['a'], afterMeeting: null, pausedUntil: null });
+    expect(sanitizeMessages({ pausedUntil: '2026-11-03T11:00:00Z', card: { ...card, delivered: 'desktop' } })).toMatchObject({ pausedUntil: '2026-11-03T11:00:00Z', card: { delivered: 'desktop' } });
+    expect(sanitizeMessages({ pausedUntil: 'later', card: { ...card, delivered: 'pigeon' } })).toMatchObject({ pausedUntil: null, card: { ...card, dismissed: false } });
+    expect(sanitizeMessages({ card: { ...card, delivered: 'pigeon' } }).card).not.toHaveProperty('delivered');
     expect(sanitizeMessages({ afterMeeting: '2026-11-03T10:00:00Z' }).afterMeeting).toBe('2026-11-03T10:00:00Z');
     expect(sanitizeMessages({ afterMeeting: 'soon', card: { ...card, kind: 'dailyDone' } })).toMatchObject({ afterMeeting: null, card: null });
     expect(sanitizeMessages({ card: { ...card, kind: 'idle' }, idleLine: -2, recent: null }).card).toBeNull();
@@ -416,12 +419,23 @@ describe('stretch thresholds', () => {
       for (const name of POOL_KINDS) {
         for (const line of CATALOG[locale].pools[name]) {
           expect(line.text, `${locale}.${name}`).not.toMatch(hourWords);
-          if (line.text.includes('{hours}')) expect(['cheer', 'milestone', 'overtime'], `${locale}.${name}`).toContain(name);
+          if (line.text.includes('{hours}')) expect(['cheer', 'milestone'], `${locale}.${name}`).toContain(name);
         }
       }
     }
-    // Overtime shows the real hours (6 or more), never a smaller milestone number.
-    expect(lineText('es', 'overtime', 0, { hours: 7 })?.text).toContain('7 horas');
+  });
+
+  it('overtime lines carry no figure at all (owner decision): no {hours}, no digits, no number words', () => {
+    const numberWords = /\b(one|two|three|four|five|six|seven|eight|nine|ten|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|zehn|dix|dieci|tien|dez)\b/iu;
+    for (const locale of MESSAGE_LOCALES) {
+      for (const line of CATALOG[locale].pools.overtime) {
+        expect(line.text, `${locale}.overtime`).not.toContain('{hours}');
+        expect(line.text, `${locale}.overtime`).not.toMatch(/\d/);
+        expect(line.text, `${locale}.overtime`).not.toMatch(numberWords);
+      }
+      // Whatever the elapsed time, the rendered text is the line itself.
+      expect(lineText(locale, 'overtime', 0, { hours: 7 })?.text).toBe(CATALOG[locale].pools.overtime[0]?.text);
+    }
   });
 });
 

@@ -7,7 +7,27 @@ import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import type { Platform, UpdateCheck, UpdateProgress } from './platform';
+import type { NotificationPermission, Platform, PromptClient, PromptHost, UpdateCheck, UpdateProgress, WakeReason } from './platform';
+import type { PromptAnswer, PromptView } from './ui/prompt';
+
+const permission = (state: string): NotificationPermission => (state === 'granted' ? 'granted' : state === 'denied' ? 'denied' : 'prompt');
+
+/** The "Still there?" window (src-tauri/src/prompt.rs): its content goes over `prompt_open`, answers come back as events. */
+const promptHost: PromptHost = {
+  open: (view) => invoke('prompt_open', { view }),
+  focus: () => invoke('prompt_focus'),
+  close: () => invoke('prompt_close'),
+  onAnswer: (handler) => void listen<PromptAnswer>('prompt-answer', (event) => handler(event.payload)),
+};
+
+/** Inside the prompt window. */
+export function tauriPromptClient(): PromptClient {
+  return {
+    view: () => invoke<PromptView | null>('prompt_view'),
+    onView: (handler) => void listen<PromptView>('prompt-view', (event) => handler(event.payload)),
+    answer: (answer) => invoke('prompt_answer', { answer }),
+  };
+}
 
 export function tauriPlatform(): Platform {
   return {
@@ -42,6 +62,21 @@ export function tauriPlatform(): Platform {
       if (!granted) granted = (await requestPermission()) === 'granted';
       if (granted) sendNotification({ title, body });
     },
+    // Native notification with the pose and click-to-open, from Rust (src-tauri/src/notify.rs).
+    notifyFriendly: async (note) => {
+      try {
+        await invoke('notify_friendly', { note });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    notificationPermission: async () => ((await isPermissionGranted()) ? 'granted' : 'prompt'),
+    requestNotificationPermission: async () => permission(await requestPermission()),
+    // The Rust heartbeat keeps the checks on time while the window is hidden (src-tauri/src/heartbeat.rs).
+    onWake: (handler) => void listen<{ reason: WakeReason }>('wake', (event) => handler(event.payload.reason)),
+    setWakePlan: (plan) => invoke('set_wake_plan', { plan }),
+    promptWindow: promptHost,
     // Title bar / native menus follow the app's theme; `null` hands it back to the system (capability core:window:allow-set-theme).
     setWindowTheme: (theme) => getCurrentWindow().setTheme(theme),
     autostartEnabled: () => isEnabled(),

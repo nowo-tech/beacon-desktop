@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "prompt",
+  "description": "\"Still there?\" window: receives its content as events and sends the answer through the app's own prompt_* commands. No network, opener, notification or window permissions.",
+  "windows": ["prompt"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

@@ -34,7 +34,22 @@ export interface Settings {
   funMessages: boolean;
   /** Friendly messages (0.5.0): coffee, lunch, stretch / water and late-work nudges. */
   wellbeingReminders: boolean;
+  /** Friendly messages as desktop notifications, outside the window (on by default); off = toasts inside the app. */
+  desktopNotifications: boolean;
+  /** What the OS said the last time a desktop notification was due (`unknown` until the first one). */
+  nativeStatus: NativeStatus;
+  /** The in-app note explaining that the messages now appear as desktop notifications was read. */
+  nativeIntroSeen: boolean;
 }
+
+/**
+ * Desktop notifications of the friendly messages: `granted` (shown by the OS), `denied` (turned off for the app in the
+ * system settings), `failed` (no notification service answered), `unsupported` (no desktop notifications at all,
+ * e.g. a plain browser). Anything but `granted` shows the messages inside the app, and Settings says why.
+ */
+export type NativeStatus = 'unknown' | 'granted' | 'denied' | 'failed' | 'unsupported';
+
+const NATIVE_STATUSES: readonly string[] = ['unknown', 'granted', 'denied', 'failed', 'unsupported'];
 
 /** At most 9 pinned tasks (`Alt+1…9`). */
 export const MAX_PINNED = 9;
@@ -77,6 +92,9 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
   funMessages: true,
   wellbeingReminders: true,
+  desktopNotifications: true,
+  nativeStatus: 'unknown',
+  nativeIntroSeen: false,
 };
 
 const KEY = 'time-track-desktop';
@@ -111,6 +129,9 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
         theme: isTheme(raw.settings?.theme) ? raw.settings.theme : DEFAULT_SETTINGS.theme,
         funMessages: typeof raw.settings?.funMessages === 'boolean' ? raw.settings.funMessages : DEFAULT_SETTINGS.funMessages,
         wellbeingReminders: typeof raw.settings?.wellbeingReminders === 'boolean' ? raw.settings.wellbeingReminders : DEFAULT_SETTINGS.wellbeingReminders,
+        desktopNotifications: typeof raw.settings?.desktopNotifications === 'boolean' ? raw.settings.desktopNotifications : DEFAULT_SETTINGS.desktopNotifications,
+        nativeStatus: NATIVE_STATUSES.includes(raw.settings?.nativeStatus as string) ? (raw.settings?.nativeStatus as NativeStatus) : DEFAULT_SETTINGS.nativeStatus,
+        nativeIntroSeen: raw.settings?.nativeIntroSeen === true,
       },
       messages: sanitizeMessages(raw.messages),
       idleCheck: typeof raw.idleCheck === 'object' && raw.idleCheck !== null && 'phase' in raw.idleCheck ? raw.idleCheck : WATCHING,

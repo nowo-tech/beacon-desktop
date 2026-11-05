@@ -3,8 +3,8 @@ import type { DeviceCode, Entry, Me, Task, Timer } from '../api/types';
 import { dashboardUrl, myTimeUrl, sameOriginHttps, taskUrl } from '../lib/beacon';
 import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
 import { type ErrorStage, type ErrorView, describeError } from '../lib/errors';
-import { type Card, type Switches, afterStop, beaconLocale, beaconTimeZone, CATALOG, DAILY_TOAST_MS, IDLE_COUNTDOWN_MINUTES, lineText, MEETING_COUNTDOWN_MINUTES, messageLocale, MIN_GAP_MINUTES, nextCard, pickDailyDone, pickIdleLine, taskKind, visibleCard } from '../lib/friendly';
-import type { PoseId, TaskKind } from '../lib/messages/types';
+import { type Card, type Switches, afterStop, beaconLocale, beaconTimeZone, CATALOG, DAILY_TOAST_MS, IDLE_COUNTDOWN_MINUTES, lineText, MEETING_COUNTDOWN_MINUTES, messageLocale, MIN_GAP_MINUTES, nextCard, noticeTitle, pausedAt, pauseMessages, pickDailyDone, pickIdleLine, resumeMessages, taskKind, visibleCard } from '../lib/friendly';
+import type { NoticeKind, PoseId, TaskKind } from '../lib/messages/types';
 import { createTranslator, detectLocale, type Locale, type MessageKey, type Translate } from '../lib/i18n';
 import { type GapChoice, type IdleCheckState, type IdleChoice, WATCHING, decide, decideGap, observeIdle, promptSpan } from '../lib/idleCheck';
 import { preflight } from '../lib/preflight';
@@ -19,10 +19,11 @@ import { applyTheme, forcedTheme, THEMES, type ThemePreference } from '../lib/th
 import { appsPage, safeVerificationUri } from '../lib/urls';
 import { compareVersions, isVersion, updateRequired } from '../lib/version';
 import { withinWorkingHours } from '../lib/workingHours';
-import type { Platform, TrayMenu, UpdateCheck, UpdateProgress } from '../platform';
+import type { Platform, TrayMenu, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
 import { art, ERROR_POSES, moment, poseArt, variant, type Moment } from './mascot';
+import { PromptMount, type PromptAnswer, type PromptBlock, type PromptButton, type PromptChoices, type PromptTaskOption, type PromptText, type PromptView } from './prompt';
 
 export type View = 'loading' | 'login' | 'device' | 'main' | 'settings' | 'privacy' | 'update-required';
 
@@ -85,6 +86,7 @@ interface MainRegions {
   banners: HTMLElement;
   /** The "Still there?" modal (forces an answer; everything else is inert while it is open). */
   modal: HTMLElement;
+  prompt: PromptMount;
   timer: HTMLElement;
   totals: HTMLElement;
   search: HTMLInputElement;
@@ -169,8 +171,18 @@ export class DesktopApp {
   private deviceTicker: ReturnType<typeof setInterval> | null = null;
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Wall-clock "Still there?" countdown display (1 s); the stop itself is decided by `tick()` from timestamps. */
-  private countdownTicker: ReturnType<typeof setInterval> | null = null;
+  /** Element the prompt focuses after its next update (`focusPrompt`). */
+  private promptFocus: { id: string | null; seq: number } = { id: null, seq: 0 };
+  /** The prompt window's answers are listened to. */
+  private promptAnswers = false;
+  /** Last content sent to the prompt window ('' = closed). */
+  private promptWindowKey = '';
+  /** The prompt window could not be opened: the in-app modal is used instead. */
+  promptWindowFailed = false;
+  /** Last wake plan sent to the host. */
+  private wakePlanKey = '';
+  /** In-app note about the desktop notifications: the first one was shown (`intro`), or the OS refused them (`off`). */
+  nativeNotice: 'intro' | 'off' | null = null;
   /** "Daily done" toast after a daily-type timer stops. */
   dailyToast: { text: string; pose: PoseId; locale: string } | null = null;
   private dailyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -226,6 +238,8 @@ export class DesktopApp {
     this.version = await this.platform.appVersion();
     await this.syncWindowTheme();
     this.platform.onTray((action) => void this.trayAction(action));
+    // The regular check, woken by the host (on time while the window is hidden).
+    this.platform.onWake(() => void this.tick());
     this.platform.onShortcut(() => this.focusSearch());
     await this.applyShortcut(this.state.settings.shortcut, false);
     this.token = await this.platform.secretGet();
@@ -243,7 +257,7 @@ export class DesktopApp {
     this.abort?.abort();
     for (const timer of [this.ticker, this.deviceTicker]) if (timer !== null) clearInterval(timer);
     for (const timer of [this.searchTimer, this.noticeTimer, this.dailyTimer]) if (timer !== null) clearTimeout(timer);
-    if (this.countdownTicker !== null) clearInterval(this.countdownTicker);
+    this.main?.prompt.dispose();
   }
 
   private api(): TimeTrackApi {
@@ -388,6 +402,7 @@ export class DesktopApp {
     this.clampNotes = [];
     this.meetingOpen = false;
     this.welcome = false;
+    this.main?.prompt.dispose();
     this.main = null;
     this.query = '';
     this.error = null;
@@ -547,13 +562,20 @@ export class DesktopApp {
     const params = { time: formatHoursMinutes(elapsedSeconds(timer.startedAt, this.now())), task: timer.taskTitle };
     this.setNotice(queued ? this.t('savedOffline', params) : this.t(variant(SAVED_VARIANTS, this.saves++), params), 'saved');
     const kind = this.timerKind(timer);
-    let messages = afterStop(this.state.messages, kind, timer.startedAt, this.now());
-    const daily = kind === 'daily' ? pickDailyDone(messages, this.messageLocale(), this.random, this.switches()) : null;
+    const messages = afterStop(this.state.messages, kind, timer.startedAt, this.now());
+    const locale = this.messageLocale();
+    const daily = kind === 'daily' && !pausedAt(messages, this.now()) ? pickDailyDone(messages, locale, this.random, this.switches()) : null;
+    this.persist({ messages: daily?.state ?? messages });
     if (daily !== null) {
-      messages = daily.state;
-      this.showDailyToast({ text: daily.line.text, pose: daily.line.pose, locale: this.messageLocale() });
+      const toast = { text: daily.line.text, pose: daily.line.pose, locale };
+      // A desktop notification when the OS shows them, else (or until it answers) the toast in the window.
+      if (this.nativeGranted()) {
+        void this.sendNative('dailyDone', toast.text, toast.pose, locale).then((ok) => void (ok || this.showDailyToast(toast)));
+      } else {
+        this.showDailyToast(toast);
+        if (this.nativeUsable()) void this.sendNative('dailyDone', toast.text, toast.pose, locale).then((ok) => void (ok && this.showDailyToast(null)));
+      }
     }
-    this.persist({ messages });
   }
 
   private showDailyToast(toast: { text: string; pose: PoseId; locale: string } | null): void {
@@ -605,31 +627,109 @@ export class DesktopApp {
     return { fun: this.state.settings.funMessages, wellbeing: this.state.settings.wellbeingReminders };
   }
 
-  /** The cheer / time-of-day card of the running timer, when one is due (called on every tick). Never takes focus. */
+  /**
+   * The cheer / time-of-day card of the running timer, when one is due (called on every tick, also while the window
+   * is hidden or shows another view). It goes out as a desktop notification when the OS shows them, else as a toast
+   * in the window; never takes focus.
+   */
   checkFriendly(): void {
     const timer = this.state.activeTimer;
-    if (this.view !== 'main') return;
+    if (this.state.session === null || this.view === 'update-required') return;
     const shown = this.toastRegion.querySelector('#cheer') !== null;
     const card = this.currentCard();
+    // One at a time: a card shown as a desktop notification is not "visible" here, but the rate limit of nextCard
+    // (MIN_GAP_MINUTES, longer than a card lives) keeps the next one away.
     if (timer !== null && card === null && this.state.idleCheck.phase === 'watching' && !this.longRunning()) {
+      const locale = this.messageLocale();
       const next = nextCard({
         now: this.now(),
         startedAt: timer.startedAt,
         entry: this.entryKey(timer),
         switches: this.switches(),
-        windows: CATALOG[this.messageLocale()].windows,
+        windows: CATALOG[locale].windows,
         timeZone: beaconTimeZone(this.me),
         state: this.state.messages,
-        locale: this.messageLocale(),
+        locale,
         rng: this.random,
       });
       if (next !== null) {
-        this.persist({ messages: next.state });
+        const desktop = this.nativeGranted();
+        this.persist({ messages: desktop ? { ...next.state, card: { ...next.card, delivered: 'desktop' } } : next.state });
         this.render();
+        if (this.nativeUsable()) void this.deliverCard(next.card, timer);
         return;
       }
     }
     if (shown !== (this.currentCard() !== null)) this.render();
+  }
+
+  /** Sends `card` as a desktop notification; on failure it comes back as the toast (and the other way round). */
+  private async deliverCard(card: Card, timer: Timer): Promise<void> {
+    const line = lineText(card.locale, card.kind, card.line, { hours: Math.floor(elapsedSeconds(timer.startedAt, this.now()) / 3600) });
+    if (line === null) return;
+    const ok = await this.sendNative(card.kind, line.text, line.pose, card.locale);
+    const current = this.state.messages.card;
+    if (current === null || current.shownAt !== card.shownAt || current.entry !== card.entry) return;
+    if (ok === (current.delivered === 'desktop')) return;
+    this.persist({ messages: { ...this.state.messages, card: { ...current, delivered: ok ? 'desktop' : undefined } } });
+    this.render();
+  }
+
+  /** Desktop notifications are on and the OS showed the last one. */
+  private nativeGranted(): boolean {
+    return this.state.settings.desktopNotifications && this.state.settings.nativeStatus === 'granted';
+  }
+
+  /** Desktop notifications are on and may work (granted, or not asked yet). */
+  private nativeUsable(): boolean {
+    return this.state.settings.desktopNotifications && (this.state.settings.nativeStatus === 'granted' || this.state.settings.nativeStatus === 'unknown');
+  }
+
+  /**
+   * A friendly message as a desktop notification. The first time, the OS permission is asked for (macOS prompts; the
+   * others just allow it) and the window explains, once, where the messages went; a refusal or a missing notification
+   * service is remembered (Settings says so) and the messages stay inside the app.
+   */
+  async sendNative(kind: NoticeKind, text: string, pose: PoseId, locale: ReturnType<typeof messageLocale>): Promise<boolean> {
+    const before = this.state.settings.nativeStatus;
+    let status = before;
+    if (status !== 'granted') {
+      let permission = await this.platform.notificationPermission();
+      if (permission === 'prompt') permission = await this.platform.requestNotificationPermission();
+      status = permission === 'granted' ? 'granted' : permission === 'unsupported' ? 'unsupported' : 'denied';
+    }
+    const ok = status === 'granted' && (await this.platform.notifyFriendly({ title: noticeTitle(locale, kind), body: text, pose }));
+    if (status === 'granted' && !ok) status = 'failed';
+    const intro = ok && !this.state.settings.nativeIntroSeen;
+    if (status !== this.state.settings.nativeStatus || intro) {
+      this.persist({ settings: { ...this.state.settings, nativeStatus: status, nativeIntroSeen: this.state.settings.nativeIntroSeen || intro } });
+    }
+    const notice = intro ? 'intro' : !ok && (status === 'denied' || status === 'failed') && status !== before ? 'off' : null;
+    if (notice !== null) {
+      this.nativeNotice = notice;
+      this.render();
+    }
+    return ok;
+  }
+
+  dismissNativeNotice(): void {
+    this.nativeNotice = null;
+    this.render();
+  }
+
+  /** Settings → Friendly messages → "Show them as desktop notifications" (a new try asks the OS again). */
+  setDesktopNotifications(on: boolean): void {
+    const status = this.state.settings.nativeStatus;
+    this.persist({ settings: { ...this.state.settings, desktopNotifications: on, nativeStatus: on && status !== 'unsupported' ? 'unknown' : status } });
+    this.nativeNotice = null;
+    this.render();
+  }
+
+  /** Tray / Settings: pause the friendly messages for an hour, or resume them. */
+  async pauseFriendly(pause: boolean): Promise<void> {
+    this.persist({ messages: pause ? pauseMessages(this.state.messages, this.now()) : resumeMessages(this.state.messages) });
+    this.render();
+    await this.updateTray();
   }
 
   /** The card to show now: one at a time, not over the "Still there?" prompt or the long-running nudge. */
@@ -810,6 +910,11 @@ export class DesktopApp {
       openBeacon: dashboardUrl(server) !== null ? t('openBeacon') : null,
       myTime: myTimeUrl(server) !== null ? t('myTime') : null,
       checkUpdates: signedIn && this.channel === 'direct' ? t('trayCheckUpdates') : null,
+      pauseFriendly: !signedIn || (!this.state.settings.funMessages && !this.state.settings.wellbeingReminders)
+        ? null
+        : pausedAt(this.state.messages, this.now())
+          ? { id: 'resume-friendly', label: t('trayFriendlyPaused', { time: this.time(this.state.messages.pausedUntil as string) }) }
+          : { id: 'pause-friendly', label: t('trayPauseFriendly') },
       settings: t('traySettings'),
       quit: t('trayQuit'),
     };
@@ -824,6 +929,7 @@ export class DesktopApp {
     const server = this.state.session?.server;
     if (action === 'stop') await this.stop();
     else if (action === 'resume') await this.resume();
+    else if (action === 'pause-friendly' || action === 'resume-friendly') await this.pauseFriendly(action === 'pause-friendly');
     else if (action === 'search') this.focusSearch();
     else if (action === 'open-beacon') this.openBeacon(dashboardUrl(server));
     else if (action === 'my-time') this.openBeacon(myTimeUrl(server));
@@ -922,6 +1028,7 @@ export class DesktopApp {
     if (step.state !== current) this.setIdleCheck(step.state);
     if (step.effect === 'autoStop') await this.runActions(step.actions);
     if (step.effect === 'ask' || step.effect === 'askGap' || (step.effect === 'autoStop' && step.state.phase === 'gap')) await this.promptShown(step.state);
+    this.syncWakePlan();
   }
 
   private setIdleCheck(state: IdleCheckState): void {
@@ -943,7 +1050,8 @@ export class DesktopApp {
     // Once, politely: the countdown itself is not read out every second.
     const countdown = state.phase === 'asking' ? ` ${this.t('stillThereTimeout', { minutes: this.idleSettings().answerTimeoutMinutes })}` : '';
     this.announce(`${title} ${text}${countdown}`);
-    if (hasConsent(this.state, 'notifications') && withinWorkingHours(this.me?.workingHours, this.now())) {
+    // Its own window, centred and on top, is the attention signal; the notification is for the in-app modal only.
+    if (!this.promptInWindow() && hasConsent(this.state, 'notifications') && withinWorkingHours(this.me?.workingHours, this.now())) {
       await this.platform.notify(title, text);
     }
   }
@@ -1265,6 +1373,7 @@ export class DesktopApp {
     this.entries = null;
     this.me = null;
     this.clampNotes = [];
+    this.main?.prompt.dispose();
     this.main = null;
     this.confirmClear = false;
     this.offline = false;
@@ -1415,10 +1524,6 @@ export class DesktopApp {
       clearInterval(this.deviceTicker);
       this.deviceTicker = null;
     }
-    if (this.countdownTicker !== null) {
-      clearInterval(this.countdownTicker);
-      this.countdownTicker = null;
-    }
     this.renderHeader();
     this.renderMessages();
     this.renderToasts();
@@ -1437,6 +1542,30 @@ export class DesktopApp {
       patch(this.body, [views[this.view]()]);
     }
     this.root.setAttribute('aria-busy', this.busy ? 'true' : 'false');
+    this.syncPromptWindow();
+    this.syncWakePlan();
+  }
+
+  /**
+   * What the host must wake the check for besides the 30 s tick: the end of the "Still there?" countdown, and the idle
+   * threshold while a timer runs and nobody was asked yet (so the question appears on time, window hidden or not).
+   */
+  wakePlan(): WakePlan {
+    const state = this.state.idleCheck;
+    if (!this.idleCheckEnabled()) return { deadlineAt: null, idleAfterSeconds: null };
+    const settings = this.idleSettings();
+    return {
+      deadlineAt: state.phase === 'asking' && state.returnedAt === null ? Date.parse(state.askedAt) + settings.answerTimeoutMinutes * 60_000 : null,
+      idleAfterSeconds: state.phase === 'watching' && this.state.activeTimer !== null ? settings.thresholdMinutes * 60 : null,
+    };
+  }
+
+  private syncWakePlan(): void {
+    const plan = this.wakePlan();
+    const key = JSON.stringify(plan);
+    if (key === this.wakePlanKey) return;
+    this.wakePlanKey = key;
+    void this.platform.setWakePlan(plan).catch(() => undefined);
   }
 
   private iconButton(name: IconName, label: string, props: { id?: string; key?: string; onClick: () => void; shortcut?: string }): HTMLButtonElement {
@@ -1672,24 +1801,50 @@ export class DesktopApp {
     this.renderModal(main);
   }
 
-  /** "Still there?" and what follows it, as a modal: the rest of the app is inert until it is answered. */
+  /**
+   * "Still there?" and what follows it, as a modal: the rest of the app is inert until it is answered. Not used while
+   * the prompt has its own window (Tauri), which `syncPromptWindow` keeps up to date instead.
+   */
   private renderModal(main: MainRegions): void {
-    const card = this.renderIdleCheck();
-    const wasOpen = !main.modal.hidden;
-    if (card !== null) {
-      card.setAttribute('role', 'dialog');
-      card.setAttribute('aria-modal', 'true');
-    }
-    patch(main.modal, [card]);
-    const open = card !== null;
+    const view = this.promptInWindow() ? null : this.promptView();
+    const open = view !== null;
+    // Visible (and the rest inert) before the prompt is drawn, so it can take the focus.
     main.modal.hidden = !open;
     for (const child of [this.header, ...Array.from(main.root.children)]) {
       if (child !== main.modal) child.toggleAttribute('inert', open);
     }
-    const active = document.activeElement;
-    if (open && (!wasOpen || active === null || !main.modal.contains(active))) {
-      main.modal.querySelector<HTMLElement>('button, select, input, textarea')?.focus();
+    main.prompt.show(view);
+  }
+
+  /** Whether the prompt goes to its own window (Tauri) rather than the in-app modal (also after that window failed). */
+  promptInWindow(): boolean {
+    return this.platform.promptWindow !== null && !this.promptWindowFailed;
+  }
+
+  /** Opens, updates or closes the prompt window from the current state (whatever view the main window shows). */
+  private syncPromptWindow(): void {
+    const host = this.platform.promptWindow;
+    if (host === null || this.promptWindowFailed) return;
+    if (!this.promptAnswers) {
+      // Listening before the window first opens, so no answer is lost.
+      this.promptAnswers = true;
+      host.onAnswer((answer) => void this.answerPrompt(answer));
     }
+    const view = this.state.session !== null ? this.promptView() : null;
+    const key = view === null ? '' : JSON.stringify(view);
+    if (key === this.promptWindowKey) return;
+    const wasOpen = this.promptWindowKey !== '';
+    this.promptWindowKey = key;
+    if (view === null) {
+      if (wasOpen) void host.close().catch(() => undefined);
+      return;
+    }
+    host.open(view).catch(() => {
+      // No window (the OS refused it): the prompt comes back as the in-app modal.
+      this.promptWindowFailed = true;
+      this.promptWindowKey = '';
+      this.render();
+    });
   }
 
   /** Cheers, moments and "daily done" as toasts (bottom right, never focused, announced once). */
@@ -1700,6 +1855,12 @@ export class DesktopApp {
     if (key === this.toastKey) return;
     this.toastKey = key;
     patch(this.toastRegion, [card !== null && this.renderCheer(), daily !== null && this.toast('daily-toast', daily.pose, daily.text, daily.locale, () => this.showDailyToast(null))]);
+    // While a toast is up, the page gets room below its last rows (the list never ends under the toast).
+    const shown = this.toastRegion.childElementCount > 0;
+    this.root.classList.toggle('with-toasts', shown);
+    const height = this.toastRegion.getBoundingClientRect().height;
+    if (shown && height > 0) this.root.style.setProperty('--toast-space', `${Math.ceil(height) + 24}px`);
+    else this.root.style.removeProperty('--toast-space');
   }
 
   private toast(id: string, pose: PoseId, text: string, locale: string, dismiss: () => void, kind?: string): HTMLElement {
@@ -1714,6 +1875,7 @@ export class DesktopApp {
 
   private buildMain(): MainRegions {
     const t = this.t;
+    const modal = h('div', { class: 'idle-modal', id: 'idle-modal', attrs: { hidden: true } });
     const search = h('input', {
       id: 'search',
       attrs: { type: 'search', placeholder: t('searchTasks'), 'aria-label': t('searchLabel'), 'aria-describedby': 'search-hint', 'aria-keyshortcuts': 'Control+K /', autocomplete: 'off' },
@@ -1743,7 +1905,8 @@ export class DesktopApp {
       quick: h('section', { class: 'list-section', id: 'quick-section' }),
       list: h('section', { class: 'list-section', id: 'list-section' }),
       footer: h('footer', { class: 'footer' }),
-      modal: h('div', { class: 'idle-modal', id: 'idle-modal', attrs: { hidden: true } }),
+      modal,
+      prompt: new PromptMount(modal, { onAnswer: (answer) => void this.answerPrompt(answer), onExpired: () => void this.tick(), now: this.now }),
     };
     regions.root.addEventListener('keydown', (event) => {
       if (event.target !== search && !regions.modal.contains(event.target as Node)) this.onListKey(event);
@@ -1765,6 +1928,8 @@ export class DesktopApp {
   private renderBanners(region: HTMLElement): void {
     const t = this.t;
     patch(region, [
+      this.promptInWindow() && this.state.idleCheck.phase !== 'watching' && this.renderPromptElsewhere(),
+      this.nativeNotice !== null && this.renderNativeNotice(),
       this.renderUpdateCard(),
       this.welcome && this.error === null && this.renderWelcome(),
       this.longRunning() && this.renderLongRunning(),
@@ -1784,6 +1949,36 @@ export class DesktopApp {
           h('div', { class: 'still-there-body' }, h('h2', { id: 'offline-title' }, t('offlineTitle')), h('p', { class: 'muted' }, t('offlineStartNote'))),
         ),
     ]);
+  }
+
+  /** The question is in its own window: say so, and offer to bring it forward (it may be behind a full-screen app). */
+  private renderPromptElsewhere(): HTMLElement {
+    const t = this.t;
+    return this.momentCard(
+      'prompt-elsewhere',
+      'stillThere',
+      t(this.inMeeting() && this.state.idleCheck.phase === 'asking' ? 'stillInMeetingTitle' : 'stillThereTitle'),
+      h('p', { class: 'muted', id: 'prompt-elsewhere-text' }, t('promptElsewhere')),
+      h('div', { class: 'row-actions' }, h('button', { class: 'secondary small', id: 'prompt-show', key: 'prompt-show', attrs: { type: 'button' }, on: { click: () => void this.platform.promptWindow?.focus() } }, t('promptShow'))),
+    );
+  }
+
+  /** Once: the friendly messages now appear as desktop notifications; or: the OS turned them off, they stay here. */
+  private renderNativeNotice(): HTMLElement {
+    const t = this.t;
+    const intro = this.nativeNotice === 'intro';
+    return h(
+      'section',
+      { class: 'card native-notice', id: 'native-notice', key: 'native-notice', attrs: { role: 'region', 'aria-labelledby': 'native-notice-title' } },
+      h('h2', { id: 'native-notice-title' }, t(intro ? 'nativeIntroTitle' : 'nativeOffTitle')),
+      h('p', { class: 'muted', id: 'native-notice-text' }, t(intro ? 'nativeIntroText' : 'nativeOffText')),
+      h(
+        'div',
+        { class: 'row-actions' },
+        h('button', { class: 'secondary small', id: 'native-notice-ok', key: 'native-notice-ok', attrs: { type: 'button' }, on: { click: () => this.dismissNativeNotice() } }, t('gotIt')),
+        intro && h('button', { class: 'link', id: 'native-notice-in-app', key: 'native-notice-in-app', attrs: { type: 'button' }, on: { click: () => this.setDesktopNotifications(false) } }, t('nativeKeepInApp')),
+      ),
+    );
   }
 
   /** Calm card with a mascot moment, a heading and its content (welcome, long-running, idle check, update). */
@@ -2060,139 +2255,166 @@ export class DesktopApp {
     return this.timeFormat.format(typeof iso === 'string' ? new Date(iso) : iso);
   }
 
-  /**
-   * Time left before the timer pauses: text and a bar, from wall-clock timestamps (a hidden window, a throttled timer or
-   * a sleep do not skew it). Updated every second without re-rendering; at 0 the regular check runs at once.
-   */
-  private renderCountdown(askedAt: string): HTMLElement {
-    const total = this.idleSettings().answerTimeoutMinutes * 60;
-    const text = h('p', { class: 'muted', id: 'idle-countdown-text' });
-    const fill = h('span', { class: 'countdown-fill', id: 'idle-countdown-fill' });
-    const bar = h('div', { class: 'countdown-track', attrs: { role: 'progressbar', 'aria-labelledby': 'idle-countdown-text', 'aria-valuemin': '0', 'aria-valuemax': String(total) } }, fill);
-    const update = (): number => {
-      const left = Math.max(0, Math.ceil((Date.parse(askedAt) + total * 1000 - this.now().getTime()) / 1000));
-      text.textContent = this.t('idleCountdown', { time: `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` });
-      bar.setAttribute('aria-valuenow', String(left));
-      fill.style.transform = `scaleX(${total > 0 ? left / total : 0})`;
-      return left;
-    };
-    update();
-    this.countdownTicker = setInterval(() => {
-      if (update() > 0) return;
-      if (this.countdownTicker !== null) clearInterval(this.countdownTicker);
-      this.countdownTicker = null;
-      void this.tick();
-    }, 1000);
-    return h('div', { class: 'idle-countdown', id: 'idle-countdown' }, text, bar);
+  /** Asks the prompt (in-app modal or its window) to focus `id` after the next update. */
+  private focusPrompt(id: string): void {
+    this.promptFocus = { id, seq: this.promptFocus.seq + 1 };
   }
 
-  /** The "Still there?" prompt, the "welcome back" gap question and the Resume offer (a modal: it needs an answer). */
-  private renderIdleCheck(): HTMLElement | null {
+  /**
+   * The "Still there?" prompt, the "welcome back" gap question and the Resume offer, as data (src/ui/prompt.ts): drawn
+   * in its own always-on-top window in the Tauri app, as a modal in the main window otherwise. Translated here, so the
+   * prompt window needs no translator; the countdown runs on wall-clock timestamps.
+   */
+  promptView(): PromptView | null {
     const t = this.t;
     const state = this.state.idleCheck;
-    const card = (id: string, title: string, ...children: Child[]) => {
-      const name: Moment = state.phase === 'away' ? 'away' : state.phase === 'gap' ? 'gap' : state.phase === 'resume' ? 'resume' : 'stillThere';
-      return this.momentCard(id, name, title, ...children);
-    };
+    if (state.phase === 'watching') return null;
     // The "Still there?" phrasing of this prompt (Fun messages), with its own pose; the facts and buttons stay the same.
     // During a meeting-like task: the softer "Still in the meeting?" and the teamwork pose.
     const locale = this.messageLocale();
-    const meeting = state.phase !== 'watching' && this.inMeeting();
+    const meeting = this.inMeeting();
     const quip = state.phase === 'asking' && this.state.settings.funMessages && this.state.messages.idleLine !== null ? lineText(locale, meeting ? 'meetingIdle' : 'idle', this.state.messages.idleLine) : null;
-    const resumeNow = (taskTitle: string) =>
-      h('button', { class: 'primary', id: 'idle-resume-now', key: 'idle-resume-now', attrs: { type: 'button' }, on: { click: () => void this.resumeNow() } }, icon('play'), t('resumeNow', { task: taskTitle }));
+    const text = (value: string, id?: string, tone?: PromptText['tone'], lang?: string): PromptText => ({ kind: 'text', text: value, ...(id !== undefined ? { id } : {}), ...(tone !== undefined ? { tone } : {}), ...(lang !== undefined ? { lang } : {}) });
+    const button = (id: string, label: string, style: PromptButton['style'], action: PromptButton['action'], extra: Partial<PromptButton> = {}): PromptButton => ({ kind: 'button', id, label, style, action, ...extra });
+    const resumeNow = (taskTitle: string) => button('idle-resume-now', t('resumeNow', { task: taskTitle }), 'primary', 'resume-now', { play: true });
+    const base = {
+      windowTitle: t(meeting && state.phase === 'asking' ? 'stillInMeetingTitle' : 'stillThereTitle'),
+      lang: this.locale,
+      theme: forcedTheme(this.state.settings.theme),
+      escapeHint: t('promptEscapeHint'),
+      focus: this.promptFocus.id,
+      focusSeq: this.promptFocus.seq,
+    };
+    const options = (tasks: Task[]): PromptTaskOption[] => tasks.map((task) => ({ id: task.id, title: task.title }));
     switch (state.phase) {
-      case 'watching':
-        return null;
       case 'asking': {
         const span = promptSpan(state, this.now());
         const minutes = this.minutesBetween(state.from, state.returnedAt ?? span.to);
-        return this.pictureCard(
-          'idle',
-          'stillThere',
-          quip !== null ? poseArt(quip.pose, 'mascot tiny') : meeting ? poseArt('teamwork', 'mascot tiny') : moment('stillThere', 'mascot tiny', t),
-          t(meeting ? 'stillInMeetingTitle' : 'stillThereTitle'),
-          quip !== null && h('p', { class: 'idle-quip', id: 'idle-quip', attrs: { lang: locale } }, quip.text),
-          h('p', { id: 'idle-text' }, t('stillThereText', { minutes: Math.max(minutes, this.idleSettings().thresholdMinutes), task: state.taskTitle })),
-          h('p', { class: 'muted' }, t('stillThereSince', { time: this.time(state.from) })),
+        const settings = this.idleSettings();
+        const reassign = this.features().idleReassign;
+        const blocks: PromptBlock[] = [
+          ...(quip !== null ? [text(quip.text, 'idle-quip', 'quip', locale)] : []),
+          text(t('stillThereText', { minutes: Math.max(minutes, settings.thresholdMinutes), task: state.taskTitle }), 'idle-text'),
+          text(t('stillThereSince', { time: this.time(state.from) }), undefined, 'muted'),
           this.meetingOpen
-            ? this.renderMeeting()
-            : h(
-                'div',
-                { class: 'choice-list', attrs: { role: 'group', 'aria-labelledby': 'idle-title' } },
-                h('button', { class: 'primary', id: 'idle-here', key: 'idle-here', attrs: { type: 'button' }, on: { click: () => void this.answerIdle({ kind: 'here' }) } }, t('idleHere')),
-                h('button', { class: 'secondary', id: 'idle-meeting', key: 'idle-meeting', attrs: { type: 'button', 'aria-expanded': 'false' }, on: { click: () => this.openMeeting() } }, t('idleMeeting')),
-                h('button', { class: 'secondary', id: 'idle-discard', key: 'idle-discard', attrs: { type: 'button' }, on: { click: () => void this.answerIdle({ kind: 'discard' }) } }, t('idleDiscardMinutes', { minutes })),
-                h('button', { class: 'secondary', id: 'idle-pause', key: 'idle-pause', attrs: { type: 'button' }, on: { click: () => void this.answerIdle({ kind: 'pause' }) } }, t('idlePause', { time: this.time(state.from) })),
-              ),
-          state.returnedAt === null ? this.renderCountdown(state.askedAt) : h('p', { class: 'muted small-print' }, t('stillThereTimeout', { minutes: this.idleSettings().answerTimeoutMinutes })),
-        );
+            ? {
+                kind: 'meeting',
+                noteLabel: t('idleNote'),
+                noteHelp: t('idleNoteHelp'),
+                noteMax: NOTE_MAX,
+                countOnLabel: reassign ? t('idleCountOn') : null,
+                sameTaskLabel: t('idleSameTask', { task: state.taskTitle }),
+                targets: reassign ? options(this.reassignTargets(state.taskId)) : [],
+                saveLabel: t('idleMeetingSave'),
+                cancelLabel: t('cancel'),
+              }
+            : {
+                kind: 'choices',
+                layout: 'list',
+                labelledBy: 'idle-title',
+                items: [
+                  button('idle-here', t('idleHere'), 'primary', 'here'),
+                  button('idle-meeting', t('idleMeeting'), 'secondary', 'meeting-open', { expanded: false }),
+                  button('idle-discard', t('idleDiscardMinutes', { minutes }), 'secondary', 'discard'),
+                  button('idle-pause', t('idlePause', { time: this.time(state.from) }), 'secondary', 'pause'),
+                ],
+              },
+          state.returnedAt === null
+            ? { kind: 'countdown', askedAt: state.askedAt, totalSeconds: settings.answerTimeoutMinutes * 60, template: t('idleCountdown', { time: '{time}' }) }
+            : text(t('stillThereTimeout', { minutes: settings.answerTimeoutMinutes }), undefined, 'small'),
+        ];
+        return { ...base, id: 'idle', moment: 'stillThere', pose: quip !== null ? quip.pose : meeting ? 'teamwork' : null, title: t(meeting ? 'stillInMeetingTitle' : 'stillThereTitle'), blocks };
       }
       case 'away':
-        return card(
-          'idle-away',
-          t('awayTitle'),
-          h('p', { id: 'idle-away-text' }, t('idleStoppedAt', { time: this.time(state.from), task: state.taskTitle })),
-          h('div', { class: 'choice-list' }, resumeNow(state.taskTitle)),
-          h('p', { class: 'muted small-print' }, t('awayText', { time: this.time(state.from), task: state.taskTitle })),
-        );
+        return {
+          ...base,
+          id: 'idle-away',
+          moment: 'away',
+          pose: null,
+          title: t('awayTitle'),
+          blocks: [
+            text(t('idleStoppedAt', { time: this.time(state.from), task: state.taskTitle }), 'idle-away-text'),
+            { kind: 'choices', layout: 'list', items: [resumeNow(state.taskTitle)] },
+            text(t('awayText', { time: this.time(state.from), task: state.taskTitle }), undefined, 'small'),
+          ],
+        };
       case 'gap': {
         const minutes = this.minutesBetween(state.from, state.to);
         const features = this.features();
-        const canAdd = features.startBackdate && features.stopBackdate;
-        const select = h('select', { id: 'gap-task' });
-        for (const task of this.reassignTargets(state.taskId)) select.append(h('option', { attrs: { value: task.id } }, task.title));
-        return card(
-          'gap',
-          t('gapTitle'),
-          h('p', { id: 'gap-text' }, t('gapText', { from: this.time(state.from), to: this.time(state.to), minutes, task: state.taskTitle })),
-          canAdd
-            ? h(
-                'div',
-                { class: 'choice-list', attrs: { role: 'group', 'aria-labelledby': 'gap-title' } },
-                resumeNow(state.taskTitle),
-                h('button', { class: 'secondary', id: 'gap-keep', key: 'gap-keep', attrs: { type: 'button' }, on: { click: () => void this.answerGap({ kind: 'keep' }) } }, t('gapKeep', { task: state.taskTitle })),
-                select.options.length > 0 &&
-                  h(
-                    'div',
-                    { class: 'gap-other' },
-                    h('label', { attrs: { for: 'gap-task' } }, t('gapOtherTask')),
-                    select,
-                    h('button', {
-                      class: 'secondary',
-                      id: 'gap-reassign',
-                      key: 'gap-reassign',
-                      attrs: { type: 'button' },
-                      on: {
-                        click: () => {
-                          const task = this.reassignTargets(state.taskId).find((item) => item.id === select.value);
-                          if (task !== undefined) void this.answerGap({ kind: 'reassign', task: { id: task.id, title: task.title } });
-                        },
-                      },
-                    }, t('gapReassign')),
-                  ),
-                h('button', { class: 'ghost', id: 'gap-discard', key: 'gap-discard', attrs: { type: 'button' }, on: { click: () => void this.answerGap({ kind: 'discard' }) } }, t('gapDiscard')),
-              )
-            : h(
-                'div',
-                { class: 'choice-list' },
-                h('p', { class: 'muted', id: 'gap-unsupported' }, t('gapUnsupported')),
-                resumeNow(state.taskTitle),
-                h('button', { class: 'secondary', id: 'gap-discard', key: 'gap-discard', attrs: { type: 'button' }, on: { click: () => void this.answerGap({ kind: 'discard' }) } }, t('gapOk')),
-              ),
-        );
+        const targets = options(this.reassignTargets(state.taskId));
+        const choices: PromptChoices =
+          features.startBackdate && features.stopBackdate
+            ? {
+                kind: 'choices',
+                layout: 'list',
+                labelledBy: 'gap-title',
+                items: [
+                  resumeNow(state.taskTitle),
+                  button('gap-keep', t('gapKeep', { task: state.taskTitle }), 'secondary', 'gap-keep'),
+                  ...(targets.length > 0 ? [{ kind: 'reassign' as const, label: t('gapOtherTask'), options: targets, button: button('gap-reassign', t('gapReassign'), 'secondary', 'gap-reassign') }] : []),
+                  button('gap-discard', t('gapDiscard'), 'ghost', 'gap-discard'),
+                ],
+              }
+            : { kind: 'choices', layout: 'list', items: [text(t('gapUnsupported'), 'gap-unsupported', 'muted'), resumeNow(state.taskTitle), button('gap-discard', t('gapOk'), 'secondary', 'gap-discard')] };
+        return {
+          ...base,
+          id: 'gap',
+          moment: 'gap',
+          pose: null,
+          title: t('gapTitle'),
+          blocks: [text(t('gapText', { from: this.time(state.from), to: this.time(state.to), minutes, task: state.taskTitle }), 'gap-text'), choices],
+        };
       }
       case 'resume':
-        return card(
-          'gap-resume-card',
-          t('resumeTitle', { task: state.taskTitle }),
-          h(
-            'div',
-            { class: 'row-actions' },
-            h('button', { class: 'primary', id: 'gap-resume', key: 'gap-resume', attrs: { type: 'button' }, on: { click: () => void this.resumeAfterGap(true) } }, icon('play'), t('resume')),
-            h('button', { class: 'secondary', id: 'gap-dismiss', key: 'gap-dismiss', attrs: { type: 'button' }, on: { click: () => void this.resumeAfterGap(false) } }, t('notNow')),
-          ),
-        );
+        return {
+          ...base,
+          id: 'gap-resume-card',
+          moment: 'resume',
+          pose: null,
+          title: t('resumeTitle', { task: state.taskTitle }),
+          blocks: [{ kind: 'choices', layout: 'row', items: [button('gap-resume', t('resume'), 'primary', 'resume', { play: true }), button('gap-dismiss', t('notNow'), 'secondary', 'not-now')] }],
+        };
+    }
+  }
+
+  /** An answer from the prompt (its window or the in-app modal). */
+  async answerPrompt(answer: PromptAnswer): Promise<void> {
+    const state = this.state.idleCheck;
+    const task = (id: string | undefined) => (id === undefined || id === '' ? undefined : this.reassignTargets(state.phase === 'watching' ? '' : state.taskId).find((item) => item.id === id));
+    switch (answer.action) {
+      case 'here':
+      case 'discard':
+      case 'pause':
+        return this.answerIdle({ kind: answer.action });
+      case 'meeting-open':
+        return this.openMeeting();
+      case 'meeting-cancel':
+        this.meetingOpen = false;
+        this.focusPrompt('idle-meeting');
+        this.render();
+        return;
+      case 'meeting-save': {
+        const target = task(answer.taskId);
+        return this.answerIdle({ kind: 'meeting', note: answer.note ?? '', reassignTo: target !== undefined ? { id: target.id, title: target.title } : undefined });
+      }
+      case 'gap-keep':
+        return this.answerGap({ kind: 'keep' });
+      case 'gap-discard':
+        return this.answerGap({ kind: 'discard' });
+      case 'gap-reassign': {
+        const target = task(answer.taskId);
+        if (target !== undefined) await this.answerGap({ kind: 'reassign', task: { id: target.id, title: target.title } });
+        return;
+      }
+      case 'resume-now':
+        return this.resumeNow();
+      case 'resume':
+        return this.resumeAfterGap(true);
+      case 'not-now':
+        return this.resumeAfterGap(false);
+      case 'escape':
+        // Never a dismissal: the prompt stays until it is answered.
+        return;
     }
   }
 
@@ -2210,46 +2432,8 @@ export class DesktopApp {
 
   private openMeeting(): void {
     this.meetingOpen = true;
+    this.focusPrompt('idle-note');
     this.render();
-    this.main?.root.querySelector<HTMLInputElement>('#idle-note')?.focus();
-  }
-
-  /** "I was in a meeting / call": keep the time (optional note) or, on a 1.10 server, count it on another task. */
-  private renderMeeting(): HTMLElement {
-    const t = this.t;
-    const state = this.state.idleCheck;
-    const note = h('input', { id: 'idle-note', attrs: { type: 'text', maxlength: String(NOTE_MAX), autocomplete: 'off', 'aria-describedby': 'idle-note-help' } });
-    const reassign = this.features().idleReassign && state.phase === 'asking';
-    const target = h('select', { id: 'idle-target' });
-    if (reassign) {
-      target.append(h('option', { attrs: { value: '' } }, t('idleSameTask', { task: state.taskTitle })));
-      for (const task of this.reassignTargets(state.taskId)) target.append(h('option', { attrs: { value: task.id } }, task.title));
-    }
-    return h(
-      'form',
-      {
-        class: 'meeting',
-        id: 'idle-meeting-form',
-        on: {
-          submit: (event) => {
-            event.preventDefault();
-            const task = target.value !== '' && state.phase === 'asking' ? this.reassignTargets(state.taskId).find((item) => item.id === target.value) : undefined;
-            void this.answerIdle({ kind: 'meeting', note: note.value, reassignTo: task !== undefined ? { id: task.id, title: task.title } : undefined });
-          },
-        },
-      },
-      h('label', { attrs: { for: 'idle-note' } }, t('idleNote')),
-      note,
-      h('p', { class: 'help', id: 'idle-note-help' }, t('idleNoteHelp')),
-      reassign && h('label', { attrs: { for: 'idle-target' } }, t('idleCountOn')),
-      reassign && target,
-      h(
-        'div',
-        { class: 'row-actions' },
-        h('button', { class: 'primary small', id: 'idle-meeting-save', key: 'idle-meeting-save', attrs: { type: 'submit' } }, t('idleMeetingSave')),
-        h('button', { class: 'link', id: 'idle-meeting-cancel', key: 'idle-meeting-cancel', attrs: { type: 'button' }, on: { click: () => { this.meetingOpen = false; this.render(); this.main?.root.querySelector<HTMLButtonElement>('#idle-meeting')?.focus(); } } }, t('cancel')),
-      ),
-    );
   }
 
   /** Times the server recorded differently from what was asked, in plain words. */
@@ -2372,6 +2556,7 @@ export class DesktopApp {
       this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText'),
       // Store (MSIX) builds cannot register the login item the autostart plugin writes: no switch there.
       this.channel === 'direct' && this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
+      h('p', { class: 'muted', id: 'background-note' }, this.t('backgroundNote')),
       h('button', { class: 'link', id: 'open-privacy', on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
       h('section', { class: 'about', id: 'about', attrs: { 'aria-labelledby': 'about-title' } },
         moment('about', 'mascot tiny', t),
@@ -2412,7 +2597,58 @@ export class DesktopApp {
       h('h2', {}, t('friendlyTitle')),
       ...toggle('fun-messages', 'funMessages', 'funMessages', 'funMessagesHelp'),
       ...toggle('wellbeing-reminders', 'wellbeingReminders', 'wellbeingReminders', 'wellbeingRemindersHelp'),
+      this.renderDesktopNotifications(),
+      this.renderPause(),
       h('p', { class: 'muted' }, t('friendlyLocal')),
+    );
+  }
+
+  /** "Show them as desktop notifications" and, when the OS does not show them, why the messages stay in the app. */
+  private renderDesktopNotifications(): HTMLElement {
+    const t = this.t;
+    const settings = this.state.settings;
+    const input = h('input', { id: 'desktop-notifications', attrs: { type: 'checkbox', 'aria-describedby': 'desktop-notifications-help' } });
+    input.checked = settings.desktopNotifications;
+    input.addEventListener('change', () => this.setDesktopNotifications(input.checked));
+    const status: MessageKey | null = !settings.desktopNotifications
+      ? null
+      : settings.nativeStatus === 'denied'
+        ? 'nativeStatusDenied'
+        : settings.nativeStatus === 'failed'
+          ? 'nativeStatusFailed'
+          : settings.nativeStatus === 'unsupported'
+            ? 'nativeStatusUnsupported'
+            : null;
+    return h(
+      'div',
+      { class: 'native-settings' },
+      h('label', { class: 'switch' }, input, t('desktopNotifications')),
+      h('p', { class: 'help', id: 'desktop-notifications-help' }, t('desktopNotificationsHelp')),
+      status !== null &&
+        h(
+          'p',
+          { class: 'help native-status', id: 'native-status' },
+          t(status),
+          status !== 'nativeStatusUnsupported' && ' ',
+          status !== 'nativeStatusUnsupported' && h('button', { class: 'link', id: 'native-retry', key: 'native-retry', attrs: { type: 'button' }, on: { click: () => this.setDesktopNotifications(true) } }, t('nativeRetry')),
+        ),
+    );
+  }
+
+  /** Pause the friendly messages for an hour (also in the tray menu), or resume them. */
+  private renderPause(): HTMLElement | null {
+    const t = this.t;
+    if (!this.state.settings.funMessages && !this.state.settings.wellbeingReminders) return null;
+    const paused = pausedAt(this.state.messages, this.now());
+    return h(
+      'p',
+      { class: 'row-actions', id: 'friendly-pause' },
+      paused && h('span', { class: 'muted', id: 'friendly-paused-text' }, t('friendlyPausedUntil', { time: this.time(this.state.messages.pausedUntil as string) })),
+      h(
+        'button',
+        { class: 'secondary small', id: paused ? 'friendly-resume' : 'friendly-pause-button', key: 'friendly-pause-button', attrs: { type: 'button' }, on: { click: () => void this.pauseFriendly(!paused) } },
+        t(paused ? 'friendlyResume' : 'friendlyPause'),
+      ),
     );
   }
 

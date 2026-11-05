@@ -4898,6 +4898,7 @@ name = "time-track-desktop"
 version = "0.1.0"
 dependencies = [
  "keyring",
+ "notify-rust",
  "serde",
  "serde_json",
  "tauri",
@@ -4909,6 +4910,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-process",
  "tauri-plugin-updater",
+ "tauri-winrt-notification",
  "url",
  "user-idle",
 ]

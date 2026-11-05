@@ -5,7 +5,7 @@ import * as fr from './messages/fr';
 import * as it from './messages/it';
 import * as nl from './messages/nl';
 import * as pt from './messages/pt';
-import { type Keywords, type Line, POOL_KINDS, type PoolKind, type Pools, TASK_KINDS, type TaskKind, type Windows } from './messages/types';
+import { type Keywords, type Line, type NoticeKind, POOL_KINDS, type PoolKind, type Pools, TASK_KINDS, type TaskKind, type Titles, type Windows } from './messages/types';
 
 /**
  * Friendly messages (0.5.0): a varied "Still there?" phrasing, cheers on long stretches and time-of-day moments
@@ -20,7 +20,7 @@ import { type Keywords, type Line, POOL_KINDS, type PoolKind, type Pools, TASK_K
 export const MESSAGE_LOCALES = ['en', 'es', 'de', 'fr', 'it', 'nl', 'pt'] as const;
 export type MessageLocale = (typeof MESSAGE_LOCALES)[number];
 
-export const CATALOG: Record<MessageLocale, { pools: Pools; windows: Windows; keywords: Keywords }> = { en, es, de, fr, it, nl, pt };
+export const CATALOG: Record<MessageLocale, { pools: Pools; windows: Windows; keywords: Keywords; titles: Titles }> = { en, es, de, fr, it, nl, pt };
 
 /** First cheer after this many hours of one running timer, then one every `CHEER_EVERY_HOURS`. */
 export const CHEER_FIRST_HOURS = 2;
@@ -42,6 +42,8 @@ export const MEETING_COUNTDOWN_MINUTES = 10;
 export const DAILY_TOAST_MS = 12_000;
 /** A meeting-like task running at least this long makes the next card a coffee / stretch line (`meetingAfter`). */
 export const MEETING_LONG_MINUTES = 60;
+/** "Pause friendly messages" (tray, Settings) lasts this long. */
+export const PAUSE_MINUTES = 60;
 /** Remembered "already shown" slots. */
 const SEEN_LIMIT = 40;
 
@@ -75,6 +77,8 @@ export interface Card {
   entry: string;
   shownAt: string;
   dismissed: boolean;
+  /** `desktop`: shown as a native notification, so not as a toast in the window. */
+  delivered?: 'desktop';
 }
 
 export interface MessageState {
@@ -89,9 +93,30 @@ export interface MessageState {
   seen: string[];
   /** End of a long meeting-like entry whose coffee / stretch card is still due (ISO), if any. */
   afterMeeting: string | null;
+  /** Friendly messages paused (tray / Settings, `PAUSE_MINUTES`) until this instant (ISO), if any. */
+  pausedUntil: string | null;
 }
 
-export const EMPTY_MESSAGES: MessageState = { recent: {}, idleLine: null, card: null, lastShownAt: null, seen: [], afterMeeting: null };
+export const EMPTY_MESSAGES: MessageState = { recent: {}, idleLine: null, card: null, lastShownAt: null, seen: [], afterMeeting: null, pausedUntil: null };
+
+/** Whether the friendly messages are paused at `now`. */
+export function pausedAt(state: MessageState, now: Date): boolean {
+  return state.pausedUntil !== null && now.getTime() < Date.parse(state.pausedUntil);
+}
+
+/** Pauses the friendly messages for `PAUSE_MINUTES` from `now`. */
+export function pauseMessages(state: MessageState, now: Date): MessageState {
+  return { ...state, pausedUntil: new Date(now.getTime() + PAUSE_MINUTES * 60_000).toISOString() };
+}
+
+export function resumeMessages(state: MessageState): MessageState {
+  return { ...state, pausedUntil: null };
+}
+
+/** Short title of a desktop notification in `locale`. */
+export function noticeTitle(locale: MessageLocale, kind: NoticeKind): string {
+  return CATALOG[locale].titles[kind];
+}
 
 export interface Switches {
   fun: boolean;
@@ -252,6 +277,7 @@ export function stretchKind(step: number, switches: Switches): CardKind {
 export function planMessage(input: PlanInput): { kind: CardKind; slot: string } | null {
   const { now, switches, windows, timeZone, state } = input;
   if (!switches.fun && !switches.wellbeing) return null;
+  if (pausedAt(state, now)) return null;
   if (state.lastShownAt !== null && now.getTime() - Date.parse(state.lastShownAt) < MIN_GAP_MINUTES * 60_000) return null;
   const start = new Date(input.startedAt);
   const elapsed = Math.max(0, (now.getTime() - start.getTime()) / 60_000);
@@ -360,10 +386,15 @@ export function lineText(locale: MessageLocale, kind: PoolKind, index: number, p
 /** The card to show for the running entry now (not dismissed, not expired, still allowed by the switches). */
 export function visibleCard(state: MessageState, entry: string | null, now: Date, switches: Switches): Card | null {
   const card = state.card;
-  if (card === null || card.dismissed || entry === null || card.entry !== entry) return null;
+  if (card === null || card.dismissed || card.delivered === 'desktop' || entry === null || card.entry !== entry) return null;
   if (now.getTime() - Date.parse(card.shownAt) >= CARD_TTL_MINUTES * 60_000) return null;
   const line = CATALOG[card.locale].pools[card.kind][card.line];
   return line !== undefined && lineAllowed(card.kind, line, switches) ? card : null;
+}
+
+function sanitizeCard(card: Card): Card {
+  const { delivered, ...rest } = card;
+  return { ...rest, dismissed: card.dismissed === true, ...(delivered === 'desktop' ? { delivered } : {}) };
 }
 
 /** Stored state from an older or hand-edited local storage, made safe. */
@@ -393,9 +424,10 @@ export function sanitizeMessages(raw: unknown): MessageState {
   return {
     recent,
     idleLine: Number.isInteger(value.idleLine) && (value.idleLine as number) >= 0 ? (value.idleLine as number) : null,
-    card: validCard ? ({ ...(card as Card), dismissed: card.dismissed === true } as Card) : null,
+    card: validCard ? sanitizeCard(card as Card) : null,
     lastShownAt: typeof value.lastShownAt === 'string' && !Number.isNaN(Date.parse(value.lastShownAt)) ? value.lastShownAt : null,
     seen: Array.isArray(value.seen) ? value.seen.filter((slot): slot is string => typeof slot === 'string').slice(-SEEN_LIMIT) : [],
     afterMeeting: typeof value.afterMeeting === 'string' && !Number.isNaN(Date.parse(value.afterMeeting)) ? value.afterMeeting : null,
+    pausedUntil: typeof value.pausedUntil === 'string' && !Number.isNaN(Date.parse(value.pausedUntil)) ? value.pausedUntil : null,
   };
 }

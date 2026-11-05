@@ -90,6 +90,11 @@ export type PoolKind = (typeof POOL_KINDS)[number];
 
 export type Pools = Record<PoolKind, readonly Line[]>;
 
+/** Pools that reach the person as a toast or a desktop notification (the idle phrasings go with the prompt). */
+export type NoticeKind = Exclude<PoolKind, 'idle' | 'meetingIdle'>;
+/** Short title of each kind of desktop notification, per locale (the line is its body). */
+export type Titles = Record<NoticeKind, string>;
+
 /** Meeting-like task kinds, detected from the task's type, labels or name (`Keywords`, per locale). */
 export const TASK_KINDS = ['daily', 'meeting', 'technical', 'training'] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];

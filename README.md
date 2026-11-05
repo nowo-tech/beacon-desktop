@@ -30,8 +30,14 @@ Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile 
 
 ## Features
 
-- Tray timer (`H:MM` and task, tooltip with today's total) with a translated menu: Stop / Resume, Switch to (pinned and
-  recent tasks), Search task…, Open Beacon, My time. Global shortcut **Ctrl/Cmd + Alt + Shift + T**, configurable in
+- Tray timer (`H:MM` and task, tooltip with today's total, running / stopped icon) in the Windows notification area
+  (bottom right, like Docker Desktop), the macOS menu bar and the Linux StatusNotifier / AppIndicator, with a translated
+  menu: the running task and its time (refreshed every 30 s), Stop / Resume, Switch to (pinned and recent tasks),
+  Search task…, Open TimeTrack, Open Beacon, My time, *Pause friendly messages for 1 h*, Settings, Quit. A left click
+  shows or hides the window (Windows, macOS; Linux AppIndicators only open the menu). Closing or minimising the
+  window keeps the app running in the tray: the timer, the "Still there?" check and the friendly messages carry on,
+  woken on time by a wall-clock heartbeat in Rust (`src-tauri/src/heartbeat.rs`), not by the webview's timers, which
+  a hidden window may throttle. Global shortcut **Ctrl/Cmd + Alt + Shift + T**, configurable in
   Settings.
 - Pinned and recent tasks (`Alt+1…9`), Resume the last task, Today / This week totals, search with `Ctrl/Cmd + K`, arrow
   keys and Enter.
@@ -80,8 +86,9 @@ task list; which pose goes where, and where the art comes from: [public/mascot/R
 
 ### Friendly messages
 
-A smile now and then, never in the way. While a timer runs, small toasts (bottom right, never focused, easy to dismiss)
-cheer you on after 2, 4, 6… hours (a medal at 2 h and 4 h, a gentle "take a real break" from 6 h), greet an early
+A smile now and then, never in the way. While a timer runs, small desktop notifications (outside the app, even with
+the window in the tray; a toast inside the window when the OS does not show them) cheer you on after 2, 4, 6… hours (a medal at 2 h and 4 h, a gentle "take a real break" from 6 h, with no figure in
+it), greet an early
 start, suggest a coffee, lunch, a stretch or some water, say it is getting late, and have something to say on Friday
 afternoon and at the weekend. They know about meetings: during a daily, a call or a planning (from Beacon's labels or
 the task name) "Still there?" becomes "Still in the meeting?" with a longer countdown, a long meeting is followed by a
@@ -91,8 +98,28 @@ Italian, Dutch and Portuguese (the Beacon user's language when the server sends 
 local times per language. Settings → **Friendly messages**: *Fun messages* and *Wellbeing reminders*, both on by
 default. Pools: `src/lib/messages/`; rules: `src/lib/friendly.ts`.
 
-"Still there?" itself is a modal with a countdown (2 minutes, 10 during meetings): with no answer the timer stops at
-the start of the idle time, and the modal offers **Resume … now** on the same task.
+"Still there?" itself opens in **its own small window, always on top and centred on the monitor you are using**, also
+while the main window is in the tray (`src-tauri/src/prompt.rs`, `src/ui/prompt.ts`), with a countdown (2 minutes, 10
+during meetings): with no answer the timer stops at the start of the idle time, and the window offers **Resume …
+now** on the same task. There is only ever one; it closes once answered, Esc does not dismiss it, and on Windows it
+flashes in the taskbar when focus-stealing prevention keeps it from taking the focus. Where it cannot open (a plain
+browser), it is a modal inside the main window.
+
+#### Desktop notifications
+
+| | Where | Picture | Click |
+|---|---|---|---|
+| Windows 10 / 11 | Bottom right, then the Action Center, under the app's AppUserModelID (`tech.nowo.timetrack` for the NSIS install, `<package family>!TimeTrack` for the Microsoft Store / MSIX package) | The pose as the square app logo of the toast | Brings TimeTrack forward (while the toast is on screen) |
+| macOS | Notification Center (top right) | The pose as the content image, the app icon as the sender | Brings TimeTrack forward |
+| Linux | The desktop's notification service (GNOME, KDE, …) | The pose through the `image-path` hint | Brings TimeTrack forward (servers that support the `default` action) |
+
+The first time one is due, the app asks the OS for permission (macOS asks you; the others allow it) and explains once,
+inside the window, where the messages went (*Keep them inside the app* is one click away). A refusal or a missing
+notification service is remembered: the messages stay in the window and Settings → Friendly messages says why, with
+*Try again*. The pictures are 96 × 96 PNGs built from the poses (`scripts/mascot/notification-art.sh` →
+`src-tauri/notification-art/`, listed in `src-tauri/src/pose_art.rs`), compiled into the binary and written to the app
+cache on first use. `pnpm screenshots:native` (`NATIVE_SCREENS=<dir>`) renders mock-ups of the three notifications,
+the prompt window and the Windows tray menu for review.
 
 Each line has its own mascot pose (`POSE_IDS`). New art goes in as transparent PNGs (or on white) named
 `pose-<id>.png`:
@@ -116,6 +143,21 @@ Microsoft Store build (`TIMETRACK_CHANNEL=store`): the Store updates the app, so
 required" screen send you to the Store listing instead.
 
 <img src="docs/images/desktop-store-about.png" alt="Settings, About: Updates come from the Microsoft Store" width="200"> <img src="docs/images/desktop-store-update-required.png" alt="Update required in the Store build: Open Microsoft Store" width="200">
+
+## Tauri capabilities
+
+- `src-tauri/capabilities/default.json`, window `main`: unchanged by the native shell (core defaults, HTTP to your
+  server, opener, `notification:default`, autostart enable / disable / is-enabled, process restart, set theme). The
+  desktop notifications of the friendly messages go through the app's own `notify_friendly` command (Rust,
+  `notify-rust` / `tauri-winrt-notification`), not a new plugin permission.
+- `src-tauri/capabilities/prompt.json`, window `prompt` (the "Still there?" window): only `core:event:allow-listen` /
+  `allow-unlisten`, to receive its content. No network, opener, notification, window or autostart permission.
+- App commands added: `set_wake_plan`, `notify_friendly`, `prompt_open`, `prompt_view`, `prompt_answer`,
+  `prompt_focus`, `prompt_close`. `prompt_open` / `prompt_close` refuse any window but `main` and `prompt_answer` any
+  window but `prompt`; answers are allow-listed (`{ action, note?, taskId? }`), pose ids are looked up in the
+  compiled-in list (never a path from the webview) and notification texts are capped.
+- `tauri.conf.json`: the main window has `backgroundThrottling: "disabled"` (macOS 14+, where WebKit supports it); the
+  heartbeat keeps the checks on time on every OS anyway.
 
 ## Development
 

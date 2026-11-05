@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type Titles, w, type Windows } from './types';
 
 /** Italiano: pranzo verso le 13, caffè a metà mattina e a metà pomeriggio. */
 export const pools: Pools = {
@@ -117,8 +117,8 @@ export const pools: Pools = {
     f('Già {hours} ore. Il robot tira fuori i pompon!', 'cheer-up'),
   ],
   overtime: [
-    w('{hours} ore sul cronometro. Batteria scarica: serve una pausa vera.', 'overtime'),
-    w('È una tirata lunghissima. Staccati dieci minuti, per favore.', 'overtime'),
+    w('Tanto tempo sul cronometro. Batteria scarica: serve una pausa vera.', 'overtime'),
+    w('È una tirata lunghissima. Staccati qualche minuto, per favore.', 'overtime'),
     w('Anche i robot si ricaricano. Forse tocca a te?', 'rest'),
     w('Giornata lunga! Stiracchiati, bevi acqua e vedi se puoi chiudere.', 'stretch'),
     w('La clessidra dice che è passato un bel po\'. Una pausa farebbe miracoli.', 'overtime'),
@@ -167,4 +167,20 @@ export const keywords: Keywords = {
   meeting: ['riunione', 'riunioni', 'chiamata', 'call', 'incontro', 'sync', '1:1'],
   technical: ['sprint review', 'revisione dello sprint', 'refinement', 'pianificazione', 'planning', 'retro', 'retrospettiva', 'demo', 'tecnica', 'tecnico'],
   training: ['formazione', 'corso', 'workshop', 'webinar'],
+};
+
+/** Titles of the desktop notifications (short; the line is the body). */
+export const titles: Titles = {
+  cheer: 'Continua così',
+  milestone: 'Traguardo!',
+  overtime: 'Ora di una pausa',
+  earlyBird: 'Partenza presto',
+  coffee: 'Pausa caffè?',
+  lunch: 'Ora di pranzo',
+  lateWork: 'Si fa tardi',
+  friday: 'Buon venerdì',
+  weekend: 'Modalità weekend',
+  weekendRest: 'Goditi il weekend',
+  meetingAfter: 'Dopo la riunione',
+  dailyDone: 'Daily fatto',
 };

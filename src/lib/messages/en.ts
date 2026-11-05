@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type Titles, w, type Windows } from './types';
 
 /** English. */
 export const pools: Pools = {
@@ -117,8 +117,8 @@ export const pools: Pools = {
     f('{hours} hours in. The pom-poms are out for you!', 'cheer-up'),
   ],
   overtime: [
-    w('{hours} hours on the clock. Battery low: time for a proper break.', 'overtime'),
-    w('That\'s a very long stretch. Step away for ten minutes, please.', 'overtime'),
+    w('Lots of time on the clock. Battery low: time for a proper break.', 'overtime'),
+    w('That\'s a very long stretch. Step away for a few minutes, please.', 'overtime'),
     w('Even robots recharge. Maybe it\'s your turn?', 'rest'),
     w('Long day! Stretch, drink some water, and check if you can wrap up.', 'stretch'),
     w('The hourglass says it\'s been a while. A break would do wonders.', 'overtime'),
@@ -167,4 +167,20 @@ export const keywords: Keywords = {
   meeting: ['meeting', 'meetings', 'sync', '1:1', 'one-on-one', 'call', 'catch-up', 'catchup', 'huddle', 'interview'],
   technical: ['sprint review', 'design review', 'refinement', 'grooming', 'planning', 'retro', 'retrospective', 'demo', 'technical', 'tech talk'],
   training: ['training', 'workshop', 'course', 'webinar'],
+};
+
+/** Titles of the desktop notifications (short; the line is the body). */
+export const titles: Titles = {
+  cheer: 'Keep it up',
+  milestone: 'Milestone!',
+  overtime: 'Time for a break',
+  earlyBird: 'Early start',
+  coffee: 'Coffee break?',
+  lunch: 'Lunch time',
+  lateWork: 'Working late',
+  friday: 'Happy Friday',
+  weekend: 'Weekend mode',
+  weekendRest: 'Enjoy your weekend',
+  meetingAfter: 'After the meeting',
+  dailyDone: 'Daily done',
 };

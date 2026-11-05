@@ -29,7 +29,7 @@ Likely 0.5.0.
   - **"Still there?"** gets a random phrasing under its heading (16 per language); facts, buttons and labels unchanged.
   - **Toasts** (bottom right, 72 px pose, one or two lines, × to dismiss, `aria-live="polite"`, never focused):
     cheers on long stretches (2 h, then every 2 h; milestones with a medal / pom-poms at 2 h and 4 h,
-    `MILESTONE_HOURS`; "take a real break" from 6 h, `OVERTIME_FROM_HOURS`, with the real elapsed hours), a few
+    `MILESTONE_HOURS`; "take a real break" from 6 h, `OVERTIME_FROM_HOURS`, without any figure), a few
     stretch / water / eye-break / breathing nudges, and time-of-day moments: early start, mid-morning and mid-afternoon
     coffee, lunch, late work, Friday afternoon (and holiday eve art), weekend start and "enjoy the rest of your
     weekend". Windows are per-language constants (Spanish lunch 14:00–15:30, German coffee at 15:00, …).
@@ -59,8 +59,36 @@ Likely 0.5.0.
 - `pnpm screenshots:friendly` (`FRIENDLY_SCREENS=<dir>`): every friendly situation in Spanish, light and dark, with an
   overview sheet, for review (not documentation).
 
+- **Runs in the background, from the tray**: closing or minimising the window keeps TimeTrack running; the tray icon
+  sits in the Windows notification area (bottom right, like Docker Desktop), the macOS menu bar and the Linux
+  StatusNotifier / AppIndicator, shows running / stopped in its icon and tooltip, and a left click shows or hides the
+  window. The tray menu adds *Pause friendly messages for 1 h* (then *Friendly messages paused until … · Resume*).
+  Optional start at login stays off by default (tauri-plugin-autostart, starts hidden in the tray).
+- **Wall-clock heartbeat in Rust** (`src-tauri/src/heartbeat.rs`): the 30 s check, the end of the "Still there?"
+  countdown and the idle threshold wake the UI on time while its window is hidden (a hidden webview may throttle its
+  timers), and a sleep is noticed at once. The webview's own 30 s `setInterval` is gone in the Tauri app (kept in a
+  plain browser). Rust unit tests with a fake clock.
+- **Friendly messages as native desktop notifications** (`src-tauri/src/notify.rs`): short localized title (7
+  languages), the line as body, the mascot pose as the picture (Windows toast app logo under the app's AUMID, for the
+  NSIS install and the MSIX / Store package; macOS content image; Linux `image-path` hint); a click brings the window
+  forward. Permission asked on first need with a one-time explanation in the window; denied or failing → the in-app
+  toast, and Settings → Friendly messages says so (*Try again*). New switch *Show them as desktop notifications* (on),
+  *Pause for 1 h* in Settings and the tray. Pictures: `scripts/mascot/notification-art.sh` (96 × 96 PNG, compiled in).
+- **"Still there?" in its own window**, always on top and centred on the monitor under the pointer, shown with the
+  main window in the tray (`src-tauri/src/prompt.rs`, `src/ui/prompt.ts`, `src/ui/promptWindow.ts`): same content,
+  countdown, auto-stop and *Resume … now*; exactly one, closed once answered, its close button refused, Esc never
+  dismisses it (it says an answer is needed); on Windows it re-asserts always-on-top and requests attention (taskbar
+  flash) against focus-stealing prevention. The main window shows "the question is open in its own window" with
+  *Show the question*. Where no window can be opened, the in-app modal is used as before. New capability
+  `prompt.json` (event listen only); see README → Tauri capabilities.
+- `pnpm screenshots:native` (`NATIVE_SCREENS=<dir>`): mock-ups of the Windows 11, macOS and GNOME notifications, the
+  prompt window over a desktop (fresh, mid-countdown, paused) and the Windows tray menu, light and dark.
+
 ### Changed
 
+- Overtime lines ("take a real break", from 6 h) carry no figure at all in any language: no hour count, no "ten
+  minutes" (owner decision); a test enforces it.
+- The in-app toast (fallback) reserves room below the page while it is visible, so it never covers the last task rows.
 - Lighter microcopy for an expired code, an empty task list and no search results; "Nothing on the clock yet" in the
   idle timer card on first run; the empty "Pinned and recent" line no longer repeats the mascot.
 

@@ -30,6 +30,13 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
+# Native friendly-message notifications with the pose picture and click handling (notify.rs); already used by
+# tauri-plugin-notification, same version.
+notify-rust = "4.18"
+
+[target.'cfg(windows)'.dependencies]
+# Windows toasts with the pose as the square app logo (notify.rs).
+tauri-winrt-notification = "0.8"
 
 [profile.release]
 codegen-units = 1

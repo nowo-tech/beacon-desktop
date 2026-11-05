@@ -19,7 +19,8 @@
         "minWidth": 360,
         "minHeight": 480,
         "resizable": true,
-        "visible": true
+        "visible": true,
+        "backgroundThrottling": "disabled"
       }
     ],
     "security": {
