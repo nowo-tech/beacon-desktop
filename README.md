@@ -14,12 +14,31 @@ version and SHA-256 of each file. Version 0.1 is **not code-signed** yet, so the
 
 | OS | File | First start |
 |---|---|---|
-| Windows 10/11 | `*-setup.exe` (or `.msi`) | SmartScreen "Windows protected your PC" → **More info** → **Run anyway**. |
+| Windows 10/11 | `*-setup.exe` (per user, no administrator rights; 0.1.0 also had an `.msi`) | SmartScreen "Windows protected your PC" → **More info** → **Run anyway**. |
 | macOS 12+ (Intel and Apple silicon) | `.dmg` | Drag TimeTrack to Applications. First start: right-click (Control-click) the app → **Open** → **Open**. If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/TimeTrack.app` once. On macOS 15+: System Settings → Privacy & Security → **Open Anyway**. |
 | Linux (x86_64) | `.deb` or `.AppImage` | `sudo apt install ./TimeTrack_*.deb`, or `chmod +x TimeTrack_*.AppImage` and run it. The token is kept in the Secret Service (GNOME Keyring / KWallet). |
 
 Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile <file> SHA256`, `shasum -a 256 <file>`,
 `sha256sum <file>`).
+
+### Upgrading on Windows
+
+From 0.4.0 on, the app updates itself (signed, in place, no questions: *Update now* closes the app, installs and
+starts it again). Running a newer `*-setup.exe` by hand also upgrades in place: it closes TimeTrack, tray included
+(it asks first), keeps your sign-in and settings, and leaves a single *TimeTrack* entry in Settings → Apps. If the
+installer offers *Uninstall before installing*, either choice works; the second one is quicker.
+
+Coming from **0.1.0**:
+
+- **Installed with `*-setup.exe`**: run the 0.5.0+ `*-setup.exe` (or let 0.4.0+ update itself). The 0.4.0 installer's
+  *Uninstall before installing* fails on this install with "Unable to uninstall!": click OK, choose **Do not
+  uninstall**, then **Next**; the upgrade is complete and correct.
+- **Installed with the `.msi`** (for all users, in `C:\Program Files\TimeTrack`): the 0.5.0+ installer finds it and
+  offers to remove it (Windows asks for administrator approval). If you decline, or that fails, or you installed
+  0.4.0: open **Settings → Apps → Installed apps**, find the **TimeTrack** whose publisher is **nowo** (version
+  0.1.0) and choose **Uninstall** (needs an administrator account), then start the remaining TimeTrack. Keep the
+  one from publisher **nowo.tech**. Your sign-in is shared, so nothing else to do; if *Start at login* was on, switch
+  it off and on again in Settings.
 
 ### Sign in
 
