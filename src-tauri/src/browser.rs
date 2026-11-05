@@ -312,41 +312,60 @@ fn in_windows_dir(path: &str) -> bool {
         .is_some_and(|rest| rest.starts_with(":\\windows\\"))
 }
 
+/// `\\?\C:\…` (what `canonicalize` answers on Windows) → `C:\…`; other paths unchanged.
+fn without_verbatim_prefix(path: &str) -> &str {
+    match path.strip_prefix("\\\\?\\") {
+        Some(rest) if is_absolute(rest, Os::Windows) => rest,
+        _ => path,
+    }
+}
+
 /// A browser picked by hand: an absolute path to an existing `.exe` (Windows, outside `C:\Windows`), `.app` bundle
-/// (macOS) or executable file (Linux), never a shell, interpreter or launcher (also checked on the resolved path, so a
-/// link named `brave` that points to `/bin/sh` is refused).
+/// (macOS) or executable file (Linux), never a shell, interpreter or launcher. Every check runs on the path with its
+/// symbolic links resolved, and that resolved path is what gets launched (audit GC-I7: a link swapped between the
+/// check and the launch cannot point the launch elsewhere; a link named `brave` that points to `/bin/sh` is refused).
 pub fn custom_browser(path: &str, os: Os, fs: &dyn Fs) -> Result<Browser, String> {
     if path.contains('\0') || path.contains("..") || !is_absolute(path, os) {
         return Err("the browser must be an absolute path".into());
     }
-    let resolved = fs.resolve(path);
-    if not_a_browser(path) || resolved.as_deref().is_some_and(not_a_browser) {
+    let resolved = fs
+        .resolve(path)
+        .ok_or_else(|| "the browser file does not exist".to_string())?;
+    let target = without_verbatim_prefix(&resolved).to_string();
+    if target.contains('\0') || !is_absolute(&target, os) {
+        return Err("the browser must be on this computer".into());
+    }
+    if not_a_browser(path) || not_a_browser(&target) {
         return Err("this program is not a browser".into());
     }
-    if os == Os::Windows
-        && (in_windows_dir(path) || resolved.as_deref().is_some_and(in_windows_dir))
-    {
+    if os == Os::Windows && (in_windows_dir(path) || in_windows_dir(&target)) {
         return Err("choose a browser outside the Windows folder".into());
     }
-    let lower = path.to_ascii_lowercase();
-    let app = path.trim_end_matches('/');
+    let is_exe = |p: &str| p.to_ascii_lowercase().ends_with(".exe");
+    let is_app = |p: &str| {
+        p.to_ascii_lowercase()
+            .trim_end_matches('/')
+            .ends_with(".app")
+    };
+    let app = target.trim_end_matches('/');
     let argv = match os {
-        Os::Windows if lower.ends_with(".exe") && fs.is_file(path) => {
-            vec![Arg::Lit(path.into()), Arg::url()]
+        Os::Windows if is_exe(path) && is_exe(&target) && fs.is_file(&target) => {
+            vec![Arg::Lit(target.clone()), Arg::url()]
         }
         Os::Mac
-            if lower.trim_end_matches('/').ends_with(".app")
-                && fs.is_dir(path)
+            if is_app(path)
+                && is_app(&target)
+                && fs.is_dir(&target)
                 && fs.is_file(&format!("{app}/Contents/Info.plist")) =>
         {
             vec![
                 Arg::Lit("/usr/bin/open".into()),
                 Arg::Lit("-a".into()),
-                Arg::Lit(path.into()),
+                Arg::Lit(target.clone()),
                 Arg::url(),
             ]
         }
-        Os::Linux if fs.is_executable(path) => vec![Arg::Lit(path.into()), Arg::url()],
+        Os::Linux if fs.is_executable(&target) => vec![Arg::Lit(target.clone()), Arg::url()],
         Os::Windows => return Err("choose the browser's .exe file".into()),
         Os::Mac => return Err("choose the browser's .app".into()),
         Os::Linux => return Err("choose the browser's program (an executable file)".into()),
@@ -1337,6 +1356,28 @@ mod tests {
             assert!(custom_browser(path, Os::Linux, &files).is_err(), "{path}");
         }
         assert!(custom_browser("/opt/brave/brave", Os::Linux, &files).is_ok());
+        // GC-I7: the resolved path is launched, not the link that was checked.
+        let mut linked = fs(&["/opt/firefox/firefox"], &[]);
+        linked.links = vec![("/home/ana/bin/firefox", "/opt/firefox/firefox")];
+        let firefox = custom_browser("/home/ana/bin/firefox", Os::Linux, &linked).unwrap();
+        assert_eq!(firefox.name, "firefox");
+        assert_eq!(
+            firefox.command("https://b.example.com/"),
+            vec!["/opt/firefox/firefox", "https://b.example.com/"]
+        );
+        // A dangling link (nothing to resolve) is refused.
+        let mut dangling = fs(&[], &[]);
+        dangling.links = vec![("/home/ana/bin/gone", "/nonexistent")];
+        assert!(custom_browser("/home/ana/bin/gone", Os::Linux, &dangling).is_err());
+        assert_eq!(
+            without_verbatim_prefix(r"\\?\C:\Program Files\B\brave.exe"),
+            r"C:\Program Files\B\brave.exe"
+        );
+        assert_eq!(
+            without_verbatim_prefix(r"\\?\UNC\server\share\b.exe"),
+            r"\\?\UNC\server\share\b.exe"
+        );
+        assert_eq!(without_verbatim_prefix("/usr/bin/b"), "/usr/bin/b");
         for path in [
             r"C:\Windows\System32\cmd.exe",
             r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
