@@ -7,6 +7,8 @@ import { type Card, type Switches, afterStop, beaconLocale, beaconTimeZone, CARD
 import type { NoticeKind, PoseId, TaskKind } from '../lib/messages/types';
 import { createTranslator, detectLocale, type Locale, type MessageKey, type Translate } from '../lib/i18n';
 import { type GapChoice, type IdleCheckState, type IdleChoice, WATCHING, decide, decideGap, observeIdle, promptSpan } from '../lib/idleCheck';
+import { lockReturn, meetingTask, pickerTasks, reassignMode, reassignWhileAsking } from '../lib/idleChoices';
+import { composeNudge, NUDGE_MINUTES_CHOICES, type NudgeAction, nudgeActionOf, type NudgeNote, observeActivity, watchingActivity, workingNow } from '../lib/nudge';
 import { preflight } from '../lib/preflight';
 import { OfflineQueue } from '../lib/queue';
 import { type ClampNote, type QueuedAction, type SyncResult, applyLocally } from '../lib/replay';
@@ -47,11 +49,11 @@ import {
 import { withinWorkingHours } from '../lib/workingHours';
 import { type LayoutMode, layoutFor, loadWindowMemory, otherMode, placeWindow, saveWindowMemory, WINDOW_KEY, type WindowMemory } from '../lib/layout';
 import { type DaySpan, todaySpans, weekByTask, weekDays } from '../lib/week';
-import type { FriendlyNotification, Platform, TrayMenu, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
+import type { FriendlyNotification, Platform, SessionEvent, ShortcutSlot, TrayMenu, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
 import { art, emptyArt, ERROR_POSES, moment, poseArt, variant, type Moment } from './mascot';
-import { PromptMount, type PromptAnswer, type PromptBlock, type PromptButton, type PromptChoices, type PromptTaskOption, type PromptText, type PromptView } from './prompt';
+import { PromptMount, type PromptAnswer, type PromptBlock, type PromptButton, type PromptPicker, type PromptTaskOption, type PromptText, type PromptView } from './prompt';
 
 export type View = 'loading' | 'login' | 'device' | 'main' | 'settings' | 'privacy' | 'update-required';
 
@@ -116,6 +118,25 @@ function countdown(seconds: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+/** An accelerator as people read it on this system: `CommandOrControl+Alt+Space` → `Ctrl+Alt+Space` (⌘⌥Space on a Mac). */
+export function shortcutLabel(accelerator: string, mac = /mac/i.test(globalThis.navigator?.platform ?? '')): string {
+  const keys = accelerator.split('+').map((key) => key.trim()).filter((key) => key !== '');
+  const names: Record<string, [string, string]> = {
+    commandorcontrol: ['⌘', 'Ctrl'],
+    cmdorctrl: ['⌘', 'Ctrl'],
+    command: ['⌘', 'Cmd'],
+    cmd: ['⌘', 'Cmd'],
+    control: ['⌃', 'Ctrl'],
+    ctrl: ['⌃', 'Ctrl'],
+    alt: ['⌥', 'Alt'],
+    option: ['⌥', 'Alt'],
+    shift: ['⇧', 'Shift'],
+    super: ['⌘', 'Super'],
+  };
+  const parts = keys.map((key) => names[key.toLowerCase()]?.[mac ? 0 : 1] ?? key);
+  return parts.join(mac ? '' : '+');
+}
+
 interface MainRegions {
   root: HTMLElement;
   banners: HTMLElement;
@@ -151,6 +172,18 @@ export class DesktopApp {
   clampNotes: ClampNote[] = [];
   /** "I was in a meeting" form of the prompt is open. */
   meetingOpen = false;
+  /** "Reassign to another task" picker of the prompt is open, with its search and results. */
+  reassignOpen = false;
+  reassignQuery = '';
+  reassignResults: Task[] | null = null;
+  reassignStatus: string | null = null;
+  /** Screen locked / computer asleep (OS events, local only) and since when. */
+  private session = { locked: false, asleep: false };
+  lockedAt: Date | null = null;
+  /** "Working without a timer?" shown inside the window (desktop notifications off or failing). */
+  nudgeToast: NudgeNote | null = null;
+  /** Result of saving the "Continue last" shortcut (Settings). */
+  resumeShortcutMessage: { text: string; ok: boolean } | null = null;
   /** "Clear local data" asks for confirmation first. */
   confirmClear = false;
   update: { version: string; min: string | null; installable: boolean; notes: string | null } | null = null;
@@ -329,10 +362,14 @@ export class DesktopApp {
     // The regular check, woken by the host (on time while the window is hidden).
     this.platform.onWake(() => void this.tick());
     // A button of a working-hours reminder notification (Start / Stop / Resume).
-    this.platform.onNotificationAction((id) => void this.reminderAction(actionOfId(id)));
+    this.platform.onNotificationAction((id) => void this.notificationAction(id));
     this.platform.onShortcut(() => this.focusSearch());
+    // "Continue last": works with the window hidden in the tray (the shortcut does not show it).
+    this.platform.onResumeShortcut(() => void this.continueLast());
+    this.platform.onSessionEvent((event) => void this.sessionEvent(event));
     await this.restoreWindow();
     await this.applyShortcut(this.state.settings.shortcut, false);
+    await this.applyShortcut(this.state.settings.resumeShortcut, false, 'resume');
     this.token = await this.platform.secretGet();
     if (this.state.session === null || this.token === null) {
       this.show('login');
@@ -1133,11 +1170,17 @@ export class DesktopApp {
     if (timer !== null) {
       const time = formatHoursMinutes(elapsedSeconds(timer.startedAt, this.now()));
       const short = timer.taskTitle.length > 20 ? `${timer.taskTitle.slice(0, 19)}…` : timer.taskTitle;
+      const startedAt = Date.parse(timer.startedAt);
+      const elapsed = elapsedSeconds(timer.startedAt, this.now());
       await this.platform.setTray({
         title: `${time} ${short}`,
         tooltip: t('trayTooltipRunning', { task: timer.taskTitle, time, today }),
         status: `● ${time} · ${timer.taskTitle}`,
         running: true,
+        // The host refreshes the elapsed time every minute by itself (menu-bar title on macOS, tooltip everywhere).
+        clock: Number.isNaN(startedAt)
+          ? null
+          : { startedAt, title: `{time} ${short}`, tooltip: t('trayTooltipRunning', { task: timer.taskTitle, time: '{time}', today: '{today}' }), todayBaseSeconds: (this.totals()?.today ?? 0) - elapsed },
       });
     } else {
       await this.platform.setTray({
@@ -1145,6 +1188,7 @@ export class DesktopApp {
         tooltip: t('trayTooltipIdle', { today }),
         status: t('trayNotTracking'),
         running: false,
+        clock: null,
       });
     }
     const signedIn = this.state.session !== null;
@@ -1195,22 +1239,174 @@ export class DesktopApp {
     }
   }
 
-  /** Registers the global shortcut; a refusal (in use / invalid) is shown in Settings and the previous one is kept. */
-  async applyShortcut(accelerator: string, save = true): Promise<boolean> {
+  /**
+   * Registers a global shortcut (`open`: show and search; `resume`: "Continue last"); a refusal (in use, invalid, the
+   * other shortcut) is shown in Settings and the previous one is kept.
+   */
+  async applyShortcut(accelerator: string, save = true, slot: ShortcutSlot = 'open'): Promise<boolean> {
     const value = accelerator.trim();
+    const message = (text: string, ok: boolean) => {
+      if (slot === 'resume') this.resumeShortcutMessage = { text, ok };
+      else this.shortcutMessage = { text, ok };
+    };
+    const other = slot === 'resume' ? this.state.settings.shortcut : this.state.settings.resumeShortcut;
+    if (value.toLowerCase() === other.trim().toLowerCase()) {
+      message(this.t('shortcutSame', { shortcut: value }), false);
+      this.render();
+      return false;
+    }
     try {
-      await this.platform.setShortcut(value);
+      await this.platform.setShortcut(value, slot);
     } catch {
-      this.shortcutMessage = { text: this.t('shortcutFailed', { shortcut: value }), ok: false };
+      message(this.t('shortcutFailed', { shortcut: value }), false);
       this.render();
       return false;
     }
     if (save) {
-      this.persist({ settings: { ...this.state.settings, shortcut: value } });
-      this.shortcutMessage = { text: this.t('shortcutSaved', { shortcut: value }), ok: true };
+      this.persist({ settings: { ...this.state.settings, [slot === 'resume' ? 'resumeShortcut' : 'shortcut']: value } });
+      message(this.t('shortcutSaved', { shortcut: value }), true);
       this.render();
     }
     return true;
+  }
+
+  /**
+   * "Continue last" (timer card button, global shortcut, "Start" of the working-without-timer nudge): starts the last
+   * task again as a new entry. After an automatic stop it is the "Resume" of that question; nothing while a timer runs.
+   */
+  async continueLast(): Promise<void> {
+    if (this.state.session === null) return;
+    const phase = this.state.idleCheck.phase;
+    if (phase === 'resume') return this.resumeAfterGap(true);
+    if (phase === 'away' || phase === 'gap') return this.resumeNow();
+    if (phase === 'asking' || this.state.activeTimer !== null) return;
+    await this.resume();
+  }
+
+  /** A notification button: a working-hours reminder's, or one of "Working without a timer?". */
+  async notificationAction(id: string): Promise<void> {
+    const nudge = nudgeActionOf(id);
+    if (nudge !== null) return this.nudgeAction(nudge);
+    return this.reminderAction(actionOfId(id));
+  }
+
+  // ---- Screen lock and sleep (local only) -------------------------------------------------------------------------
+
+  /** Whether a lock / sleep pauses: the setting, on top of the "Still there?" check it uses. */
+  lockPauseOn(): boolean {
+    return this.state.settings.pauseOnLock && this.idleCheckEnabled();
+  }
+
+  /** A lock / sleep event from the OS, in turn with the regular checks. */
+  sessionEvent(event: SessionEvent): Promise<void> {
+    const run = this.ticking.then(() => this.onSessionEvent(event));
+    this.ticking = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * From the lock (or sleep) the time counts as idle; once the screen is unlocked and the computer awake, the
+   * three-choice question about that time (`lockReturn`). The events themselves are never stored or sent.
+   */
+  private async onSessionEvent(event: SessionEvent): Promise<void> {
+    if (event === 'lock' || event === 'unlock') this.session.locked = event === 'lock';
+    else this.session.asleep = event === 'suspend';
+    if (this.session.locked || this.session.asleep) {
+      this.lockedAt ??= this.now();
+      return;
+    }
+    const since = this.lockedAt;
+    this.lockedAt = null;
+    if (since === null || !this.lockPauseOn()) return;
+    const step = lockReturn(this.state.idleCheck, this.state.activeTimer, since, this.now(), this.idleSettings());
+    if (step.state !== this.state.idleCheck) this.setIdleCheck(step.state);
+    if (step.effect === 'autoStop') await this.runActions(step.actions);
+    if (step.effect !== null) await this.promptShown(step.state);
+    this.syncWakePlan();
+  }
+
+  // ---- "Working without a timer?" (local only) ------------------------------------------------------------------
+
+  /**
+   * On every check: input for `nudgeMinutes` in a row during working hours with no timer → a friendly notification
+   * (at most once every 45 min). The OS counter is read only while those conditions hold, never stored or sent.
+   */
+  private async checkNudge(): Promise<void> {
+    const now = this.now();
+    const settings = this.state.settings;
+    const view = this.scheduleView();
+    const lastNotice = this.state.messages.lastShownAt;
+    const conditions = {
+      enabled:
+        this.state.session !== null &&
+        settings.nudgeWithoutTimer &&
+        this.view !== 'update-required' &&
+        this.lockedAt === null &&
+        !pausedAt(this.state.messages, now) &&
+        // Not right after another message (the "Shall we start?" reminder says the same).
+        (lastNotice === null || now.getTime() - Date.parse(lastNotice) >= 15 * 60_000),
+      running: this.state.activeTimer !== null,
+      working: workingNow({ now, timeZone: view.timeZone, week: view.merged.week, daysOff: view.daysOff }),
+      prompting: this.state.idleCheck.phase !== 'watching',
+      minutes: settings.nudgeMinutes,
+    };
+    const idleSeconds = watchingActivity(conditions) ? await this.platform.idleSeconds() : null;
+    const step = observeActivity(this.state.nudge, { ...conditions, now, idleSeconds });
+    if (step.state !== this.state.nudge) this.persist({ nudge: step.state });
+    if (step.fire) this.fireNudge();
+  }
+
+  private fireNudge(): void {
+    const last = this.lastTask();
+    const { note, state } = composeNudge({
+      locale: this.messageLocale(),
+      rng: this.random,
+      now: this.now(),
+      last,
+      // Meeting rule: a meeting rarely goes on, so no "Start <meeting>" button (only "Choose task").
+      lastIsMeeting: last !== null && this.timerKind({ taskId: last.id, taskTitle: last.title }) !== null,
+      state: this.state.nudge,
+    });
+    this.persist({ nudge: state, messages: { ...this.state.messages, lastShownAt: note.shownAt } });
+    const native: FriendlyNotification = {
+      title: note.title,
+      body: note.text,
+      pose: note.pose,
+      actions: [...(note.resume !== null ? [{ id: note.resume.id, label: note.resume.label }] : []), { id: note.choose.id, label: note.choose.label }],
+    };
+    if (this.nativeGranted()) {
+      void this.sendNativeNote(native).then((ok) => void (ok || this.showNudgeToast(note)));
+    } else {
+      this.showNudgeToast(note);
+      if (this.nativeUsable()) void this.sendNativeNote(native).then((ok) => void (ok && this.nudgeToast === note && this.showNudgeToast(null)));
+    }
+  }
+
+  showNudgeToast(note: NudgeNote | null): void {
+    this.nudgeToast = note;
+    this.render();
+  }
+
+  /** The nudge toast while it applies: not expired and still no timer. */
+  visibleNudge(): NudgeNote | null {
+    const note = this.nudgeToast;
+    if (note === null || this.state.activeTimer !== null || this.now().getTime() - Date.parse(note.shownAt) >= CARD_TTL_MINUTES * 60_000) return null;
+    return note;
+  }
+
+  /** "Start <last task>" or "Choose task" (notification or toast). */
+  async nudgeAction(action: NudgeAction): Promise<void> {
+    if (this.state.session === null) return;
+    this.nudgeToast = null;
+    if (action === 'choose') this.focusSearch();
+    else await this.continueLast();
+    this.render();
+  }
+
+  /** Settings → "Working without a timer?" and "Pause on lock or sleep". */
+  setHelper(patch: Partial<Pick<LocalState['settings'], 'nudgeWithoutTimer' | 'nudgeMinutes' | 'pauseOnLock'>>): void {
+    this.persist({ settings: { ...this.state.settings, ...patch } });
+    this.render();
   }
 
   // ---- "Still there?" (local only) -------------------------------------------------------------------------------
@@ -1259,6 +1455,7 @@ export class DesktopApp {
     if (this.view === 'main' && this.longRunning() !== (this.main?.banners.querySelector('#long-running') !== null)) this.render();
     this.checkReminders();
     this.checkFriendly();
+    await this.checkNudge();
     // The next reminder instant moves as the day goes by (and when one was skipped).
     this.syncWakePlan();
     const now = this.now();
@@ -1287,6 +1484,7 @@ export class DesktopApp {
 
   private setIdleCheck(state: IdleCheckState): void {
     if (state.phase !== 'asking') this.meetingOpen = false;
+    if (state.phase !== this.state.idleCheck.phase) this.closeReassign();
     const asked = state.phase === 'asking' && this.state.idleCheck.phase !== 'asking';
     let messages = this.state.messages;
     if (asked) messages = pickIdleLine(messages, this.messageLocale(), this.random, this.switches(), this.inMeeting());
@@ -2523,11 +2721,13 @@ export class DesktopApp {
     const card = this.view === 'main' ? this.currentCard() : null;
     const daily = this.view === 'main' ? this.dailyToast : null;
     const reminder = this.view === 'main' ? this.visibleReminder() : null;
-    const key = `${card === null ? '' : `${card.kind}:${card.line}:${card.shownAt}`}|${daily?.text ?? ''}|${reminder === null ? '' : `${reminder.slot}:${reminder.shownAt}:${this.reminderActionable(reminder)}`}`;
+    const nudge = this.view === 'main' ? this.visibleNudge() : null;
+    const key = `${card === null ? '' : `${card.kind}:${card.line}:${card.shownAt}`}|${daily?.text ?? ''}|${reminder === null ? '' : `${reminder.slot}:${reminder.shownAt}:${this.reminderActionable(reminder)}`}|${nudge?.shownAt ?? ''}`;
     if (key === this.toastKey) return;
     this.toastKey = key;
     patch(this.toastRegion, [
       reminder !== null && this.renderReminder(reminder),
+      nudge !== null && this.renderNudge(nudge),
       card !== null && this.renderCheer(),
       daily !== null && this.toast('daily-toast', daily.pose, daily.text, daily.locale, () => this.showDailyToast(null)),
     ]);
@@ -2727,6 +2927,17 @@ export class DesktopApp {
     return this.toast('reminder', note.pose, note.text, note.locale, () => this.showReminderToast(null), note.kind, action);
   }
 
+  /** "Working without a timer?" inside the window, with "Start <last task>" and "Choose task". */
+  private renderNudge(note: NudgeNote): HTMLElement {
+    const actions = h(
+      'div',
+      { class: 'toast-actions' },
+      note.resume !== null && h('button', { class: 'secondary small toast-action', id: 'nudge-resume', key: 'nudge-resume', attrs: { type: 'button', lang: note.locale }, on: { click: () => void this.nudgeAction('resume') } }, note.resume.label),
+      h('button', { class: 'secondary small toast-action', id: 'nudge-choose', key: 'nudge-choose', attrs: { type: 'button', lang: note.locale }, on: { click: () => void this.nudgeAction('choose') } }, note.choose.label),
+    );
+    return this.toast('nudge', note.pose, note.text, note.locale, () => this.showNudgeToast(null), 'nudge', actions);
+  }
+
   private renderCheer(): HTMLElement | null {
     const card = this.currentCard();
     const timer = this.state.activeTimer;
@@ -2826,7 +3037,23 @@ export class DesktopApp {
           last !== null ? h('p', { class: 'last', id: 'last-task' }, t('lastTask', { task: last.title })) : h('p', { class: 'last', id: 'idle-hint' }, t('idleHint')),
           last !== null &&
             this.state.idleCheck.phase !== 'resume' &&
-            h('button', { class: 'primary', id: 'resume', key: 'resume', attrs: { 'aria-disabled': this.busy ? 'true' : undefined, 'aria-label': t('resumeTask', { task: last.title }), 'aria-keyshortcuts': 'Control+Shift+S' }, on: { click: () => this.whenIdle(() => this.resume()) } }, icon('play'), t('resume')),
+            h(
+              'div',
+              { class: 'continue-last' },
+              h(
+                'button',
+                {
+                  class: 'primary',
+                  id: 'resume',
+                  key: 'resume',
+                  attrs: { 'aria-disabled': this.busy ? 'true' : undefined, 'aria-label': t('continueLastTask', { task: last.title }), 'aria-describedby': 'continue-shortcut', 'aria-keyshortcuts': 'Control+Shift+S' },
+                  on: { click: () => this.whenIdle(() => this.continueLast()) },
+                },
+                icon('play'),
+                t('continueLast'),
+              ),
+              h('small', { class: 'muted', id: 'continue-shortcut' }, t('continueShortcutHint', { shortcut: shortcutLabel(this.state.settings.resumeShortcut) })),
+            ),
         ],
         '#search',
       );
@@ -3026,11 +3253,14 @@ export class DesktopApp {
         const minutes = this.minutesBetween(state.from, state.returnedAt ?? span.to);
         const settings = this.idleSettings();
         const reassign = this.features().idleReassign;
+        const canReassign = reassignMode(this.features()) !== null;
         const blocks: PromptBlock[] = [
           ...(quip !== null ? [text(quip.text, 'idle-quip', 'quip', locale)] : []),
           text(t('stillThereText', { minutes: Math.max(minutes, settings.thresholdMinutes), task: state.taskTitle }), 'idle-text'),
           text(t('stillThereSince', { time: this.time(state.from) }), undefined, 'muted'),
-          this.meetingOpen
+          this.reassignOpen && canReassign
+            ? this.pickerBlock(state.taskId)
+            : this.meetingOpen
             ? {
                 kind: 'meeting',
                 noteLabel: t('idleNote'),
@@ -3046,11 +3276,14 @@ export class DesktopApp {
                 kind: 'choices',
                 layout: 'list',
                 labelledBy: 'idle-title',
+                // The three answers (keep · discard · reassign), then the finer ones of 0.4.
                 items: [
                   button('idle-here', t('idleHere'), 'primary', 'here'),
-                  button('idle-meeting', t('idleMeeting'), 'secondary', 'meeting-open', { expanded: false }),
-                  button('idle-discard', t('idleDiscardMinutes', { minutes }), 'secondary', 'discard'),
                   button('idle-pause', t('idlePause', { time: this.time(state.from) }), 'secondary', 'pause'),
+                  ...(canReassign ? [button('idle-reassign', t('idleReassign'), 'secondary', 'reassign-open', { expanded: false })] : []),
+                  text(t('idleMoreOptions'), 'idle-more', 'small'),
+                  button('idle-meeting', t('idleMeeting'), 'ghost', 'meeting-open', { expanded: false }),
+                  button('idle-discard', t('idleDiscardMinutes', { minutes }), 'ghost', 'discard'),
                 ],
               },
           state.returnedAt === null
@@ -3075,17 +3308,20 @@ export class DesktopApp {
       case 'gap': {
         const minutes = this.minutesBetween(state.from, state.to);
         const features = this.features();
-        const targets = options(this.reassignTargets(state.taskId));
-        const choices: PromptChoices =
-          features.startBackdate && features.stopBackdate
+        const backdate = features.startBackdate && features.stopBackdate;
+        const choices: PromptBlock =
+          backdate && this.reassignOpen
+            ? this.pickerBlock(state.taskId)
+            : backdate
             ? {
                 kind: 'choices',
                 layout: 'list',
                 labelledBy: 'gap-title',
+                // Keep · reassign · discard (the timer already stopped at the last input), and "Resume now".
                 items: [
                   resumeNow(state.taskTitle),
                   button('gap-keep', t('gapKeep', { task: state.taskTitle }), 'secondary', 'gap-keep'),
-                  ...(targets.length > 0 ? [{ kind: 'reassign' as const, label: t('gapOtherTask'), options: targets, button: button('gap-reassign', t('gapReassign'), 'secondary', 'gap-reassign') }] : []),
+                  button('idle-reassign', t('idleReassign'), 'secondary', 'reassign-open', { expanded: false }),
                   button('gap-discard', t('gapDiscard'), 'ghost', 'gap-discard'),
                 ],
               }
@@ -3114,7 +3350,8 @@ export class DesktopApp {
   /** An answer from the prompt (its window or the in-app modal). */
   async answerPrompt(answer: PromptAnswer): Promise<void> {
     const state = this.state.idleCheck;
-    const task = (id: string | undefined) => (id === undefined || id === '' ? undefined : this.reassignTargets(state.phase === 'watching' ? '' : state.taskId).find((item) => item.id === id));
+    const task = (id: string | undefined) =>
+      id === undefined || id === '' ? undefined : pickerTasks(this.reassignTargets(state.phase === 'watching' ? '' : state.taskId), this.reassignResults, state.phase === 'watching' ? '' : state.taskId).find((item) => item.id === id);
     switch (answer.action) {
       case 'here':
       case 'discard':
@@ -3140,6 +3377,23 @@ export class DesktopApp {
         if (target !== undefined) await this.answerGap({ kind: 'reassign', task: { id: target.id, title: target.title } });
         return;
       }
+      case 'reassign-open':
+        this.reassignOpen = true;
+        this.focusPrompt('reassign-search');
+        this.render();
+        return;
+      case 'reassign-cancel':
+        this.closeReassign();
+        this.focusPrompt('idle-reassign');
+        this.render();
+        return;
+      case 'reassign-search':
+        return this.searchReassign(answer.query ?? '');
+      case 'reassign-save': {
+        const target = task(answer.taskId);
+        if (target !== undefined) await this.reassignIdle(target);
+        return;
+      }
       case 'resume-now':
         return this.resumeNow();
       case 'resume':
@@ -3151,6 +3405,77 @@ export class DesktopApp {
         // Never a dismissal: the prompt stays until it is answered ("Open TimeTrack" is handled by its window).
         return;
     }
+  }
+
+  /**
+   * The "Reassign" picker: the quick "Meeting" choice (a meeting-type task among the pinned, recent, listed or found
+   * tasks), the search, and the tasks to choose from.
+   */
+  private pickerBlock(exclude: string): PromptPicker {
+    const t = this.t;
+    const tasks = pickerTasks(this.reassignTargets(exclude), this.reassignResults, exclude);
+    const meeting = meetingTask(tasks, (task) => this.timerKind({ taskId: task.id, taskTitle: task.title }));
+    return {
+      kind: 'picker',
+      heading: t('reassignHeading'),
+      meeting: meeting !== null ? { kind: 'button', id: 'reassign-meeting', label: t('reassignMeeting', { task: meeting.title }), style: 'secondary', action: 'reassign-save', taskId: meeting.id } : null,
+      searchLabel: t('reassignSearch'),
+      searchButton: t('reassignSearchButton'),
+      query: this.reassignQuery,
+      status: this.reassignStatus,
+      options: tasks.map((item) => ({ id: item.id, title: item.title })),
+      selected: null,
+      emptyText: t('reassignEmpty'),
+      saveLabel: t('reassignSave'),
+      cancelLabel: t('cancel'),
+    };
+  }
+
+  private closeReassign(): void {
+    this.reassignOpen = false;
+    this.reassignQuery = '';
+    this.reassignResults = null;
+    this.reassignStatus = null;
+  }
+
+  /** The picker's search, run here (the prompt window has no network). An empty query shows pinned and recent again. */
+  async searchReassign(query: string): Promise<void> {
+    const t = this.t;
+    this.reassignQuery = query.slice(0, 200);
+    if (query.trim() === '') {
+      this.reassignResults = null;
+      this.reassignStatus = null;
+      this.render();
+      return;
+    }
+    this.reassignStatus = t('reassignSearching');
+    this.render();
+    try {
+      const results = await this.api().tasks({ search: query.trim() });
+      if (this.reassignQuery !== query.slice(0, 200)) return;
+      this.reassignResults = results;
+      this.reassignStatus = results.length > 0 ? t('reassignResults', { count: results.length }) : t('reassignNoResults', { query: query.trim() });
+    } catch {
+      this.reassignStatus = t('reassignSearchFailed');
+    }
+    this.render();
+  }
+
+  /**
+   * "Reassign" → the idle time becomes an entry on `target`: while asking, split from the running entry (the timer
+   * goes on with the same task); after an automatic stop, a backdated entry (the gap answer).
+   */
+  async reassignIdle(target: Task): Promise<void> {
+    const state = this.state.idleCheck;
+    if (state.phase === 'gap') return this.answerGap({ kind: 'reassign', task: { id: target.id, title: target.title } });
+    if (state.phase !== 'asking') return;
+    const now = this.now();
+    const span = promptSpan(state, now);
+    const decision = reassignWhileAsking(state, target, now, reassignMode(this.features()));
+    if (decision === null) return;
+    this.setIdleCheck(decision.state);
+    await this.runActions(decision.actions);
+    this.setNotice(this.t('idleReassigned', { minutes: this.minutesBetween(span.from.toISOString(), span.to), task: target.title }));
   }
 
   /** Tasks the idle time can go to: pinned, recent and listed tasks, except `exclude`. */
@@ -3288,6 +3613,7 @@ export class DesktopApp {
       ),
       this.renderBrowserSetting(),
       this.renderIdleSettings(),
+      this.renderHelpers(),
       this.renderSchedule(),
       this.renderFriendlySettings(),
       this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText'),
@@ -3315,6 +3641,60 @@ export class DesktopApp {
         ),
       ),
       h('button', { class: 'danger', id: 'logout', on: { click: () => void this.logout() } }, t('logout')),
+    );
+  }
+
+  /** Settings → "Continue last" shortcut, "Working without a timer?" and "Pause on lock or sleep". */
+  private renderHelpers(): HTMLElement {
+    const t = this.t;
+    const settings = this.state.settings;
+    const shortcut = h('input', { id: 'resume-shortcut', attrs: { type: 'text', spellcheck: 'false', autocomplete: 'off', 'aria-describedby': 'resume-shortcut-help resume-shortcut-message' } });
+    shortcut.value = settings.resumeShortcut;
+    const nudge = h('input', { id: 'nudge-toggle', attrs: { type: 'checkbox', 'aria-describedby': 'nudge-help' } });
+    nudge.checked = settings.nudgeWithoutTimer;
+    nudge.addEventListener('change', () => this.setHelper({ nudgeWithoutTimer: nudge.checked }));
+    const minutes = h('select', { id: 'nudge-minutes' });
+    for (const value of NUDGE_MINUTES_CHOICES) {
+      const option = h('option', { attrs: { value: String(value) } }, String(value));
+      option.selected = value === settings.nudgeMinutes;
+      minutes.append(option);
+    }
+    minutes.addEventListener('change', () => this.setHelper({ nudgeMinutes: Number(minutes.value) }));
+    const lock = h('input', { id: 'lock-toggle', attrs: { type: 'checkbox', 'aria-describedby': 'lock-help' } });
+    lock.checked = settings.pauseOnLock;
+    lock.addEventListener('change', () => this.setHelper({ pauseOnLock: lock.checked }));
+    return h(
+      'section',
+      { class: 'feature', id: 'helpers', attrs: { 'aria-labelledby': 'helpers-title' } },
+      h('h2', { id: 'helpers-title' }, t('helpersTitle')),
+      h(
+        'form',
+        {
+          id: 'resume-shortcut-form',
+          on: {
+            submit: (event) => {
+              event.preventDefault();
+              void this.applyShortcut(shortcut.value, true, 'resume');
+            },
+          },
+        },
+        h('label', { attrs: { for: 'resume-shortcut' } }, t('resumeShortcutLabel')),
+        shortcut,
+        h('p', { class: 'help', id: 'resume-shortcut-help' }, t('resumeShortcutHelp')),
+        this.resumeShortcutMessage !== null && h('p', { class: this.resumeShortcutMessage.ok ? 'muted' : 'field-error', id: 'resume-shortcut-message' }, this.resumeShortcutMessage.text),
+        h(
+          'div',
+          { class: 'row-actions' },
+          h('button', { class: 'secondary small', id: 'resume-shortcut-save', key: 'resume-shortcut-save', attrs: { type: 'submit' } }, t('shortcutSave')),
+          h('button', { class: 'link', id: 'resume-shortcut-default', attrs: { type: 'button' }, on: { click: () => void this.applyShortcut(DEFAULT_SETTINGS.resumeShortcut, true, 'resume') } }, t('shortcutDefault')),
+        ),
+      ),
+      h('label', { class: 'switch' }, nudge, t('nudgeSwitch')),
+      settings.nudgeWithoutTimer && h('label', { class: 'inline' }, t('nudgeMinutes'), minutes),
+      h('p', { class: 'help', id: 'nudge-help' }, t('nudgeHelp')),
+      h('label', { class: 'switch' }, lock, t('lockSwitch')),
+      h('p', { class: 'help', id: 'lock-help' }, t('lockHelp')),
+      settings.pauseOnLock && !this.idleCheckEnabled() && h('p', { class: 'muted', id: 'lock-needs-idle' }, t('lockNeedsIdle')),
     );
   }
 

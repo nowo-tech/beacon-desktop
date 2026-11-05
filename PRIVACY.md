@@ -10,7 +10,10 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - The task you start, stop or switch to, an optional note, and the source `desktop`.
 - Your answer to "Still there?" (keep, discard, pause, or count on another task, with the start and end of that time),
   and the times you started or stopped a timer (also for actions sent later, after being offline). Never the input
-  counter.
+  counter, and never the screen lock or sleep events: when you **reassign** idle time, only the entry you confirm is
+  sent (the task you chose, with the start and end of that time), as an ordinary entry the server checks like any
+  other.
+- The search text you type in the "Reassign" task picker (the same `tasks` search as the main search field).
 - The app version, platform, architecture and installer kind (for example `nsis` or `appimage`) when it checks for
   updates. The Microsoft Store build never checks with Beacon: the Store updates it.
 - Nothing else: no screenshots, keystrokes, applications, window titles, URLs, activity or idle state.
@@ -23,8 +26,9 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
   question being asked, if any), the server's feature switches, your settings and the date of each consent decision,
   and the friendly-message history (so lines do not repeat and each moment comes once a day): the line numbers shown
   lately, the time of the last one, the current one with the running entry it belongs to, and the moments and cheers
-  already used. Entries are named by their task id and start time (`<task id>@<start>`). All of it is in the app's
-  local storage. Signing out deletes the token, the timer, the queue, the idle-check state and the friendly-message
+  already used, and for "Working without a timer?" the start of the current stretch of input, whether the counter
+  moved during it, the time of the last reminder and the line numbers shown lately (never the counter's values).
+  Entries are named by their task id and start time (`<task id>@<start>`). All of it is in the app's local storage. Signing out deletes the token, the timer, the queue, the idle-check state and the friendly-message
   history.
 - **Clear local data** (Settings → What we collect) signs you out and deletes all of the above, and turns "start at
   login" off.
@@ -46,6 +50,39 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - Your organisation turns it on or off and sets the wait (TimeTrackBundle 1.10, `GET me`); you can make the wait
   longer in Settings. With a server that does not say (1.9), it is off until you turn it on (dated consent).
 - With no answer, the timer stops at your last input and the app asks you about that time when you are back.
+
+## Screen lock and sleep
+
+- With **Pause on screen lock or sleep** on (Settings, on by default; it works together with the "Still there?"
+  check), the app listens to your operating system's own lock and sleep events: Windows session notifications
+  (`WTS_SESSION_LOCK` / `UNLOCK`) and power broadcasts, macOS `com.apple.screenIsLocked` / `screenIsUnlocked` and the
+  workspace sleep / wake notifications, Linux logind on the system D-Bus (`Lock`, `Unlock`, `LockedHint`,
+  `PrepareForSleep`). It only keeps, in memory, the moment the lock or sleep started.
+- That time counts as idle. When you are back (unlocked and awake), the app asks what to do with it: **keep** it,
+  **discard** it (the timer stops when the lock started) or **reassign** it to another task. A lock shorter than two
+  minutes is not asked about; a very long one stops the timer at the start of the lock, as an unanswered "Still
+  there?" does. Only your answer is sent.
+- The events are never stored, logged or sent, and the app never locks, wakes or watches the screen itself.
+
+## "Working without a timer?"
+
+- With **Remind me when I work without a timer** on (Settings, on by default), during your working hours (Beacon's
+  schedule with your changes in My schedule, never on a day off or at lunch) and only while no timer runs, the app
+  reads the same OS "seconds since last input" counter at each 30-second check. After the minutes you chose (10 by
+  default) of input in a row, it shows a friendly reminder with **Start <last task>** and **Choose task**, at most
+  once every 45 minutes, never while the friendly messages are paused. Outside those conditions the counter is not
+  read for it.
+- The counter is never stored, logged or sent; only the start of the current stretch and the time of the last reminder
+  are kept, locally. Nothing reaches the server unless you start a timer.
+- As a desktop notification, its title, line, picture and button labels are handed to your operating system like the
+  friendly messages.
+
+## "Continue last" shortcut and the tray clock
+
+- The global shortcut (Settings, `Ctrl+Alt+Space` / `⌘⌥Space` by default) is registered with your operating system
+  only to know when *you* press it; no other key is read.
+- The tray shows the elapsed time of the running timer (macOS menu bar, tooltip everywhere), refreshed by the app's
+  background heartbeat from the start time it already has. Nothing is sent for it.
 
 ## Friendly messages
 

@@ -31,7 +31,26 @@ export interface TrayStatus {
   /** Status line at the top of the tray menu (disabled item). */
   status: string;
   running: boolean;
+  /**
+   * While a timer runs: the start (Unix ms) and the translated title / tooltip with `{time}` (elapsed, `H:MM`) and
+   * `{today}`, which the host keeps current every minute on its own (src-tauri/src/tray_clock.rs). `null` when stopped.
+   */
+  clock?: TrayClock | null;
 }
+
+export interface TrayClock {
+  startedAt: number;
+  title: string;
+  tooltip: string;
+  /** Seconds tracked today without the running entry's elapsed time. */
+  todayBaseSeconds: number;
+}
+
+/** Screen lock and system sleep, from the OS (src-tauri/src/session.rs). Local only. */
+export type SessionEvent = 'lock' | 'unlock' | 'suspend' | 'resume';
+
+/** Which global shortcut: `open` shows the window and the search, `resume` starts the last task again. */
+export type ShortcutSlot = 'open' | 'resume';
 
 export interface TrayMenuItem {
   id: string;
@@ -86,6 +105,8 @@ export interface FriendlyNotification {
   body: string;
   pose: string | null;
   action?: NotificationAction | null;
+  /** Up to two buttons ("Working without a timer?"); the host drops unknown ids. */
+  actions?: NotificationAction[];
 }
 
 /** `unsupported`: the host has no desktop notifications (plain browser). */
@@ -132,6 +153,8 @@ export interface WindowHost {
 
 /** Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME, so the default adds Shift. */
 export const DEFAULT_SHORTCUT = 'CommandOrControl+Alt+Shift+T';
+/** Default "Continue the last task" shortcut (Ctrl+Alt+Space, ⌘⌥Space on macOS). */
+export const DEFAULT_RESUME_SHORTCUT = 'CommandOrControl+Alt+Space';
 
 export interface Platform {
   readonly kind: 'tauri' | 'browser';
@@ -157,8 +180,8 @@ export interface Platform {
   copyText(text: string): Promise<void>;
   setTray(status: TrayStatus): Promise<void>;
   setTrayMenu(menu: TrayMenu): Promise<void>;
-  /** Registers the global shortcut (replacing the previous one). Rejects when the OS refuses it (in use, invalid). */
-  setShortcut(accelerator: string): Promise<void>;
+  /** Registers a global shortcut (replacing the slot's previous one). Rejects when the OS refuses it (in use, invalid). */
+  setShortcut(accelerator: string, slot?: ShortcutSlot): Promise<void>;
   notify(title: string, body: string): Promise<void>;
   /** A friendly message as a native notification (pose picture, click brings the window forward). False when it could not be shown. */
   notifyFriendly(note: FriendlyNotification): Promise<boolean>;
@@ -185,6 +208,10 @@ export interface Platform {
   installUpdate(server: string, token: string, onProgress?: (progress: UpdateProgress) => void): Promise<void>;
   /** The global shortcut was pressed (the window is already shown). */
   onShortcut(handler: () => void): void;
+  /** The "Continue the last task" shortcut was pressed (the window stays as it is, hidden or not). */
+  onResumeShortcut(handler: () => void): void;
+  /** The screen was locked / unlocked or the computer went to sleep / woke up. */
+  onSessionEvent(handler: (event: SessionEvent) => void): void;
   /** A tray menu item was chosen (see `TrayMenu`). */
   onTray(handler: (action: string) => void): void;
 }
@@ -213,6 +240,8 @@ export interface BrowserHooks {
   tray: TrayStatus;
   trayMenu: TrayMenu | null;
   shortcut: string | null;
+  /** "Continue the last task" shortcut registered. */
+  resumeShortcut: string | null;
   /** Accelerators the fake OS refuses. */
   refusedShortcuts: string[];
   installable: boolean;
@@ -248,6 +277,9 @@ export interface BrowserHooks {
   /** The fake prompt window cannot be opened. */
   promptFails: boolean;
   shortcutPressed(): void;
+  resumeShortcutPressed(): void;
+  /** The fake OS locks / unlocks the screen or sleeps / wakes. */
+  sessionEvent(event: SessionEvent): void;
   trayAction(action: string): void;
   /** The fake heartbeat fires. */
   wake(reason?: WakeReason): void;
@@ -261,6 +293,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
   let secret: string | null = null;
   let autostart = false;
   const shortcutHandlers: (() => void)[] = [];
+  const resumeHandlers: (() => void)[] = [];
+  const sessionHandlers: ((event: SessionEvent) => void)[] = [];
   const trayHandlers: ((action: string) => void)[] = [];
   const wakeHandlers: ((reason: WakeReason) => void)[] = [];
   const actionHandlers: ((id: string) => void)[] = [];
@@ -283,6 +317,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     tray: { title: null, tooltip: '', status: '', running: false },
     trayMenu: null,
     shortcut: null,
+    resumeShortcut: null,
     refusedShortcuts: [],
     installable: true,
     installError: null,
@@ -308,6 +343,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     promptFocused: 0,
     promptFails: false,
     shortcutPressed: () => shortcutHandlers.forEach((handler) => handler()),
+    resumeShortcutPressed: () => resumeHandlers.forEach((handler) => handler()),
+    sessionEvent: (event) => sessionHandlers.forEach((handler) => handler(event)),
     trayAction: (action) => trayHandlers.forEach((handler) => handler(action)),
     wake: (reason = 'tick') => wakeHandlers.forEach((handler) => handler(reason)),
     notificationAction: (id) => actionHandlers.forEach((handler) => handler(id)),
@@ -352,9 +389,11 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     },
     setTray: async (status) => void (hooks.tray = status),
     setTrayMenu: async (menu) => void (hooks.trayMenu = menu),
-    setShortcut: async (accelerator) => {
-      if (hooks.refusedShortcuts.includes(accelerator)) throw new Error(`${accelerator} is already registered`);
-      hooks.shortcut = accelerator;
+    setShortcut: async (accelerator, slot = 'open') => {
+      const other = slot === 'resume' ? hooks.shortcut : hooks.resumeShortcut;
+      if (hooks.refusedShortcuts.includes(accelerator) || other?.toLowerCase() === accelerator.toLowerCase()) throw new Error(`${accelerator} is already registered`);
+      if (slot === 'resume') hooks.resumeShortcut = accelerator;
+      else hooks.shortcut = accelerator;
     },
     notify: async (title, body) => void hooks.notifications.push(`${title}: ${body}`),
     notifyFriendly: async (note) => {
@@ -406,6 +445,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
       hooks.installed += 1;
     },
     onShortcut: (handler) => void shortcutHandlers.push(handler),
+    onResumeShortcut: (handler) => void resumeHandlers.push(handler),
+    onSessionEvent: (handler) => void sessionHandlers.push(handler),
     onTray: (handler) => void trayHandlers.push(handler),
   };
 }

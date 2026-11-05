@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows, type NudgeCatalog } from './types';
 
 /** Nederlands (je): vroege lunch, koffie om tien en om drie. */
 export const pools: Pools = {
@@ -223,4 +223,17 @@ export const reminders: ReminderCatalog = {
   actions: { start: 'Starten', stop: 'Stoppen', resume: 'Hervatten' },
   lastTask: 'Laatste taak: {task}.',
   today: 'Vandaag: {total}.',
+};
+
+/** "Working without a timer?" (input for a while during working hours, no timer running). */
+export const nudge: NudgeCatalog = {
+  lines: [
+    f('Je bent al een tijdje bezig en er loopt geen timer. Zullen we het bijhouden?', 'think'),
+    f('Drukke handen, stille timer. Eentje starten?', 'peek'),
+    f('Het lijkt erop dat je werkt, maar de klok niet. Zal ik hem starten?', 'working'),
+    f('Hé, de timer staat uit. Verdergaan waar je gebleven was?', 'wave'),
+  ],
+  title: 'Werk je zonder timer?',
+  lastTask: 'Laatste taak: {task}.',
+  actions: { resume: '{task} starten', choose: 'Taak kiezen' },
 };

@@ -1,8 +1,9 @@
 import type { Scope, Task, Timer } from '../api/types';
-import { DEFAULT_SHORTCUT } from '../platform';
+import { DEFAULT_RESUME_SHORTCUT, DEFAULT_SHORTCUT } from '../platform';
 import { EMPTY_MESSAGES, type MessageState, sanitizeMessages } from './friendly';
 import { type BrowserChoice, sanitizeBrowser, SYSTEM_BROWSER } from './links';
 import { type IdleCheckState, WATCHING } from './idleCheck';
+import { DEFAULT_NUDGE_MINUTES, EMPTY_NUDGE, NUDGE_MINUTES_CHOICES, type NudgeState, sanitizeNudge } from './nudge';
 import { DEFAULT_LEAD_MINUTES, EMPTY_SCHEDULE, LEAD_CHOICES, sanitizeSchedule, type ScheduleState } from './schedule';
 import type { ServerFeatures } from './serverFeatures';
 import { isTheme, type ThemePreference } from './theme';
@@ -48,6 +49,14 @@ export interface Settings {
   scheduleLeadMinutes: number;
   /** "Open Beacon in": the browser for every link the app opens (this computer only). */
   browser: BrowserChoice;
+  /** Global shortcut that starts the last task again, window hidden or not (Tauri accelerator syntax). */
+  resumeShortcut: string;
+  /** "Working without a timer?" nudge during working hours (on by default). */
+  nudgeWithoutTimer: boolean;
+  /** Minutes of input without a timer before that nudge (`NUDGE_MINUTES_CHOICES`). */
+  nudgeMinutes: number;
+  /** A screen lock or system sleep counts as idle, and the return asks what to do with it (on by default). */
+  pauseOnLock: boolean;
 }
 
 /**
@@ -91,6 +100,8 @@ export interface LocalState {
   messages: MessageState;
   /** My schedule: local overrides of Beacon's working hours, local days off, reminders already shown. Local only. */
   schedule: ScheduleState;
+  /** "Working without a timer?": current stretch and last nudge. Local only. */
+  nudge: NudgeState;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -108,6 +119,10 @@ export const DEFAULT_SETTINGS: Settings = {
   scheduleReminders: true,
   scheduleLeadMinutes: DEFAULT_LEAD_MINUTES,
   browser: SYSTEM_BROWSER,
+  resumeShortcut: DEFAULT_RESUME_SHORTCUT,
+  nudgeWithoutTimer: true,
+  nudgeMinutes: DEFAULT_NUDGE_MINUTES,
+  pauseOnLock: true,
 };
 
 const KEY = 'time-track-desktop';
@@ -126,6 +141,7 @@ export function emptyState(): LocalState {
     features: null,
     messages: { ...EMPTY_MESSAGES },
     schedule: { ...EMPTY_SCHEDULE },
+    nudge: { ...EMPTY_NUDGE },
   };
 }
 
@@ -149,9 +165,14 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
         scheduleReminders: typeof raw.settings?.scheduleReminders === 'boolean' ? raw.settings.scheduleReminders : DEFAULT_SETTINGS.scheduleReminders,
         scheduleLeadMinutes: LEAD_CHOICES.includes(raw.settings?.scheduleLeadMinutes as number) ? (raw.settings?.scheduleLeadMinutes as number) : DEFAULT_SETTINGS.scheduleLeadMinutes,
         browser: sanitizeBrowser(raw.settings?.browser),
+        resumeShortcut: typeof raw.settings?.resumeShortcut === 'string' && raw.settings.resumeShortcut.trim() !== '' ? raw.settings.resumeShortcut : DEFAULT_SETTINGS.resumeShortcut,
+        nudgeWithoutTimer: typeof raw.settings?.nudgeWithoutTimer === 'boolean' ? raw.settings.nudgeWithoutTimer : DEFAULT_SETTINGS.nudgeWithoutTimer,
+        nudgeMinutes: NUDGE_MINUTES_CHOICES.includes(raw.settings?.nudgeMinutes as number) ? (raw.settings?.nudgeMinutes as number) : DEFAULT_SETTINGS.nudgeMinutes,
+        pauseOnLock: typeof raw.settings?.pauseOnLock === 'boolean' ? raw.settings.pauseOnLock : DEFAULT_SETTINGS.pauseOnLock,
       },
       messages: sanitizeMessages(raw.messages),
       schedule: sanitizeSchedule(raw.schedule),
+      nudge: sanitizeNudge(raw.nudge),
       idleCheck: typeof raw.idleCheck === 'object' && raw.idleCheck !== null && 'phase' in raw.idleCheck ? raw.idleCheck : WATCHING,
       pinned: Array.isArray(raw.pinned) ? raw.pinned.slice(0, MAX_PINNED) : [],
     };

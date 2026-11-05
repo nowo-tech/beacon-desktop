@@ -147,3 +147,14 @@ export interface ReminderCatalog {
   /** After the end line. */
   today: string;
 }
+
+/**
+ * "Working without a timer?" (`src/lib/nudge.ts`), per locale: a few phrasings with their pose, the notification
+ * title, the add-on with the last task (`{task}`) and the two button labels (`{task}` in `resume`).
+ */
+export interface NudgeCatalog {
+  lines: readonly Line[];
+  title: string;
+  lastTask: string;
+  actions: { resume: string; choose: string };
+}

@@ -108,6 +108,8 @@ describe('desktop app', () => {
       tooltip: 'TimeTrack — Tracking “Write onboarding guide” · 0:00 · Today 0:00',
       status: '● 0:00 · Write onboarding guide',
       running: true,
+      // The host keeps the elapsed time current every minute by itself (tray_clock.rs).
+      clock: expect.objectContaining({ title: '{time} Write onboarding gu…', tooltip: 'TimeTrack — Tracking “Write onboarding guide” · {time} · Today {today}', todayBaseSeconds: 0 }),
     });
     expect(ui.platform.hooks.trayMenu?.primary).toEqual({ id: 'stop', label: 'Stop timer' });
     expect(ui.platform.hooks.trayMenu?.openBeacon).toBeNull();
@@ -244,7 +246,7 @@ describe('desktop app', () => {
     await ui.app.tick();
     expect(ui.app.state.idleCheck.phase).toBe('gap');
     expect(ui.$('#gap-text').textContent).toContain('Write onboarding guide');
-    expect(ui.$<HTMLSelectElement>('#gap-task').options.length).toBeGreaterThan(0);
+    expect(ui.$('#idle-reassign').textContent).toBe('Reassign to another task…');
     ui.click('#gap-keep');
     for (let i = 0; i < 20 && ui.app.state.idleCheck.phase !== 'resume'; i++) await tick();
     await tick();
@@ -274,8 +276,10 @@ describe('desktop app', () => {
     now = new Date(realNow - 60_000);
     await ui.app.tick();
     expect(ui.app.state.idleCheck.phase).toBe('gap');
-    ui.$<HTMLSelectElement>('#gap-task').value = 'T-102';
-    ui.click('#gap-reassign');
+    // Reassign: the picker (pinned / recent / search), then the task.
+    ui.click('#idle-reassign');
+    ui.root.querySelector<HTMLInputElement>('input[name="reassign-task"][value="T-102"]')!.checked = true;
+    ui.click('#reassign-save');
     for (let i = 0; i < 20 && ui.app.state.idleCheck.phase !== 'resume'; i++) await tick();
     await tick();
     const entries = Object.values(((await env.control('state')) as { entries: Record<string, { taskId: string }[]> }).entries).flat();

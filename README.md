@@ -71,8 +71,9 @@ Coming from **0.1.0**:
   1.10). When the server moves a time (overlap with the previous entry, backdating limit, clock in the future), the app
   says so in plain words. A 1.9 server records an offline start when the connection returns, and the app says that too.
 - **"Still there?"** (Beacon spec 199 block 0): while a timer runs, after N minutes without keyboard or mouse input the
-  app asks, calmly and without blocking: *Yes, I'm here* · *I was in a meeting or call* (optional note, or count the time
-  on another task on 1.10 servers) · *Discard those minutes* · *Pause the timer*. With no answer within M minutes the timer
+  app asks, calmly and without blocking: *Keep* · *Discard* (stop the timer at the idle start) · *Reassign to another
+  task…*, then *I was in a meeting or call* (optional note, or count the time on another task on 1.10 servers) and
+  *Drop those minutes and keep going*. With no answer within M minutes the timer
   stops at the last input; on return the app asks what to do with the gap, then offers *Resume*. Screen lock and sleep
   count as idle. N and M come from the organisation (`GET me` → `features.idle_check`, `limits.idle_check`; on by
   default there, and the person may only make N longer). On a 1.9 server it is the person's opt-in (default 10 / 5 min).
@@ -182,6 +183,26 @@ says so. Next to My time, a running task's link and *Open the page again* there 
 click (long press) on any Beacon link offers *Open in the browser* / *Copy link*; if no browser can be opened the link
 is copied instead. When the list is empty the mascot says what to do next: *Pin a task*, *Start a timer* or *Open the
 tasks in Beacon*.
+### Continue, three answers on return, lock pause and "working without a timer?"
+
+- **Continue last**: one click on the stopped timer card, or the global shortcut **Ctrl/Cmd + Alt + Space**
+  (configurable in Settings, works with the window hidden in the tray), starts the last task again as a new entry. The
+  tray shows the running time on its own (macOS menu-bar title, tooltip on every system), refreshed every minute by the
+  Rust heartbeat (`src-tauri/src/tray_clock.rs`).
+- **Three answers on return from idle** (the "Still there?" prompt, its own window or the in-app modal): **Keep** ·
+  **Discard** (the timer stops at the start of the idle time) · **Reassign**, which opens a task picker (pinned,
+  recent, search, and a quick *Meeting* choice when a meeting-type task exists) and splits the idle span into its own
+  entry on that task while the timer goes on (`discard-idle` `reassign` on 1.10 servers, backdated stop / start
+  otherwise; not offered on 1.9). The countdown, the automatic stop and *Resume* are unchanged.
+- **Pause on screen lock or sleep** (on by default): the OS lock / sleep events (`src-tauri/src/session.rs`: Windows
+  WTS session notifications and power broadcasts, macOS distributed notifications, Linux logind) make that time idle;
+  on unlock / wake the same three answers.
+- **"Working without a timer?"** (on by default): during your working hours, after N minutes of input (10 by default)
+  with no timer, a friendly notification with *Start <last task>* and *Choose task*, at most once every 45 minutes,
+  in the seven message languages.
+
+Everything stays on this computer except the entries you confirm — see [PRIVACY.md](PRIVACY.md). What comes next, and
+what TimeTrack deliberately will not do: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ### Updates
 
@@ -268,6 +289,6 @@ ayatana-appindicator, librsvg, xdo, patchelf), rustup and the AWS CLI; Windows h
 WebView2, rustup, Git for Windows (`bash`) and PowerShell 7. The workflow only runs on `v*.*.*` tags, never on pull
 requests.
 
-Docs: [CHANGELOG](CHANGELOG.md) · [PRIVACY](PRIVACY.md) · [SECURITY](SECURITY.md) · [CONTRIBUTING](CONTRIBUTING.md)
+Docs: [CHANGELOG](CHANGELOG.md) · [PRIVACY](PRIVACY.md) · [ROADMAP](docs/ROADMAP.md) · [SECURITY](SECURITY.md) · [CONTRIBUTING](CONTRIBUTING.md)
 
 License: [MIT](LICENSE).

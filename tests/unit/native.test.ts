@@ -368,8 +368,12 @@ describe('"Still there?" in its own window', () => {
     const view = ui.hooks.prompt as PromptView;
     expect(view.id).toBe('gap');
     const choices = view.blocks.find((block) => block.kind === 'choices');
-    const reassign = choices?.kind === 'choices' ? choices.items.find((item) => item.kind === 'reassign') : undefined;
-    const target = reassign?.kind === 'reassign' ? reassign.options[0] : undefined;
+    expect(choices?.kind === 'choices' && choices.items.some((item) => item.kind === 'button' && item.action === 'reassign-open')).toBe(true);
+    // "Reassign" opens the picker in the window; the tasks to choose from come with it.
+    ui.hooks.answerPrompt({ action: 'reassign-open' });
+    await tick();
+    const picker = (ui.hooks.prompt as PromptView).blocks.find((block) => block.kind === 'picker');
+    const target = picker?.kind === 'picker' ? picker.options[0] : undefined;
     expect(target).toBeDefined();
     ui.hooks.answerPrompt({ action: 'gap-reassign', taskId: 'nope' });
     await tick();

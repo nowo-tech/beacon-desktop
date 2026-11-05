@@ -32,6 +32,10 @@ const ACTIONS: &[&str] = &[
     "gap-keep",
     "gap-reassign",
     "gap-discard",
+    "reassign-open",
+    "reassign-cancel",
+    "reassign-search",
+    "reassign-save",
     "resume",
     "not-now",
     "escape",
@@ -76,7 +80,8 @@ pub fn centred(area: Area, width: u32, height: u32) -> (i32, i32) {
     (x, y)
 }
 
-/// The answer, if it is one the main window understands: `{ action, note?, taskId? }` with bounded strings.
+/// The answer, if it is one the main window understands: `{ action, note?, taskId?, query? }` with bounded strings
+/// (`query`: the task search of "Reassign", which the main window runs).
 pub fn valid_answer(answer: &Value) -> bool {
     let Some(object) = answer.as_object() else {
         return false;
@@ -93,9 +98,10 @@ pub fn valid_answer(answer: &Value) -> bool {
     action_ok
         && short("note", 500)
         && short("taskId", 200)
+        && short("query", 200)
         && object
             .keys()
-            .all(|key| matches!(key.as_str(), "action" | "note" | "taskId"))
+            .all(|key| matches!(key.as_str(), "action" | "note" | "taskId" | "query"))
 }
 
 fn theme_of(view: &Value) -> Option<Theme> {
@@ -304,6 +310,15 @@ mod tests {
         ));
         assert!(valid_answer(
             &json!({ "action": "gap-reassign", "taskId": "T-2", "note": null })
+        ));
+        assert!(valid_answer(
+            &json!({ "action": "reassign-search", "query": "sprint" })
+        ));
+        assert!(valid_answer(
+            &json!({ "action": "reassign-save", "taskId": "T-9" })
+        ));
+        assert!(!valid_answer(
+            &json!({ "action": "reassign-search", "query": "q".repeat(201) })
         ));
         assert!(!valid_answer(&json!({ "action": "quit" })));
         assert!(!valid_answer(&json!({ "action": "here", "extra": 1 })));

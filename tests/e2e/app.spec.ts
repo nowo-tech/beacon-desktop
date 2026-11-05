@@ -71,7 +71,8 @@ test('"Still there?" asks after the threshold and only the decision is sent', as
   await expect(page.locator('#idle-here')).toBeFocused();
   await expect(page.locator('#timer')).toHaveAttribute('inert', '');
   await page.locator('#idle-here').focus();
-  await page.keyboard.press('Tab');
+  // Keep · Discard · Reassign, then "I was in a meeting".
+  for (let i = 0; i < 3; i++) await page.keyboard.press('Tab');
   await expect(page.locator('#idle-meeting')).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page.locator('#idle-note')).toBeFocused();
@@ -139,7 +140,8 @@ for (const scheme of ['light', 'dark'] as const) {
     await axe(page, 'still-there');
     // Tab order = visual order of the choices.
     await page.locator('#idle-here').focus();
-    for (const id of ['idle-meeting', 'idle-discard', 'idle-pause']) {
+    // Keep · Discard · Reassign, then the finer options.
+    for (const id of ['idle-pause', 'idle-reassign', 'idle-meeting', 'idle-discard']) {
       await page.keyboard.press('Tab');
       await expect(page.locator(`#${id}`)).toBeFocused();
     }
@@ -153,10 +155,10 @@ for (const scheme of ['light', 'dark'] as const) {
     await axe(page, 'away');
     await idleTick(page, 1);
     await expect(page.getByRole('dialog', { name: 'Welcome back' })).toBeVisible();
-    await expect(page.getByLabel('Another task')).toBeVisible();
+    await expect(page.locator('#idle-reassign')).toBeVisible();
     await axe(page, 'gap');
     await page.locator('#gap-keep').focus();
-    for (const id of ['gap-task', 'gap-reassign', 'gap-discard']) {
+    for (const id of ['idle-reassign', 'gap-discard']) {
       await page.keyboard.press('Tab');
       await expect(page.locator(`#${id}`)).toBeFocused();
     }

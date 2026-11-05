@@ -31,6 +31,30 @@ Likely 0.5.0.
   1280 × 800 in light and dark: no horizontal scroll, panes never overlap, axe; view toggle, Ctrl+Shift+L, F6).
   `pnpm screenshots:layout` writes Spanish review screenshots of both views and the width in between. The mock
   server gets `POST /__mock/entries/seed`.
+- **Continue last** (desktop quick win Q1–Q3): the stopped timer card's button now reads *Continue last* and shows the
+  global shortcut; a second global shortcut (`set_global_shortcut` slot `resume`, default `CommandOrControl+Alt+Space`,
+  Settings → *Continue, reminders and lock*) starts the last task again as a new entry with the window hidden. The
+  tray's elapsed time is refreshed every minute by the Rust heartbeat (`tray_clock.rs`; `set_tray_status` takes an
+  optional `clock` with the start and the translated templates): menu-bar title on macOS, tooltip everywhere.
+- **Three answers on return from idle** (Q4): *Keep* · *Discard* (stop at the idle start) · *Reassign* with a task picker
+  (pinned, recent, search run by the main window, quick *Meeting* choice) in the prompt window and the in-app modal;
+  the idle span becomes its own entry through the queue and the API client (`discard-idle` `reassign` `then:
+  continue`, or four backdated stops / starts without `features.idle_reassign`). The gap question uses the same
+  picker. New prompt actions `reassign-open` / `-cancel` / `-search` / `-save` and the `query` answer field
+  (`prompt.rs`). The prompt is not redrawn for an identical view (a typed note, search or choice survives a tick).
+- **Pause on screen lock or sleep** (Q6, on by default): OS events in `session.rs` behind `SessionSource` /
+  `SessionSink` (Windows WTS session notifications and power broadcasts on a hidden window, macOS
+  `com.apple.screenIsLocked` / `screenIsUnlocked` and workspace sleep / wake, Linux logind `Lock` / `Unlock` /
+  `LockedHint` / `PrepareForSleep`), sent to the UI as `session-event`; the lock time counts as idle and the three
+  answers follow on return (`lockReturn`, `src/lib/idleChoices.ts`).
+- **"Working without a timer?"** (Q5, on by default): input for N minutes (5–30, default 10) during working hours with
+  no timer → a notification with *Start <last task>* / *Choose task* (two buttons, `notify.rs` `actions`), at most
+  once every 45 minutes, not on days off, at lunch, while paused or right after another message; no *Start* when the
+  last task was a meeting. Lines and poses in the seven languages (`src/lib/nudge.ts`, `nudge` in `messages/*.ts`).
+- `docs/ROADMAP.md`: the recommended next steps with status, owner component, value, effort and privacy risk, the
+  items considered but not scheduled, and what TimeTrack deliberately will not do (worker trust, GDPR, Estatuto de
+  los Trabajadores, LOPDGDD).
+
 - **Light and dark theme switch**: Settings → Theme, *System* (default) / *Light* / *Dark*, stored locally
   (`settings.theme`), applied before the first screen and to the native window (title bar) through Tauri's
   `Window.setTheme` (capability `core:window:allow-set-theme`). Every colour comes from the CSS tokens; text pairs keep
