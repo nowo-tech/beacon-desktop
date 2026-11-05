@@ -12,10 +12,15 @@ name: Installer upgrade test
 #                "nowo.tech"), the starting point of the in-app updater route.
 #   new_run_id   Run whose "desktop-windows" (release) or "new-installer" (this workflow) artifact is the new version.
 #                Empty: build this ref's NSIS installer here, signed with a throwaway updater key (never the release one).
-#   version      Version stamped on the build of this ref (empty: package.json). Ignored with new_run_id.
+#   version      Version stamped on the build of this ref (empty: DEFAULT_VERSION). Ignored with new_run_id.
 #   scenarios    "all" or a comma-separated list of scenario ids (see the plan job).
 # Artifacts of other runs expire after 30 days (release.yml retention): pass a newer run or rebuild the old tag then.
+#
+# GitHub only dispatches workflows that exist on the default branch. Until this file is on main, push any ref to a
+# branch named ci/installer-upgrade-test/<anything>: that runs with the defaults below (DEFAULT_*), building the ref.
 on:
+  push:
+    branches: ['ci/installer-upgrade-test/**']
   workflow_dispatch:
     inputs:
       old_run_id:
@@ -28,7 +33,7 @@ on:
         description: Run with the new installer (empty = build this ref)
         default: ''
       version:
-        description: Version for the build of this ref (empty = package.json)
+        description: Version stamped on the build of this ref
         default: '0.5.0'
       scenarios:
         description: all, or comma-separated scenario ids
@@ -42,16 +47,38 @@ concurrency:
   group: installer-upgrade-test-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  # Used on push (no inputs) and for inputs left empty.
+  DEFAULT_OLD_RUN_ID: '41621683190'
+  DEFAULT_PREV_RUN_ID: '41895956986'
+  DEFAULT_NEW_RUN_ID: ''
+  DEFAULT_VERSION: '0.5.0'
+  DEFAULT_SCENARIOS: all
+
 jobs:
   plan:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      old_run_id: ${{ steps.plan.outputs.old_run_id }}
+      prev_run_id: ${{ steps.plan.outputs.prev_run_id }}
+      new_run_id: ${{ steps.plan.outputs.new_run_id }}
+      version: ${{ steps.plan.outputs.version }}
     steps:
       - id: plan
         env:
-          SCENARIOS: ${{ inputs.scenarios }}
+          SCENARIOS: ${{ inputs.scenarios || env.DEFAULT_SCENARIOS }}
+          OLD_RUN_ID: ${{ inputs.old_run_id || env.DEFAULT_OLD_RUN_ID }}
+          PREV_RUN_ID: ${{ inputs.prev_run_id || env.DEFAULT_PREV_RUN_ID }}
+          NEW_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.new_run_id || env.DEFAULT_NEW_RUN_ID }}
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || env.DEFAULT_VERSION }}
         run: |
+          {
+            echo "old_run_id=$OLD_RUN_ID"
+            echo "prev_run_id=$PREV_RUN_ID"
+            echo "new_run_id=$NEW_RUN_ID"
+            echo "version=$VERSION"
+          } | tee -a "$GITHUB_OUTPUT"
           # id: old installers (v01 = old_run_id, v04 = prev_run_id) and which of them, how the new one runs, app running.
           all='[
             {"id":"nsis01-interactive-running","from":"v01","old":"nsis","mode":"interactive","running":true},
@@ -73,7 +100,8 @@ jobs:
           jq . <<<"$matrix"
 
   build:
-    if: inputs.new_run_id == ''
+    needs: plan
+    if: needs.plan.outputs.new_run_id == ''
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -93,12 +121,13 @@ jobs:
       - name: Build the NSIS installer (throwaway updater key)
         shell: bash
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
           pnpm tauri signer generate --ci -p throwaway -w "$RUNNER_TEMP/throwaway.key"
-          export TAURI_SIGNING_PRIVATE_KEY="$(cat "$RUNNER_TEMP/throwaway.key")"
+          TAURI_SIGNING_PRIVATE_KEY="$(cat "$RUNNER_TEMP/throwaway.key")"
           export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=throwaway
-          export TAURI_UPDATER_PUBKEY="$(cat "$RUNNER_TEMP/throwaway.key.pub")"
+          TAURI_UPDATER_PUBKEY="$(cat "$RUNNER_TEMP/throwaway.key.pub")"
+          export TAURI_SIGNING_PRIVATE_KEY TAURI_UPDATER_PUBKEY
           node -e '
             const c = { plugins: { updater: { pubkey: process.env.TAURI_UPDATER_PUBKEY } } };
             if (process.env.VERSION) c.version = process.env.VERSION;
@@ -132,21 +161,21 @@ jobs:
         with:
           name: desktop-windows
           path: old
-          run-id: ${{ matrix.from == 'v04' && inputs.prev_run_id || inputs.old_run_id }}
+          run-id: ${{ matrix.from == 'v04' && needs.plan.outputs.prev_run_id || needs.plan.outputs.old_run_id }}
           github-token: ${{ github.token }}
       - name: New installer (this run's build)
-        if: inputs.new_run_id == ''
+        if: needs.plan.outputs.new_run_id == ''
         uses: actions/download-artifact@v7
         with:
           name: new-installer
           path: new
       - name: New installer (release run)
-        if: inputs.new_run_id != ''
+        if: needs.plan.outputs.new_run_id != ''
         uses: actions/download-artifact@v7
         with:
           name: desktop-windows
           path: new
-          run-id: ${{ inputs.new_run_id }}
+          run-id: ${{ needs.plan.outputs.new_run_id }}
           github-token: ${{ github.token }}
       - name: Upgrade and check
         shell: powershell
