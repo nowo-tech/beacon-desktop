@@ -7,8 +7,9 @@
 //! - **Linux**: the Desktop Notifications service (GNOME, KDE, …), the pose through the `image-path` hint.
 //!
 //! A click on the notification brings the main window forward. A working-hours reminder may carry one button
-//! (Start / Stop / Resume, ids in `ACTION_IDS`): pressing it sends the main window a `notification-action` event with
-//! the id, and the UI starts or stops the timer; any other id from the UI is dropped. The pictures are compiled in (`pose_art.rs`) and
+//! (Start / Stop / Resume) and "Working without a timer?" two (Start last / Choose task), ids in `ACTION_IDS`:
+//! pressing one sends the main window a `notification-action` event with the id, and the UI starts or stops the
+//! timer ("Choose task" also brings the window forward); any other id from the UI is dropped. The pictures are compiled in (`pose_art.rs`) and
 //! written once to the app's cache folder, since every OS API wants a file.
 
 use std::path::{Path, PathBuf};
@@ -27,6 +28,9 @@ pub struct FriendlyNote {
     /// One button (working-hours reminders); absent for the other messages.
     #[serde(default)]
     pub action: Option<NoteAction>,
+    /// More buttons ("Working without a timer?": Start last, Choose task); absent from older UIs.
+    #[serde(default)]
+    pub actions: Vec<NoteAction>,
 }
 
 /// A notification button: what it sends back (`id`) and its translated label.
@@ -36,15 +40,23 @@ pub struct NoteAction {
     pub label: String,
 }
 
-/// The only button ids the UI may ask for (`src/lib/reminders.ts`).
-pub const ACTION_IDS: [&str; 3] = ["schedule-start", "schedule-stop", "schedule-resume"];
+/// The only button ids the UI may ask for (`src/lib/reminders.ts`, `src/lib/nudge.ts`).
+pub const ACTION_IDS: [&str; 5] = [
+    "schedule-start",
+    "schedule-stop",
+    "schedule-resume",
+    "nudge-resume",
+    "nudge-choose",
+];
+/// Buttons that need the window (the task picker).
+const SHOWS_WINDOW: [&str; 1] = ["nudge-choose"];
+/// At most this many buttons on one notification.
+pub const MAX_ACTIONS: usize = 2;
 
 const TITLE_MAX: usize = 80;
 const LABEL_MAX: usize = 24;
 
-/// The button of `note` when its id is a known one and its label not empty (capped), else none.
-pub fn checked_action(note: &FriendlyNote) -> Option<NoteAction> {
-    let action = note.action.as_ref()?;
+fn checked(action: &NoteAction) -> Option<NoteAction> {
     let label = cap(&action.label, LABEL_MAX);
     (ACTION_IDS.contains(&action.id.as_str()) && !label.is_empty()).then(|| NoteAction {
         id: action.id.clone(),
@@ -52,8 +64,31 @@ pub fn checked_action(note: &FriendlyNote) -> Option<NoteAction> {
     })
 }
 
+/// The button of `note` when its id is a known one and its label not empty (capped), else none.
+#[cfg(test)]
+pub fn checked_action(note: &FriendlyNote) -> Option<NoteAction> {
+    checked(note.action.as_ref()?)
+}
+
+/// Every button of `note` (`action`, then `actions`) that passes `checked_action`'s rules, without repeats, at most
+/// `MAX_ACTIONS`.
+pub fn checked_actions(note: &FriendlyNote) -> Vec<NoteAction> {
+    let mut result: Vec<NoteAction> = Vec::new();
+    for action in note.action.iter().chain(note.actions.iter()) {
+        if let Some(action) = checked(action) {
+            if result.len() < MAX_ACTIONS && !result.iter().any(|known| known.id == action.id) {
+                result.push(action);
+            }
+        }
+    }
+    result
+}
+
 /// Tells the main window that a notification button was pressed.
 fn dispatch(app: &AppHandle, id: &str) {
+    if SHOWS_WINDOW.contains(&id) {
+        crate::show_main(app);
+    }
     let _ = app.emit_to("main", "notification-action", id.to_string());
 }
 const BODY_MAX: usize = 300;
@@ -159,14 +194,12 @@ pub fn escape_markup(text: &str) -> String {
 /// label), or `None`.
 pub fn pressed<'a>(
     response: &notify_rust::NotificationResponse,
-    action: Option<&'a NoteAction>,
+    actions: &'a [NoteAction],
 ) -> Option<&'a NoteAction> {
-    match (response, action) {
-        (notify_rust::NotificationResponse::Action(value), Some(action))
-            if *value == action.id || *value == action.label =>
-        {
-            Some(action)
-        }
+    match response {
+        notify_rust::NotificationResponse::Action(value) => actions
+            .iter()
+            .find(|action| *value == action.id || *value == action.label),
         _ => None,
     }
 }
@@ -190,7 +223,7 @@ pub fn show(app: &AppHandle, note: &FriendlyNote) -> Result<(), String> {
         (Some(id), Some(cache)) => pose_file(&cache, id),
         _ => None,
     };
-    platform::show(app, &title, &body, image.as_deref(), checked_action(note))
+    platform::show(app, &title, &body, image.as_deref(), checked_actions(note))
 }
 
 #[cfg(windows)]
@@ -203,7 +236,7 @@ mod platform {
         title: &str,
         body: &str,
         image: Option<&Path>,
-        action: Option<NoteAction>,
+        actions: Vec<NoteAction>,
     ) -> Result<(), String> {
         let exe = tauri::utils::platform::current_exe().map_err(|e| e.to_string())?;
         let aumid = windows_aumid(&exe, &app.config().identifier)
@@ -212,16 +245,19 @@ mod platform {
         if let Some(path) = image {
             toast = toast.icon(path, IconCrop::Square, "");
         }
-        if let Some(action) = &action {
+        for action in &actions {
             toast = toast.add_button(&action.label, &action.id);
         }
         let handle = app.clone();
-        let id = action.map(|action| action.id);
+        let ids: Vec<String> = actions.into_iter().map(|action| action.id).collect();
         toast
             .on_activated(move |argument| {
-                match (&argument, &id) {
-                    (Some(pressed), Some(id)) if pressed == id => dispatch(&handle, id),
-                    _ => crate::show_main(&handle),
+                match argument
+                    .as_ref()
+                    .and_then(|pressed| ids.iter().find(|id| *id == pressed))
+                {
+                    Some(id) => dispatch(&handle, id),
+                    None => crate::show_main(&handle),
                 }
                 Ok(())
             })
@@ -239,7 +275,7 @@ mod platform {
         title: &str,
         body: &str,
         image: Option<&Path>,
-        action: Option<NoteAction>,
+        actions: Vec<NoteAction>,
     ) -> Result<(), String> {
         #[cfg(not(target_os = "macos"))]
         let body = &escape_markup(body);
@@ -268,7 +304,7 @@ mod platform {
         // `default`, and only for a notification that offers it.
         #[cfg(not(target_os = "macos"))]
         notification.action("default", "");
-        if let Some(action) = &action {
+        for action in &actions {
             notification.action(&action.id, &action.label);
         }
         #[cfg(not(target_os = "macos"))]
@@ -285,7 +321,7 @@ mod platform {
                     Err(_) => return,
                 };
                 let _ = handle.wait_for_response(|response: &notify_rust::NotificationResponse| {
-                    if let Some(action) = pressed(response, action.as_ref()) {
+                    if let Some(action) = pressed(response, &actions) {
                         dispatch(&app, &action.id);
                     } else if is_click(response) {
                         crate::show_main(&app);
@@ -391,6 +427,7 @@ mod tests {
                 id: id.into(),
                 label: label.into(),
             }),
+            actions: Vec::new(),
         };
         assert_eq!(
             checked_action(&note("schedule-stop", " Parar\n")),
@@ -420,33 +457,52 @@ mod tests {
             id: "schedule-stop".into(),
             label: "Parar".into(),
         };
+        let choose = NoteAction {
+            id: "nudge-choose".into(),
+            label: "Elegir tarea".into(),
+        };
+        let both = [stop.clone(), choose.clone()];
         assert_eq!(
-            pressed(
-                &NotificationResponse::Action("schedule-stop".into()),
-                Some(&stop)
-            ),
+            pressed(&NotificationResponse::Action("schedule-stop".into()), &both),
             Some(&stop)
         );
         assert_eq!(
-            pressed(&NotificationResponse::Action("Parar".into()), Some(&stop)),
+            pressed(&NotificationResponse::Action("Parar".into()), &both),
             Some(&stop)
         );
         assert_eq!(
-            pressed(&NotificationResponse::Action("default".into()), Some(&stop)),
-            None
-        );
-        assert_eq!(pressed(&NotificationResponse::Default, Some(&stop)), None);
-        assert_eq!(
-            pressed(
-                &NotificationResponse::Closed(CloseReason::Dismissed),
-                Some(&stop)
-            ),
-            None
+            pressed(&NotificationResponse::Action("Elegir tarea".into()), &both),
+            Some(&choose)
         );
         assert_eq!(
-            pressed(&NotificationResponse::Action("schedule-stop".into()), None),
+            pressed(&NotificationResponse::Action("default".into()), &both),
             None
         );
+        assert_eq!(pressed(&NotificationResponse::Default, &both), None);
+        assert_eq!(
+            pressed(&NotificationResponse::Closed(CloseReason::Dismissed), &both),
+            None
+        );
+        assert_eq!(
+            pressed(&NotificationResponse::Action("schedule-stop".into()), &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn two_buttons_at_most_known_and_without_repeats() {
+        let note: FriendlyNote = serde_json::from_str(
+            r#"{"title":"t","body":"b","pose":"working","actions":[{"id":"nudge-resume","label":"Seguir con A"},{"id":"open-url","label":"x"},{"id":"nudge-resume","label":"again"},{"id":"nudge-choose","label":"Elegir tarea"},{"id":"schedule-stop","label":"Parar"}]}"#,
+        )
+        .unwrap();
+        let ids: Vec<String> = checked_actions(&note).into_iter().map(|a| a.id).collect();
+        assert_eq!(ids, vec!["nudge-resume", "nudge-choose"]);
+        let single: FriendlyNote = serde_json::from_str(
+            r#"{"title":"t","body":"b","pose":null,"action":{"id":"schedule-start","label":"Empezar"}}"#,
+        )
+        .unwrap();
+        assert_eq!(checked_actions(&single).len(), 1);
+        assert!(SHOWS_WINDOW.iter().all(|id| ACTION_IDS.contains(id)));
     }
 
     #[test]

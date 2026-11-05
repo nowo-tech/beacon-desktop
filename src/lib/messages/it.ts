@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows, type NudgeCatalog } from './types';
 
 /** Italiano: pranzo verso le 13, caffè a metà mattina e a metà pomeriggio. */
 export const pools: Pools = {
@@ -223,4 +223,17 @@ export const reminders: ReminderCatalog = {
   actions: { start: 'Avvia', stop: 'Ferma', resume: 'Riprendi' },
   lastTask: 'Ultima attività: {task}.',
   today: 'Oggi: {total}.',
+};
+
+/** "Working without a timer?" (input for a while during working hours, no timer running). */
+export const nudge: NudgeCatalog = {
+  lines: [
+    f('È da un po\' che sei operativo e nessun timer è attivo. Lo registriamo?', 'think'),
+    f('Mani al lavoro, timer fermo. Ne avviamo uno?', 'peek'),
+    f('Sembra che tu stia lavorando, ma l\'orologio no. Lo avvio?', 'working'),
+    f('Ehi, il timer è fermo. Riprendiamo da dove avevi lasciato?', 'wave'),
+  ],
+  title: 'Lavori senza timer?',
+  lastTask: 'Ultima attività: {task}.',
+  actions: { resume: 'Avvia {task}', choose: 'Scegli attività' },
 };

@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows, type NudgeCatalog } from './types';
 
 /** English. */
 export const pools: Pools = {
@@ -223,4 +223,17 @@ export const reminders: ReminderCatalog = {
   actions: { start: 'Start', stop: 'Stop', resume: 'Resume' },
   lastTask: 'Last task: {task}.',
   today: 'Today: {total}.',
+};
+
+/** "Working without a timer?" (input for a while during working hours, no timer running). */
+export const nudge: NudgeCatalog = {
+  lines: [
+    f('You\'ve been busy for a while and no timer is running. Shall we track it?', 'think'),
+    f('Busy hands, quiet timer. Want to start one?', 'peek'),
+    f('Looks like you\'re working, but the clock isn\'t. Shall I start it?', 'working'),
+    f('Hey, the timer is off. Pick up where you left off?', 'wave'),
+  ],
+  title: 'Working without a timer?',
+  lastTask: 'Last task: {task}.',
+  actions: { resume: 'Start {task}', choose: 'Choose task' },
 };

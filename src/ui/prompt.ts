@@ -24,6 +24,11 @@ export type PromptAction =
   | 'gap-keep'
   | 'gap-reassign'
   | 'gap-discard'
+  /** "Reassign": open / close the task picker, search tasks (`query`), save on `taskId`. */
+  | 'reassign-open'
+  | 'reassign-cancel'
+  | 'reassign-search'
+  | 'reassign-save'
   | 'resume'
   | 'not-now'
   | 'escape'
@@ -34,8 +39,10 @@ export interface PromptAnswer {
   action: PromptAction;
   /** Meeting note (`meeting-save`). */
   note?: string;
-  /** Task the time goes to (`meeting-save` with another task, `gap-reassign`). */
+  /** Task the time goes to (`meeting-save` with another task, `gap-reassign`, `reassign-save`). */
   taskId?: string;
+  /** Task search of the picker (`reassign-search`); the main window runs it. */
+  query?: string;
 }
 
 export interface PromptButton {
@@ -47,6 +54,8 @@ export interface PromptButton {
   play?: boolean;
   /** `aria-expanded` of a button that opens a form. */
   expanded?: boolean;
+  /** Sent with the answer (the quick "Meeting" choice of the picker). */
+  taskId?: string;
 }
 
 export interface PromptText {
@@ -98,7 +107,27 @@ export interface PromptCountdown {
   template: string;
 }
 
-export type PromptBlock = PromptText | PromptChoices | PromptMeeting | PromptCountdown;
+/**
+ * "Reassign to another task": the quick "Meeting" choice (when there is a meeting-type task), a task search (run by the
+ * main window), the pinned / recent tasks and the results as radio buttons, Save and Cancel.
+ */
+export interface PromptPicker {
+  kind: 'picker';
+  heading: string;
+  meeting: PromptButton | null;
+  searchLabel: string;
+  searchButton: string;
+  query: string;
+  /** Result count, "searching…" or an error (polite status). */
+  status: string | null;
+  options: PromptTaskOption[];
+  selected: string | null;
+  emptyText: string;
+  saveLabel: string;
+  cancelLabel: string;
+}
+
+export type PromptBlock = PromptText | PromptChoices | PromptMeeting | PromptCountdown | PromptPicker;
 
 export interface PromptView {
   /** Card id (`idle`, `idle-away`, `gap`, `gap-resume-card`): tests, focus and styles rely on it. */
@@ -123,6 +152,8 @@ export interface PromptView {
 
 export interface RenderedPrompt {
   element: HTMLElement;
+  /** Updates the countdown to the current time (the same view drawn again). */
+  refresh(): void;
   /** Stops the countdown ticker. */
   dispose(): void;
 }
@@ -153,10 +184,71 @@ function button(item: PromptButton, answer: (answer: PromptAnswer) => void): HTM
       id: item.id,
       key: item.id,
       attrs: { type: 'button', 'aria-expanded': item.expanded === undefined ? undefined : String(item.expanded) },
-      on: { click: () => answer({ action: item.action }) },
+      on: { click: () => answer({ action: item.action, ...(item.taskId !== undefined ? { taskId: item.taskId } : {}) }) },
     },
     item.play === true && icon('play'),
     item.label,
+  );
+}
+
+function picker(item: PromptPicker, answer: (answer: PromptAnswer) => void): HTMLElement {
+  const search = h('input', { id: 'reassign-search', attrs: { type: 'search', autocomplete: 'off', spellcheck: 'false', maxlength: '200', 'aria-describedby': 'reassign-status' } });
+  search.value = item.query;
+  const selected = item.selected ?? item.options[0]?.id ?? null;
+  const radios = item.options.map((option, index) => {
+    const id = `reassign-option-${index}`;
+    const radio = h('input', { id, key: `reassign-${option.id}`, attrs: { type: 'radio', name: 'reassign-task', value: option.id } });
+    radio.checked = option.id === selected;
+    return h('label', { class: 'reassign-option', attrs: { for: id } }, radio, h('span', {}, option.title));
+  });
+  const chosen = () => radios.map((label) => label.querySelector('input')).find((radio) => radio?.checked)?.value;
+  return h(
+    'div',
+    { class: 'reassign', id: 'reassign-picker' },
+    h('p', { class: 'reassign-heading', id: 'reassign-heading' }, item.heading),
+    item.meeting !== null && button(item.meeting, answer),
+    h(
+      'form',
+      {
+        class: 'reassign-search',
+        id: 'reassign-search-form',
+        attrs: { role: 'search' },
+        on: {
+          submit: (event) => {
+            event.preventDefault();
+            answer({ action: 'reassign-search', query: search.value.trim() });
+          },
+        },
+      },
+      h('label', { attrs: { for: 'reassign-search' } }, item.searchLabel),
+      h('div', { class: 'reassign-search-row' }, search, h('button', { class: 'secondary small', id: 'reassign-search-go', key: 'reassign-search-go', attrs: { type: 'submit' } }, item.searchButton)),
+    ),
+    h('p', { class: 'muted small-print', id: 'reassign-status', attrs: { role: 'status', 'aria-live': 'polite' } }, item.status ?? ''),
+    radios.length > 0
+      ? h('fieldset', { class: 'reassign-options', id: 'reassign-options' }, h('legend', { class: 'sr-only' }, item.heading), ...radios)
+      : h('p', { class: 'muted', id: 'reassign-empty' }, item.emptyText),
+    h(
+      'div',
+      { class: 'row-actions' },
+      radios.length > 0 &&
+        h(
+          'button',
+          {
+            class: 'primary small',
+            id: 'reassign-save',
+            key: 'reassign-save',
+            attrs: { type: 'button' },
+            on: {
+              click: () => {
+                const taskId = chosen();
+                if (taskId !== undefined) answer({ action: 'reassign-save', taskId });
+              },
+            },
+          },
+          item.saveLabel,
+        ),
+      h('button', { class: 'link', id: 'reassign-cancel', key: 'reassign-cancel', attrs: { type: 'button' }, on: { click: () => answer({ action: 'reassign-cancel' }) } }, item.cancelLabel),
+    ),
   );
 }
 
@@ -173,6 +265,7 @@ export function renderPrompt(view: PromptView, options: PromptOptions): Rendered
   const now = options.now ?? (() => new Date());
   const answer = options.onAnswer;
   let ticker: ReturnType<typeof setInterval> | null = null;
+  let refresh = (): void => undefined;
   const hint = h('p', { class: 'sr-only', id: 'prompt-escape-hint', attrs: { role: 'status', 'aria-live': 'polite' } });
 
   const block = (item: PromptBlock): Child => {
@@ -232,6 +325,8 @@ export function renderPrompt(view: PromptView, options: PromptOptions): Rendered
           ),
         );
       }
+      case 'picker':
+        return picker(item, answer);
       case 'countdown': {
         const label = h('p', { class: 'muted', id: 'idle-countdown-text' });
         const fill = h('span', { class: 'countdown-fill', id: 'idle-countdown-fill' });
@@ -248,6 +343,7 @@ export function renderPrompt(view: PromptView, options: PromptOptions): Rendered
           return left;
         };
         update();
+        refresh = () => void update();
         // Updated every second without re-rendering; at 0 the host is told once.
         ticker = setInterval(() => {
           if (update() > 0) return;
@@ -294,6 +390,7 @@ export function renderPrompt(view: PromptView, options: PromptOptions): Rendered
   );
   return {
     element,
+    refresh: () => refresh(),
     dispose: () => {
       if (ticker !== null) clearInterval(ticker);
       ticker = null;
@@ -308,6 +405,8 @@ export function renderPrompt(view: PromptView, options: PromptOptions): Rendered
 export class PromptMount {
   private current: RenderedPrompt | null = null;
   private focusSeq = -1;
+  /** The view drawn last: the same content again is not redrawn (a typed search or a chosen task stays). */
+  private shownKey = '';
 
   constructor(
     private readonly region: HTMLElement,
@@ -315,6 +414,12 @@ export class PromptMount {
   ) {}
 
   show(view: PromptView | null): HTMLElement | null {
+    const key = view === null ? '' : JSON.stringify(view);
+    if (view !== null && key === this.shownKey && this.current !== null && this.region.contains(this.current.element)) {
+      this.current.refresh();
+      return this.current.element;
+    }
+    this.shownKey = key;
     this.current?.dispose();
     this.current = null;
     if (view === null) {
@@ -338,5 +443,6 @@ export class PromptMount {
   dispose(): void {
     this.current?.dispose();
     this.current = null;
+    this.shownKey = '';
   }
 }

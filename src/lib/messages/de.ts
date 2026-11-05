@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows, type NudgeCatalog } from './types';
 
 /** Deutsch (du): Kaffee und Kuchen am Nachmittag, früher Mittag. */
 export const pools: Pools = {
@@ -223,4 +223,17 @@ export const reminders: ReminderCatalog = {
   actions: { start: 'Starten', stop: 'Stoppen', resume: 'Fortsetzen' },
   lastTask: 'Letzte Aufgabe: {task}.',
   today: 'Heute: {total}.',
+};
+
+/** "Working without a timer?" (input for a while during working hours, no timer running). */
+export const nudge: NudgeCatalog = {
+  lines: [
+    f('Du bist schon eine Weile aktiv, aber kein Timer läuft. Sollen wir das erfassen?', 'think'),
+    f('Fleißige Hände, stiller Timer. Einen starten?', 'peek'),
+    f('Sieht nach Arbeit aus, nur die Uhr steht. Soll ich sie starten?', 'working'),
+    f('Hallo! Der Timer ist aus. Da weitermachen, wo du aufgehört hast?', 'wave'),
+  ],
+  title: 'Arbeit ohne Timer?',
+  lastTask: 'Letzte Aufgabe: {task}.',
+  actions: { resume: '{task} starten', choose: 'Aufgabe wählen' },
 };

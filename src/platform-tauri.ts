@@ -7,7 +7,7 @@ import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { notificationBody, type NotificationPermission, type Platform, type PromptClient, type PromptHost, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
+import { notificationBody, type NotificationPermission, type Platform, type PromptClient, type PromptHost, type SessionEvent, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 
 const permission = (state: string): NotificationPermission => (state === 'granted' ? 'granted' : state === 'denied' ? 'denied' : 'prompt');
@@ -57,7 +57,7 @@ export function tauriPlatform(): Platform {
     },
     setTray: (status) => invoke('set_tray_status', { status }),
     setTrayMenu: (menu) => invoke('set_tray_menu', { menu }),
-    setShortcut: (accelerator) => invoke('set_global_shortcut', { accelerator }),
+    setShortcut: (accelerator, slot = 'open') => invoke('set_global_shortcut', { accelerator, slot }),
     notify: async (title, body) => {
       let granted = await isPermissionGranted();
       if (!granted) granted = (await requestPermission()) === 'granted';
@@ -94,6 +94,10 @@ export function tauriPlatform(): Platform {
       }
     },
     onShortcut: (handler) => void listen('shortcut', handler),
+    // Emitted by Rust without showing the window (src-tauri/src/lib.rs, global shortcut handler).
+    onResumeShortcut: (handler) => void listen('shortcut-resume', handler),
+    // Screen lock / sleep from the OS (src-tauri/src/session.rs).
+    onSessionEvent: (handler) => void listen<SessionEvent>('session-event', (event) => handler(event.payload)),
     onTray: (handler) => void listen<string>('tray-action', (event) => handler(event.payload)),
   };
 }

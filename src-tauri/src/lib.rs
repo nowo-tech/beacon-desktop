@@ -2,14 +2,17 @@
 //! heartbeat (`heartbeat.rs`), native friendly-message notifications (`notify.rs`) and the "Still there?" window
 //! (`prompt.rs`). Closing the window keeps the app (and the timer, the idle check and the messages) running in the tray.
 //!
-//! Privacy by design: nothing here observes the user's activity beyond the OS "seconds since last input" counter,
-//! which never leaves the device. The UI reads it every 30 s while a timer runs, only to decide when to ask "Still
-//! there?"; it is not stored, logged or sent (only the user's answer is).
+//! Privacy by design: nothing here observes the user's activity beyond the OS "seconds since last input" counter and
+//! the screen lock / sleep events (`session.rs`), which never leave the device. The UI reads the counter every 30 s
+//! while a timer runs (to decide when to ask "Still there?") and, with "Working without a timer?" on, during working
+//! hours; it is not stored, logged or sent (only the user's answers and the entries they confirm are).
 
 mod heartbeat;
 mod notify;
 mod pose_art;
 mod prompt;
+mod session;
+mod tray_clock;
 
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
@@ -27,6 +30,10 @@ const KEYCHAIN_USER: &str = "session-token";
 const TRAY_ID: &str = "main";
 /// Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME; the UI can change it (Settings).
 const DEFAULT_SHORTCUT: &str = "CommandOrControl+Alt+Shift+T";
+/// Shortcut slots of `set_global_shortcut`: show the window and search, or "Continue the last task" (registered by the
+/// UI at start; default `CommandOrControl+Alt+Space`, Settings can change it).
+const SLOT_OPEN: &str = "open";
+const SLOT_RESUME: &str = "resume";
 
 /// Tray state kept between UI updates: the status line item and the two icon variants.
 struct TrayState {
@@ -34,6 +41,10 @@ struct TrayState {
     running: Option<Image<'static>>,
     stopped: Option<Image<'static>>,
     shortcut: Mutex<Option<String>>,
+    /// "Continue the last task" shortcut (works with the window hidden).
+    resume_shortcut: Mutex<Option<String>>,
+    /// Elapsed time of the running timer, refreshed by the heartbeat thread (`tray_clock.rs`).
+    clock: Mutex<tray_clock::TrayClock>,
 }
 
 /// Tray tooltip / title / status line, sent by the UI (translated) every ~30 s and on every timer change.
@@ -43,6 +54,9 @@ struct TrayStatus {
     tooltip: String,
     status: String,
     running: bool,
+    /// While a timer runs: the templates the heartbeat keeps up to date (absent from older UIs).
+    #[serde(default)]
+    clock: Option<tray_clock::ClockSpec>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -198,11 +212,22 @@ fn set_tray_status(
     status: TrayStatus,
 ) -> Result<(), String> {
     only_from(&window, "main")?;
+    // A running clock: its texts now, then every minute from the heartbeat (the UI's title / tooltip are the same).
+    let clocked = match app.try_state::<TrayState>() {
+        Some(state) => state
+            .clock
+            .lock()
+            .map_err(|e| e.to_string())?
+            .set(status.clock.clone(), heartbeat::now_ms()),
+        None => None,
+    };
+    let (title, tooltip) = match &clocked {
+        Some(text) => (Some(text.title.as_str()), text.tooltip.as_str()),
+        None => (status.title.as_deref(), status.tooltip.as_str()),
+    };
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        tray.set_tooltip(Some(&status.tooltip))
-            .map_err(|e| e.to_string())?;
-        tray.set_title(status.title.as_deref())
-            .map_err(|e| e.to_string())?;
+        tray.set_tooltip(Some(tooltip)).map_err(|e| e.to_string())?;
+        tray.set_title(title).map_err(|e| e.to_string())?;
         if let Some(state) = app.try_state::<TrayState>() {
             let icon = if status.running {
                 &state.running
@@ -319,21 +344,43 @@ fn set_tray_menu(app: AppHandle, window: tauri::Window, menu: TrayMenuSpec) -> R
     Ok(())
 }
 
-/// Replaces the global shortcut. On failure (in use by another app, invalid) the previous one is registered again and
-/// the error goes back to the UI, which shows it in Settings.
+/// Replaces a global shortcut: `open` (the default slot: show the window and search) or `resume` ("Continue the last
+/// task", window hidden or not). On failure (in use by another app, invalid, the other slot's) the previous one is
+/// registered again and the error goes back to the UI, which shows it in Settings.
 #[tauri::command]
 fn set_global_shortcut(
     app: AppHandle,
     window: tauri::Window,
     accelerator: String,
+    slot: Option<String>,
 ) -> Result<(), String> {
     only_from(&window, "main")?;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
     let shortcuts = app.global_shortcut();
     let state = app.state::<TrayState>();
-    let mut current = state.shortcut.lock().map_err(|e| e.to_string())?;
+    let resume = shortcut_slot(slot.as_deref())?;
+    let (mut current, other) = if resume {
+        (
+            state.resume_shortcut.lock().map_err(|e| e.to_string())?,
+            state.shortcut.lock().map_err(|e| e.to_string())?.clone(),
+        )
+    } else {
+        (
+            state.shortcut.lock().map_err(|e| e.to_string())?,
+            state
+                .resume_shortcut
+                .lock()
+                .map_err(|e| e.to_string())?
+                .clone(),
+        )
+    };
     if current.as_deref() == Some(accelerator.as_str()) {
         return Ok(());
+    }
+    if same_shortcut(other.as_deref(), &accelerator) {
+        return Err(format!(
+            "{accelerator} is already used by the other shortcut"
+        ));
     }
     if let Some(previous) = current.as_deref() {
         let _ = shortcuts.unregister(previous);
@@ -349,6 +396,27 @@ fn set_global_shortcut(
             }
             Err(e.to_string())
         }
+    }
+}
+
+/// `open` (or absent, older UIs) → false, `resume` → true; anything else is refused.
+fn shortcut_slot(slot: Option<&str>) -> Result<bool, String> {
+    match slot {
+        None | Some(SLOT_OPEN) => Ok(false),
+        Some(SLOT_RESUME) => Ok(true),
+        Some(_) => Err("unknown shortcut".into()),
+    }
+}
+
+/// Whether two accelerators are the same keys (`Ctrl+Alt+Space` = `control+alt+space`).
+fn same_shortcut(registered: Option<&str>, accelerator: &str) -> bool {
+    use tauri_plugin_global_shortcut::Shortcut;
+    match (
+        registered.and_then(|value| value.parse::<Shortcut>().ok()),
+        accelerator.parse::<Shortcut>().ok(),
+    ) {
+        (Some(a), Some(b)) => a.id() == b.id(),
+        _ => false,
     }
 }
 
@@ -724,18 +792,31 @@ fn set_wake_plan(
     Ok(())
 }
 
-/// Polls the wall clock every second and wakes the main window (`wake` events) on time, hidden or not.
+/// Polls the wall clock every second and wakes the main window (`wake` events) on time, hidden or not. It also keeps
+/// the tray's elapsed time current (once a minute, when its text changes).
 fn spawn_heartbeat(app: AppHandle) {
     let _ = std::thread::Builder::new()
         .name("heartbeat".into())
         .spawn(move || loop {
             std::thread::sleep(Duration::from_millis(heartbeat::POLL_MS));
+            let now = heartbeat::now_ms();
             let wake = match app.state::<HeartbeatState>().0.lock() {
-                Ok(mut beat) => beat.poll(heartbeat::now_ms(), read_idle_seconds),
+                Ok(mut beat) => beat.poll(now, read_idle_seconds),
                 Err(_) => None,
             };
             if let Some(wake) = wake {
                 let _ = app.emit_to("main", "wake", wake);
+            }
+            let text = app.try_state::<TrayState>().and_then(|state| {
+                state
+                    .clock
+                    .lock()
+                    .ok()
+                    .and_then(|mut clock| clock.poll(now))
+            });
+            if let (Some(text), Some(tray)) = (text, app.tray_by_id(TRAY_ID)) {
+                let _ = tray.set_tooltip(Some(&text.tooltip));
+                let _ = tray.set_title(Some(&text.title));
             }
         });
 }
@@ -802,6 +883,8 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         running,
         stopped,
         shortcut: Mutex::new(None),
+        resume_shortcut: Mutex::new(None),
+        clock: Mutex::new(tray_clock::TrayClock::new()),
     });
     Ok(())
 }
@@ -829,8 +912,23 @@ pub fn run() {
         ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
+                .with_handler(|app, shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    let resume = app.try_state::<TrayState>().and_then(|state| {
+                        state.resume_shortcut.lock().ok().and_then(|s| s.clone())
+                    });
+                    let pressed = shortcut.id();
+                    let is_resume = resume
+                        .and_then(|value| {
+                            value.parse::<tauri_plugin_global_shortcut::Shortcut>().ok()
+                        })
+                        .is_some_and(|registered| registered.id() == pressed);
+                    if is_resume {
+                        // "Continue the last task": the window stays as it is (hidden in the tray, or behind).
+                        let _ = app.emit_to("main", "shortcut-resume", ());
+                    } else {
                         show_main(app);
                         let _ = app.emit("shortcut", ());
                     }
@@ -843,6 +941,8 @@ pub fn run() {
             app.manage(prompt::PromptState::default());
             build_tray(app)?;
             spawn_heartbeat(app.handle().clone());
+            // Screen lock / sleep events for "Pause on lock or sleep" (the UI decides whether to use them).
+            session::start(app.handle());
             // Started at login (opt-in autostart passes --hidden): stay in the tray.
             if std::env::args().any(|arg| arg == "--hidden") {
                 if let Some(window) = app.get_webview_window("main") {
@@ -1058,6 +1158,38 @@ mod tests {
         )
         .expect("old spec");
         assert!(old.pause_friendly.is_none());
+    }
+
+    #[test]
+    fn shortcut_slots_and_duplicates() {
+        assert_eq!(shortcut_slot(None), Ok(false));
+        assert_eq!(shortcut_slot(Some("open")), Ok(false));
+        assert_eq!(shortcut_slot(Some("resume")), Ok(true));
+        assert!(shortcut_slot(Some("quit")).is_err());
+        assert!(same_shortcut(
+            Some("CommandOrControl+Alt+Space"),
+            "CommandOrControl+Alt+Space"
+        ));
+        assert!(same_shortcut(Some("Control+Alt+Space"), "ctrl+alt+space"));
+        assert!(!same_shortcut(
+            Some("CommandOrControl+Alt+Shift+T"),
+            "CommandOrControl+Alt+Space"
+        ));
+        assert!(!same_shortcut(None, "CommandOrControl+Alt+Space"));
+        assert!(!same_shortcut(Some("not a shortcut"), "Alt+Space"));
+    }
+
+    #[test]
+    fn tray_status_accepts_a_clock_and_older_uis_without_it() {
+        let status: TrayStatus = serde_json::from_str(
+            r#"{"title":"0:05 A","tooltip":"A","status":"s","running":true,"clock":{"startedAt":1,"title":"{time} A","tooltip":"A {time}","todayBaseSeconds":0}}"#,
+        )
+        .unwrap();
+        assert_eq!(status.clock.map(|clock| clock.started_at), Some(1));
+        let old: TrayStatus =
+            serde_json::from_str(r#"{"title":null,"tooltip":"t","status":"s","running":false}"#)
+                .unwrap();
+        assert!(old.clock.is_none() && !old.running && old.title.is_none());
     }
 
     #[test]
