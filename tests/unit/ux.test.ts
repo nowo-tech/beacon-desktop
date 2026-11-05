@@ -156,7 +156,7 @@ describe('0.2.0 UX', () => {
       vi.useRealTimers();
     }
     expect(ui.$('#timer-meta').textContent).toBe('Billing · Engineering · desde 8:05');
-    expect(ui.$('#quick-empty').textContent).toContain('Inicia una tarea');
+    expect(ui.$('#quick-empty').textContent).toContain('Fija una tarea');
     expect(ui.$('#elapsed').getAttribute('role')).toBe('timer');
     expect(ui.$('#stop').getAttribute('aria-label')).toBe('Parar «Fix invoice rounding bug»');
     expect(ui.platform.hooks.trayMenu?.search).toBe('Buscar tarea…');

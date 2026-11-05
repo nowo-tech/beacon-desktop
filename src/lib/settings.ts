@@ -1,6 +1,7 @@
 import type { Scope, Task, Timer } from '../api/types';
 import { DEFAULT_SHORTCUT } from '../platform';
 import { EMPTY_MESSAGES, type MessageState, sanitizeMessages } from './friendly';
+import { type BrowserChoice, sanitizeBrowser, SYSTEM_BROWSER } from './links';
 import { type IdleCheckState, WATCHING } from './idleCheck';
 import { DEFAULT_LEAD_MINUTES, EMPTY_SCHEDULE, LEAD_CHOICES, sanitizeSchedule, type ScheduleState } from './schedule';
 import type { ServerFeatures } from './serverFeatures';
@@ -45,6 +46,8 @@ export interface Settings {
   scheduleReminders: boolean;
   /** "Shall we start?" this many minutes before the start time (`LEAD_CHOICES`). */
   scheduleLeadMinutes: number;
+  /** "Open Beacon in": the browser for every link the app opens (this computer only). */
+  browser: BrowserChoice;
 }
 
 /**
@@ -104,6 +107,7 @@ export const DEFAULT_SETTINGS: Settings = {
   nativeIntroSeen: false,
   scheduleReminders: true,
   scheduleLeadMinutes: DEFAULT_LEAD_MINUTES,
+  browser: SYSTEM_BROWSER,
 };
 
 const KEY = 'time-track-desktop';
@@ -144,6 +148,7 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
         nativeIntroSeen: raw.settings?.nativeIntroSeen === true,
         scheduleReminders: typeof raw.settings?.scheduleReminders === 'boolean' ? raw.settings.scheduleReminders : DEFAULT_SETTINGS.scheduleReminders,
         scheduleLeadMinutes: LEAD_CHOICES.includes(raw.settings?.scheduleLeadMinutes as number) ? (raw.settings?.scheduleLeadMinutes as number) : DEFAULT_SETTINGS.scheduleLeadMinutes,
+        browser: sanitizeBrowser(raw.settings?.browser),
       },
       messages: sanitizeMessages(raw.messages),
       schedule: sanitizeSchedule(raw.schedule),

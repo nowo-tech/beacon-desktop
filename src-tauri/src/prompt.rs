@@ -179,6 +179,9 @@ pub fn prompt_open(app: AppHandle, window: tauri::Window, view: Value) -> Result
     .focused(true)
     .visible(false)
     .theme(theme_of(&view))
+    // No links in this window: nothing loads but its own page, and no new windows.
+    .on_navigation(crate::internal_navigation)
+    .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
     .build()
     .map_err(|e| e.to_string())?;
     let _ = created.set_size(LogicalSize::new(WIDTH, HEIGHT));

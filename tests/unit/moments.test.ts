@@ -273,9 +273,14 @@ describe('mascot moments', () => {
     search.dispatchEvent(new Event('input'));
     ui.app.tasks = [];
     ui.app.render();
-    expect(pose(ui.$('#tasks-empty [data-moment="noTasks"]'))).toBe('mascot-small');
-    // Only one mascot on the main screen: the empty "pinned / recent" line has none.
-    expect(ui.$('#quick-empty img')).toBeNull();
+    // No task at all: the "Open the tasks in Beacon" empty state (its own art, a dark-theme variant), and the pinned /
+    // recent section steps aside so there is only one mascot on the main screen.
+    expect(ui.$('#tasks-empty').getAttribute('data-empty')).toBe('tasks');
+    expect(ui.$('#tasks-empty .empty-art').getAttribute('data-pose')).toBe('empty-tasks');
+    expect(ui.$('#tasks-empty img.theme-light').getAttribute('srcset')).toBe('mascot/pose-empty-tasks.webp 1x, mascot/pose-empty-tasks@2x.webp 2x');
+    expect(ui.$('#tasks-empty img.theme-dark').getAttribute('srcset')).toBe('mascot/pose-empty-tasks-dark.webp 1x, mascot/pose-empty-tasks-dark@2x.webp 2x');
+    expect(ui.$('#tasks-empty').textContent).toContain('Abrir las tareas en Beacon');
+    expect(ui.$('#quick-empty')).toBeNull();
     ui.app.destroy();
   });
 

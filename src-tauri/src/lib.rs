@@ -6,6 +6,7 @@
 //! which never leaves the device. The UI reads it every 30 s while a timer runs, only to decide when to ask "Still
 //! there?"; it is not stored, logged or sent (only the user's answer is).
 
+mod browser;
 mod heartbeat;
 mod notify;
 mod pose_art;
@@ -821,6 +822,57 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Whether a navigation stays inside the app (its own pages; the Vite dev server in debug builds).
+pub(crate) fn internal_navigation(url: &url::Url) -> bool {
+    match url.scheme() {
+        "tauri" | "about" => true,
+        "http" | "https" => {
+            url.host_str() == Some("tauri.localhost")
+                || (cfg!(debug_assertions)
+                    && url.host_str() == Some("localhost")
+                    && url.port() == Some(1420))
+        }
+        _ => false,
+    }
+}
+
+/// The main window (tauri.conf.json, `create: false`), built here so that no link ever opens inside the app or in a
+/// browser the person did not choose: a navigation away from the app or a new window (`target=_blank`,
+/// `window.open`) is refused and its https URL is handed to the UI (`open-external`), which opens it through
+/// `open_external` with the "Open Beacon in" setting.
+fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
+    let Some(config) = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned()
+    else {
+        return Ok(());
+    };
+    let to_ui = app.clone();
+    let to_ui_new = app.clone();
+    tauri::WebviewWindowBuilder::from_config(app, &config)?
+        .on_navigation(move |url| {
+            if internal_navigation(url) {
+                return true;
+            }
+            if url.scheme() == "https" {
+                let _ = to_ui.emit_to("main", "open-external", url.as_str());
+            }
+            false
+        })
+        .on_new_window(move |url, _features| {
+            if url.scheme() == "https" {
+                let _ = to_ui_new.emit_to("main", "open-external", url.as_str());
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
+        .build()?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -835,6 +887,8 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         // Registered but never enabled by default: the user opts in from Settings.
@@ -856,6 +910,7 @@ pub fn run() {
             app.manage(HeartbeatState(Mutex::new(heartbeat::Heartbeat::new())));
             app.manage(MainFocus::default());
             app.manage(prompt::PromptState::default());
+            create_main_window(app.handle())?;
             build_tray(app)?;
             spawn_heartbeat(app.handle().clone());
             // Started at login (opt-in autostart passes --hidden): stay in the tray.
@@ -912,7 +967,10 @@ pub fn run() {
             prompt::prompt_answer,
             prompt::prompt_focus,
             prompt::prompt_close,
-            prompt::prompt_show_main
+            prompt::prompt_show_main,
+            browser::open_external,
+            browser::list_browsers,
+            browser::check_browser
         ])
         .run(tauri::generate_context!())
         .expect("error while running TimeTrack");
@@ -970,11 +1028,43 @@ mod tests {
         let end = start + source[start..].find(']').unwrap();
         let mut registered: Vec<&str> = source[start + 18..end]
             .split(',')
-            .map(|name| name.trim().trim_start_matches("prompt::"))
+            .map(|name| name.trim().rsplit("::").next().unwrap())
             .filter(|name| !name.is_empty())
             .collect();
         registered.sort();
         assert_eq!(registered, declared);
+    }
+
+    #[test]
+    fn only_app_pages_load_in_the_window() {
+        let parse = |u: &str| url::Url::parse(u).unwrap();
+        assert!(internal_navigation(&parse("tauri://localhost/index.html")));
+        assert!(internal_navigation(&parse(
+            "http://tauri.localhost/index.html"
+        )));
+        assert!(internal_navigation(&parse("about:blank")));
+        assert_eq!(
+            internal_navigation(&parse("http://localhost:1420/")),
+            cfg!(debug_assertions)
+        );
+        for external in [
+            "https://beacon.example.com/",
+            "https://www.google.com/chrome/",
+            "http://localhost:8000/",
+            "file:///etc/passwd",
+            "data:text/html,x",
+        ] {
+            assert!(!internal_navigation(&parse(external)), "{external}");
+        }
+    }
+
+    #[test]
+    fn main_window_is_built_by_the_app() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let main = &config["app"]["windows"][0];
+        assert_eq!(main["label"], "main");
+        assert_eq!(main["create"], false);
     }
 
     #[test]

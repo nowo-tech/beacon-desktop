@@ -303,8 +303,13 @@ mod tests {
 
     #[test]
     fn every_listed_pose_has_a_square_png_and_nothing_else_does() {
+        // The empty-state pictures of the list (`empty-*`) are not notification art.
         let listed: Vec<String> =
-            serde_json::from_str(include_str!("../../src/ui/pose-art.json")).unwrap();
+            serde_json::from_str::<Vec<String>>(include_str!("../../src/ui/pose-art.json"))
+                .unwrap()
+                .into_iter()
+                .filter(|id| !id.starts_with("empty-"))
+                .collect();
         assert_eq!(listed.len(), POSE_ART.len());
         for id in &listed {
             let png = pose_png(id).unwrap_or_else(|| panic!("{id}"));
@@ -312,7 +317,14 @@ mod tests {
             // IHDR width and height (big endian at 16..24): 96 × 96.
             assert_eq!(&png[16..24], &[0, 0, 0, 96, 0, 0, 0, 96], "{id}");
         }
-        for id in ["", "../etc/passwd", "beach", "PEEK", "peek.png"] {
+        for id in [
+            "",
+            "../etc/passwd",
+            "beach",
+            "PEEK",
+            "peek.png",
+            "empty-tasks",
+        ] {
             assert!(pose_png(id).is_none(), "{id}");
         }
     }

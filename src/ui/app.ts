@@ -16,7 +16,9 @@ import { type Feature, type LocalState, DEFAULT_SETTINGS, LOCAL_KEYS, MAX_PINNED
 import { computeTotals, formatHoursMinutes, recentTasks, startOfDay, startOfWeek, taskContext, todayByTask, type Totals } from '../lib/summary';
 import { elapsedSeconds, formatElapsed } from '../lib/time';
 import { applyTheme, forcedTheme, THEMES, type ThemePreference } from '../lib/theme';
-import { appsPage, safeVerificationUri } from '../lib/urls';
+import { appsPage, tasksPage } from '../lib/urls';
+import { type BrowserChoice, copyableUrl, type DetectedBrowser, externalUrl, type LinkRule, SYSTEM_BROWSER } from '../lib/links';
+import { EMPTY_POSES, EMPTY_TEXTS, type EmptyState, PIN_HINT, quickEmptyState } from '../lib/emptyStates';
 import { compareVersions, isVersion, updateRequired } from '../lib/version';
 import { ACTION_IDS, actionOfId, composeReminder, type ReminderNote } from '../lib/reminders';
 import {
@@ -48,7 +50,7 @@ import { type DaySpan, todaySpans, weekByTask, weekDays } from '../lib/week';
 import type { FriendlyNotification, Platform, TrayMenu, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
-import { art, ERROR_POSES, moment, poseArt, variant, type Moment } from './mascot';
+import { art, emptyArt, ERROR_POSES, moment, poseArt, variant, type Moment } from './mascot';
 import { PromptMount, type PromptAnswer, type PromptBlock, type PromptButton, type PromptChoices, type PromptTaskOption, type PromptText, type PromptView } from './prompt';
 
 export type View = 'loading' | 'login' | 'device' | 'main' | 'settings' | 'privacy' | 'update-required';
@@ -199,6 +201,8 @@ export class DesktopApp {
   private token: string | null = null;
   private abort: AbortController | null = null;
   private deviceUrl: string | null = null;
+  /** Server of the sign-in in progress (the verification page must be on it). */
+  private deviceServer = '';
   private deviceStarted = 0;
   private deviceAnnounced = false;
   private retryAction: (() => Promise<void>) | null = null;
@@ -230,6 +234,13 @@ export class DesktopApp {
   /** Toasts last rendered (re-rendered only when they change, so the polite live region speaks once). */
   private toastKey = '';
   private readonly toastRegion: HTMLElement;
+  /** Settings → Open Beacon in: the browsers found on this computer (`null` until asked). */
+  browsers: DetectedBrowser[] | null = null;
+  /** Settings → Open Beacon in: why the picked browser was refused. */
+  browserMessage: string | null = null;
+  /** Right-click / long-press menu of a Beacon link (Open / Copy link). */
+  linkMenu: { url: string; rule: LinkRule; x: number; y: number } | null = null;
+  private readonly menuRegion: HTMLElement;
   private lastTrayMenu = '';
   private main: MainRegions | null = null;
   /** Layout drawn now (from the window width, lib/layout.ts). */
@@ -291,9 +302,18 @@ export class DesktopApp {
     this.sidebar = h('nav', { class: 'sidebar pane', id: 'sidebar', attrs: { hidden: true, tabindex: '-1' } });
     this.center = h('div', { class: 'main-pane pane', id: 'main-pane', attrs: { tabindex: '-1' } }, this.status, this.alert, this.body);
     this.detail = h('aside', { class: 'detail pane', id: 'detail', attrs: { hidden: true, tabindex: '-1', 'aria-labelledby': 'detail-title' } });
-    this.root.replaceChildren(this.header, h('div', { class: 'frame', id: 'frame' }, this.sidebar, this.center, this.detail), this.liveRegion, this.toastRegion);
+    this.menuRegion = h('div', { class: 'link-menu-region', id: 'link-menu-region' });
+    this.root.replaceChildren(this.header, h('div', { class: 'frame', id: 'frame' }, this.sidebar, this.center, this.detail), this.liveRegion, this.toastRegion, this.menuRegion);
     document.addEventListener('keydown', (event) => this.onKey(event));
     globalThis.addEventListener?.('resize', () => this.relayout());
+    // Any other link in the window (no handler of its own) goes through openExternal too, never into the app window.
+    this.root.addEventListener('click', (event) => {
+      this.closeLinkMenu();
+      const link = (event.target as Element | null)?.closest?.('a[href]');
+      if (event.defaultPrevented || !(link instanceof HTMLAnchorElement) || !/^https?:/i.test(link.href)) return;
+      event.preventDefault();
+      this.openLink(link.href);
+    });
   }
 
   private viewportWidth(): number {
@@ -304,6 +324,8 @@ export class DesktopApp {
     this.version = await this.platform.appVersion();
     await this.syncWindowTheme();
     this.platform.onTray((action) => void this.trayAction(action));
+    // Links the webview tried to open by itself (target=_blank, window.open, a navigation), refused by the host.
+    this.platform.onOpenExternal((url) => this.openLink(url));
     // The regular check, woken by the host (on time while the window is hidden).
     this.platform.onWake(() => void this.tick());
     // A button of a working-hours reminder notification (Start / Stop / Resume).
@@ -350,6 +372,8 @@ export class DesktopApp {
       if (this.notice !== null) this.setNotice(null);
     }
     this.view = view;
+    this.linkMenu = null;
+    if (view === 'settings' && this.browsers === null) void this.loadBrowsers();
     this.render();
   }
 
@@ -407,10 +431,11 @@ export class DesktopApp {
               this.deviceState = 'waiting';
               this.deviceStarted = this.now().getTime();
               this.deviceAnnounced = false;
-              this.deviceUrl = safeVerificationUri(uri, server);
+              this.deviceUrl = externalUrl(uri, { kind: 'device', server });
+              this.deviceServer = server;
               this.deviceUntrusted = this.deviceUrl === null ? uri : null;
               this.show('device');
-              if (this.deviceUrl !== null) await this.platform.openUrl(this.deviceUrl);
+              if (this.deviceUrl !== null) await this.openExternal(this.deviceUrl, { kind: 'device', server });
             },
           });
           await this.platform.secretSet(login.token);
@@ -1528,13 +1553,13 @@ export class DesktopApp {
 
   openStore(): void {
     const session = this.state.session;
-    const url = this.deps.storeUrl !== undefined && this.deps.storeUrl.startsWith('https://') ? this.deps.storeUrl : session !== null ? appsPage(session.server) : null;
-    if (url !== null) void this.platform.openUrl(url);
+    if (this.deps.storeUrl !== undefined && externalUrl(this.deps.storeUrl, { kind: 'help' }) !== null) void this.openExternal(this.deps.storeUrl, { kind: 'help' });
+    else if (session !== null) this.openBeacon(appsPage(session.server));
   }
 
   openApps(): void {
     const session = this.state.session;
-    if (session !== null) void this.platform.openUrl(appsPage(session.server));
+    if (session !== null) this.openBeacon(appsPage(session.server));
   }
 
   /**
@@ -1542,8 +1567,112 @@ export class DesktopApp {
    * (https, same origin, no credentials); anything else is ignored.
    */
   openBeacon(url: string | null | undefined): void {
-    const safe = sameOriginHttps(url, this.state.session?.server);
-    if (safe !== null) void this.platform.openUrl(safe);
+    void this.openExternal(url, this.beaconRule());
+  }
+
+  private beaconRule(): LinkRule {
+    return { kind: 'beacon', server: this.state.session?.server };
+  }
+
+  /** A link with no handler of its own: a Beacon page when it is on the connected server, else an https page. */
+  openLink(url: string): void {
+    void this.openExternal(url, sameOriginHttps(url, this.state.session?.server) !== null ? this.beaconRule() : { kind: 'help' });
+  }
+
+  /**
+   * Every link the app opens goes through here: checked against `rule`, then opened in the "Open Beacon in" browser
+   * (the system default unless another one was chosen on this computer). A chosen browser that is gone falls back to
+   * the system default with a notice; when no browser opens at all the link is copied instead. False when nothing
+   * opened.
+   */
+  async openExternal(url: string | null | undefined, rule: LinkRule): Promise<boolean> {
+    this.closeLinkMenu();
+    const safe = externalUrl(url, rule);
+    if (safe === null) return false;
+    const choice = this.state.settings.browser;
+    try {
+      const outcome = await this.platform.openExternal(safe, choice);
+      if (outcome === 'fallback' && choice.kind !== 'system') this.setNotice(this.t('browserFallback', { name: choice.name }));
+      return true;
+    } catch {
+      const copyable = copyableUrl(safe, rule);
+      this.setNotice(this.t(copyable !== null && (await this.tryCopy(copyable)) ? 'openFailedCopied' : 'openFailed'));
+      return false;
+    }
+  }
+
+  /** "Copy link": the same checks as opening it, without credentials or secret parameters (`copyableUrl`). */
+  async copyLink(url: string | null | undefined, rule: LinkRule = this.beaconRule()): Promise<void> {
+    this.closeLinkMenu();
+    const safe = copyableUrl(url, rule);
+    if (safe !== null && (await this.tryCopy(safe))) this.setNotice(this.t('linkCopied'));
+  }
+
+  private async tryCopy(text: string): Promise<boolean> {
+    try {
+      await this.platform.copyText(text);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  openLinkMenu(url: string, rule: LinkRule, x: number, y: number): void {
+    if (externalUrl(url, rule) === null) return;
+    this.linkMenu = { url, rule, x, y };
+    this.renderLinkMenu();
+    this.menuRegion.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }
+
+  closeLinkMenu(): void {
+    if (this.linkMenu === null) return;
+    this.linkMenu = null;
+    this.renderLinkMenu();
+  }
+
+  private renderLinkMenu(): void {
+    const menu = this.linkMenu;
+    if (menu === null) {
+      patch(this.menuRegion, []);
+      return;
+    }
+    const t = this.t;
+    const item = (id: string, name: IconName, label: string, run: () => void) =>
+      h('button', { class: 'menu-item', id, key: id, attrs: { type: 'button', role: 'menuitem' }, on: { click: (event) => { event.stopPropagation(); run(); } } }, icon(name), label);
+    const width = globalThis.innerWidth ?? 400;
+    const height = globalThis.innerHeight ?? 600;
+    patch(this.menuRegion, [
+      h(
+        'div',
+        {
+          class: 'link-menu',
+          id: 'link-menu',
+          attrs: { role: 'menu', 'aria-label': t('linkMenu'), style: `left:${Math.max(8, Math.min(menu.x, width - 208))}px;top:${Math.max(8, Math.min(menu.y, height - 96))}px` },
+          on: {
+            keydown: (event) => {
+              const items = [...this.menuRegion.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+              const at = items.indexOf(document.activeElement as HTMLElement);
+              if (event.key === 'Escape') {
+                event.stopPropagation();
+                this.closeLinkMenu();
+              } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                items[(at + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus();
+              }
+            },
+          },
+        },
+        item('link-menu-open', 'external', t('openInBrowser'), () => void this.openExternal(menu.url, menu.rule)),
+        item('link-menu-copy', 'copy', t('copyLink'), () => void this.copyLink(menu.url, menu.rule)),
+      ),
+    ]);
+  }
+
+  /** Secondary "Copy link" icon button next to an open action. */
+  private copyButton(url: string, label: string, id?: string, rule: LinkRule = this.beaconRule()): HTMLButtonElement {
+    const button = this.iconButton('copy', label, { id, key: id, onClick: () => void this.copyLink(url, rule) });
+    button.classList.add('copy-link');
+    return button;
   }
 
   /** Task page of the running timer: the timer's `url`, else the `url` of the same task in the list. */
@@ -2200,6 +2329,14 @@ export class DesktopApp {
             event.preventDefault();
             this.openBeacon(url);
           },
+          // Right-click / long-press (and the context-menu key): Open / Copy link.
+          contextmenu: (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+            const mouse = event as MouseEvent;
+            this.openLinkMenu(url, this.beaconRule(), mouse.clientX || box.left, mouse.clientY || box.bottom);
+          },
         },
       },
       ...(content.length > 0 ? content : [options.icon ? icon('external') : label]),
@@ -2304,9 +2441,11 @@ export class DesktopApp {
         'div',
         { class: 'row-actions' },
         h('button', { class: 'secondary', id: 'copy-code', key: 'copy-code', attrs: { type: 'button' }, on: { click: () => void this.copy(code.userCode) } }, icon('copy'), t('copyCode')),
-        safe !== null
-          ? h('button', { class: 'secondary', id: 'open-again', key: 'open-again', attrs: { type: 'button' }, on: { click: () => void this.platform.openUrl(safe) } }, icon('external'), t('openAgain'))
-          : h('button', { class: 'secondary', id: 'copy-address', attrs: { type: 'button' }, on: { click: () => void this.copy(this.deviceUntrusted ?? '') } }, icon('copy'), t('copyAddress')),
+        safe !== null &&
+          h('button', { class: 'secondary', id: 'open-again', key: 'open-again', attrs: { type: 'button' }, on: { click: () => void this.openExternal(safe, { kind: 'device', server: this.deviceServer }) } }, icon('external'), t('openAgain')),
+        safe !== null && this.copyButton(safe, t('copyLink'), 'copy-device-link', { kind: 'device', server: this.deviceServer }),
+        safe === null &&
+          h('button', { class: 'secondary', id: 'copy-address', attrs: { type: 'button' }, on: { click: () => void this.copy(this.deviceUntrusted ?? '') } }, icon('copy'), t('copyAddress')),
       ),
       progress,
       h('p', { class: 'muted', attrs: { 'aria-live': 'off' } }, left, ' · ', t('waiting')),
@@ -2714,6 +2853,7 @@ export class DesktopApp {
           { class: 'row-actions' },
           h('button', { class: 'danger', id: 'stop', key: 'stop', attrs: { 'aria-disabled': this.busy ? 'true' : undefined, 'aria-label': t('stopTask', { task: timer.taskTitle }), 'aria-keyshortcuts': 'Control+Shift+S' }, on: { click: () => this.whenIdle(() => this.stop()) } }, icon('stop'), t('stop')),
           link !== null && this.beaconLink(link, t('openTaskInBeacon', { title: timer.taskTitle }), { id: 'timer-open-in-beacon', key: 'timer-open-in-beacon', icon: true }),
+          link !== null && this.copyButton(link, t('copyTaskLink', { title: timer.taskTitle }), 'timer-copy-link'),
         ),
       ],
       '#search',
@@ -2737,7 +2877,8 @@ export class DesktopApp {
     patch(region, [
       tile('total-today', t('today'), totals.today),
       tile('total-week', t('thisWeek'), totals.week),
-      myTime !== null && this.beaconLink(myTime, t('myTime'), { id: 'open-my-time', key: 'open-my-time', className: 'my-time' }),
+      myTime !== null &&
+        h('span', { class: 'my-time-actions', key: 'my-time-actions' }, this.beaconLink(myTime, t('myTime'), { id: 'open-my-time', key: 'open-my-time', className: 'my-time' }), this.copyButton(myTime, t('copyMyTimeLink'), 'copy-my-time')),
     ]);
   }
 
@@ -2746,6 +2887,8 @@ export class DesktopApp {
     const searching = this.query.trim() !== '' && this.currentSection() === 'tasks';
     const perTask = this.entries !== null ? todayByTask(this.entries, this.state.activeTimer, this.now()) : new Map<string, number>();
     const quick = this.quickTasks();
+    // No task at all: only the "Open the tasks in Beacon" state, in the list's slot.
+    const noTasks = !searching && !this.busy && this.tasks.length === 0 && this.entries !== null;
     if (searching) {
       patch(main.quick, [], '#search');
     } else {
@@ -2755,8 +2898,8 @@ export class DesktopApp {
           h('h2', { class: 'section-title', id: 'quick-title' }, t('pinnedRecent')),
           quick.length > 0
             ? h('ul', { class: 'tasks', id: 'quick', attrs: { 'aria-labelledby': 'quick-title' } }, ...quick.map((task, index) => this.taskRow(task, perTask, index + 1)))
-            : h('p', { class: 'empty-state', id: 'quick-empty' }, t('noRecent')),
-        ],
+            : this.emptyState(quickEmptyState(0, this.state.lastTask !== null) ?? 'recent', 'quick-empty'),
+        ].filter(() => !noTasks || quick.length > 0),
         '#search',
       );
     }
@@ -2771,10 +2914,38 @@ export class DesktopApp {
         h('ul', { class: 'tasks', id: 'tasks', attrs: { 'aria-labelledby': 'list-title' } }, ...rows.map((task) => this.taskRow(task, perTask))),
         rows.length === 0 &&
           !this.busy &&
-          h('p', { class: 'empty-state', id: 'tasks-empty' }, moment(searching ? 'noResults' : 'noTasks', 'mascot tiny', t), h('span', {}, searching ? t('noResults', { query: this.query.trim() }) : t('noTasks'))),
+          (searching || this.tasks.length > 0
+            ? h('p', { class: 'empty-state', id: 'tasks-empty' }, moment(searching ? 'noResults' : 'noTasks', 'mascot tiny', t), h('span', {}, searching ? t('noResults', { query: this.query.trim() }) : t('noTasks')))
+            : this.emptyState('tasks', 'tasks-empty')),
       ],
       this.state.activeTimer !== null ? 'stop' : '#search',
     );
+  }
+
+  /**
+   * Empty state with the mascot (src/lib/emptyStates.ts): the same fixed-height slot in all three, one line and one
+   * action, in the language of the friendly messages.
+   */
+  private emptyState(state: EmptyState, id: string): HTMLElement {
+    const text = EMPTY_TEXTS[this.messageLocale()][state];
+    const action = state === 'pinned' ? () => this.showPinHint() : state === 'recent' ? () => this.focusSearch() : () => this.openBeacon(tasksPage(this.state.session?.server ?? ''));
+    return h(
+      'div',
+      { class: 'empty-slot', id, key: `${id}-${state}`, attrs: { 'data-empty': state } },
+      emptyArt(EMPTY_POSES[state], text.alt, 'empty-art'),
+      h('p', { class: 'empty-line' }, text.line),
+      h('button', { class: 'secondary small', id: `${id}-action`, key: `${id}-action-${state}`, attrs: { type: 'button' }, on: { click: action } }, icon(state === 'pinned' ? 'pin' : state === 'recent' ? 'play' : 'external'), text.action),
+    );
+  }
+
+  /** "Pin a task": scrolls to the list, marks the pin buttons for a moment and says what they do. */
+  showPinHint(): void {
+    const list = this.main?.list;
+    list?.scrollIntoView?.({ behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+    list?.classList.add('pin-hint');
+    setTimeout(() => list?.classList.remove('pin-hint'), 4000);
+    this.setNotice(PIN_HINT[this.messageLocale()]);
+    list?.querySelector<HTMLElement>('.pin')?.focus();
   }
 
   private taskRow(task: Task, perTask: Map<string, number>, number?: number): HTMLElement {
@@ -3115,6 +3286,7 @@ export class DesktopApp {
           h('button', { class: 'link', id: 'shortcut-default', attrs: { type: 'button' }, on: { click: () => void this.applyShortcut(DEFAULT_SETTINGS.shortcut) } }, t('shortcutDefault')),
         ),
       ),
+      this.renderBrowserSetting(),
       this.renderIdleSettings(),
       this.renderSchedule(),
       this.renderFriendlySettings(),
@@ -3345,6 +3517,60 @@ export class DesktopApp {
     );
   }
 
+  /** Settings → Open Beacon in: system default, a detected browser, or Custom… (this computer only). */
+  private renderBrowserSetting(): HTMLElement {
+    const t = this.t;
+    const choice = this.state.settings.browser;
+    const select = h('select', { id: 'browser', attrs: { 'aria-describedby': 'browser-help' } });
+    const option = (value: string, label: string) => select.append(h('option', { attrs: { value } }, label));
+    option('system', t('browserSystem'));
+    for (const browser of this.browsers ?? []) option(`detected:${browser.id}`, browser.name);
+    const missing = choice.kind === 'detected' && this.browsers !== null && !this.browsers.some((browser) => browser.id === choice.id);
+    if (choice.kind === 'detected' && (this.browsers === null || missing)) option(`detected:${choice.id}`, missing ? t('browserMissingOption', { name: choice.name }) : choice.name);
+    if (choice.kind === 'custom') option('custom-current', t('browserCustomOption', { name: choice.name }));
+    option('custom', t('browserCustom'));
+    select.value = choice.kind === 'system' ? 'system' : choice.kind === 'detected' ? `detected:${choice.id}` : 'custom-current';
+    select.addEventListener('change', () => void this.chooseBrowser(select.value));
+    return h(
+      'section',
+      { class: 'feature', id: 'browser-settings' },
+      h('label', { attrs: { for: 'browser' } }, t('browserLabel')),
+      select,
+      h('p', { class: 'help', id: 'browser-help' }, t('browserHelp')),
+      choice.kind === 'custom' && h('p', { class: 'muted path', id: 'browser-path' }, choice.path),
+      missing && h('p', { class: 'muted', id: 'browser-missing' }, t('browserMissing', { name: choice.name })),
+      this.browserMessage !== null && h('p', { class: 'field-error', id: 'browser-message', attrs: { role: 'alert' } }, this.browserMessage),
+    );
+  }
+
+  async loadBrowsers(): Promise<void> {
+    try {
+      this.browsers = await this.platform.listBrowsers();
+    } catch {
+      this.browsers = [];
+    }
+    if (this.view === 'settings') this.render();
+  }
+
+  /** `system`, `detected:<id>`, `custom` (the file picker) or `custom-current` (unchanged). */
+  async chooseBrowser(value: string): Promise<void> {
+    this.browserMessage = null;
+    let browser: BrowserChoice | null = null;
+    if (value === 'system') browser = SYSTEM_BROWSER;
+    else if (value.startsWith('detected:')) {
+      const found = this.browsers?.find((item) => item.id === value.slice(9));
+      if (found !== undefined) browser = { kind: 'detected', id: found.id, name: found.name };
+    } else if (value === 'custom') {
+      try {
+        browser = await this.platform.pickBrowser();
+      } catch {
+        this.browserMessage = this.t('browserCustomInvalid');
+      }
+    }
+    if (browser !== null) this.persist({ settings: { ...this.state.settings, browser } });
+    this.render();
+  }
+
   private renderAppearance(): HTMLElement {
     const t = this.t;
     const current = this.state.settings.theme;
@@ -3377,7 +3603,7 @@ export class DesktopApp {
       { id: 'privacy' },
       h('p', {}, t('privacyIntro')),
       section('privacy-sent', 'privacySentTitle', ['privacySentSignIn', 'privacySentTimer', 'privacySentIdle', 'privacySentUpdates']),
-      section('privacy-local', 'privacyLocalTitle', ['privacyLocalToken', 'privacyLocalState', 'privacyLocalWindow', 'privacyLocalIdle', 'privacyLocalTotals']),
+      section('privacy-local', 'privacyLocalTitle', ['privacyLocalToken', 'privacyLocalState', 'privacyLocalWindow', 'privacyLocalIdle', 'privacyLocalTotals', 'privacyLocalBrowser']),
       section('privacy-never', 'privacyNeverTitle', ['privacyNever']),
       h('p', {}, t('privacyRights')),
       h(
