@@ -55,6 +55,14 @@ export const POSE_IDS = [
   'beach',
   'sofa',
   'park',
+  // Empty states of the main list (src/lib/emptyStates.ts), each with a variant with a light outer stroke for the dark
+  // theme (`-dark`; without one the light art is used in both themes).
+  'empty-pinned',
+  'empty-recent',
+  'empty-tasks',
+  'empty-pinned-dark',
+  'empty-recent-dark',
+  'empty-tasks-dark',
 ] as const;
 
 export type PoseId = (typeof POSE_IDS)[number];

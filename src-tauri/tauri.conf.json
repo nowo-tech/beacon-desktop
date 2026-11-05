@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "TimeTrack",
         "width": 400,
         "height": 600,

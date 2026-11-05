@@ -108,10 +108,14 @@ function picture(file: string, alt: string, className: string, pose: string): HT
 export const POSE_ART: ReadonlySet<string> = new Set(imported as string[]);
 
 /** Closest existing pose for the friendly-message poses whose own art is not imported yet. */
-export const POSE_FALLBACK: Partial<Record<PoseId, Pose>> = {
+export const POSE_FALLBACK: Partial<Record<PoseId, Pose | `pose-${PoseId}`>> = {
   beach: 'mascot',
   sofa: 'mascot-small',
   park: 'mascot',
+  // Empty states (src/lib/emptyStates.ts) until their own art (`pose-empty-*`) is imported.
+  'empty-pinned': 'pose-peek-3',
+  'empty-recent': 'pose-focus',
+  'empty-tasks': 'pose-teamwork',
 };
 
 /** Shown for a pose with neither art nor a fallback (a new id before its art arrives). */
@@ -125,6 +129,23 @@ export function poseFile(id: PoseId, available: ReadonlySet<string> = POSE_ART):
 /** Decorative picture of a friendly message (`data-pose` = the message's pose id). */
 export function poseArt(id: PoseId, className: string): HTMLImageElement {
   return picture(poseFile(id), '', className, id);
+}
+
+/**
+ * Picture of an empty state of the list, with its alt text (`data-pose` = the empty-state pose id): the light-theme
+ * art and, when imported, the `-dark` variant with a light outer stroke (else the same art). CSS shows the one of the
+ * active theme (`.theme-light` / `.theme-dark`, following Settings → Theme and the system); the hidden one is out of
+ * the accessibility tree.
+ */
+export function emptyArt(id: PoseId, alt: string, className: string, available: ReadonlySet<string> = POSE_ART): HTMLElement {
+  const darkId = `${id}-dark` as PoseId;
+  const dark = available.has(darkId) ? `pose-${darkId}` : poseFile(id, available);
+  return h(
+    'span',
+    { class: `${className} empty-art-pair`, attrs: { 'data-pose': id } },
+    picture(poseFile(id, available), alt, 'theme-light', id),
+    picture(dark, alt, 'theme-dark', darkId),
+  );
 }
 
 /** The picture of a moment, with its translated alt text (or decorative). */

@@ -149,6 +149,16 @@ The script makes a white background transparent, drops stray fragments at the ed
 ImageMagick (in a throwaway Docker container when they are not installed). A pose without art shows its fallback
 (`POSE_FALLBACK` in `src/ui/mascot.ts`); no code change is needed.
 
+### Open Beacon in, Copy link
+
+Settings → **Open Beacon in**: *System default browser* (default), a browser found on this computer (Windows registry,
+macOS LaunchServices, Linux `.desktop` files incl. Flatpak / Snap) or *Custom…*. Every link the app opens uses it, also
+links a page would open by itself. If the chosen browser is uninstalled, links open in the system default and the app
+says so. Next to My time, a running task's link and *Open the page again* there is a **Copy link** button, and a right
+click (long press) on any Beacon link offers *Open in the browser* / *Copy link*; if no browser can be opened the link
+is copied instead. When the list is empty the mascot says what to do next: *Pin a task*, *Start a timer* or *Open the
+tasks in Beacon*.
+
 ### Updates
 
 <img src="docs/images/desktop-update-card-light.png" alt="Update card with What's new, light theme" width="200"> <img src="docs/images/desktop-update-card-dark.png" alt="Update card with What's new, dark theme" width="200"> <img src="docs/images/desktop-update-progress-light.png" alt="Update download progress" width="200">
@@ -166,11 +176,12 @@ required" screen send you to the Store listing instead.
   (`tauri_build::AppManifest::commands`, list in `src-tauri/app-commands.rs`), so Tauri only lets a window call the
   commands its capability grants (`allow-<command>`); without a manifest any local window could call any command.
   A Rust test checks the list against `generate_handler!` and that each command is granted to exactly one window.
-- `src-tauri/capabilities/default.json`, window `main`: core defaults, HTTP to your server, opener,
-  `notification:default`, autostart enable / disable / is-enabled, process restart, set theme, and the app commands
+- `src-tauri/capabilities/default.json`, window `main`: core defaults, HTTP to your server, `dialog:allow-open` (the
+  *Custom…* browser picker), `clipboard-manager:allow-write-text` (*Copy link*), `notification:default`, autostart enable / disable / is-enabled, process restart, set theme, and the app commands
   `secret_get` / `secret_set` / `secret_delete`, `idle_seconds`, `set_tray_status`, `set_tray_menu`,
   `set_global_shortcut`, `check_update`, `install_update`, `set_wake_plan`, `notify_friendly`, `prompt_open`,
-  `prompt_focus`, `prompt_close`. The desktop notifications of the friendly messages go through the app's own
+  `prompt_focus`, `prompt_close`, `open_external`, `list_browsers`, `check_browser` (every link, in the system default or
+  the chosen browser, launched with an argv array from Rust; no opener permission for the webview). The desktop notifications of the friendly messages go through the app's own
   `notify_friendly` command (Rust, `notify-rust` / `tauri-winrt-notification`), not a new plugin permission.
   The working-hours reminders add no command: their *Start* / *Stop* / *Resume* button travels in `notify_friendly`
   (ids allow-listed in Rust, `notify::ACTION_IDS`) and a press comes back as a `notification-action` event emitted

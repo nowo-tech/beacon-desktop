@@ -28,6 +28,9 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
   history.
 - **Clear local data** (Settings → What we collect) signs you out and deletes all of the above, and turns "start at
   login" off.
+- "Open Beacon in" (Settings): which browser opens your links, by the id the system gives it, or the path of a browser
+  you picked by hand. Read from the system (installed browsers) when Settings opens; stored only in the app's local
+  storage and never sent. A copied link goes only to your clipboard, without user info or secret-looking parameters.
 - Today / This week totals and recent tasks are computed on this computer from your own entries (`entries:read`, the
   same data Beacon shows you); nothing extra is sent.
 

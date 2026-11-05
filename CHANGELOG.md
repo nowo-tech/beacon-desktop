@@ -115,8 +115,42 @@ Likely 0.5.0.
     Settings → My schedule, the four reminders as Windows toasts and the in-app toast, light and dark, in Spanish.
   - Mock server: `daysOff` and `locale` on `GET me` (config).
 
+- **Open Beacon in** (Settings): *System default browser* (default), one of the browsers installed on this computer, or
+  *Custom…* (file picker: an `.exe` on Windows, an `.app` on macOS). Every link the app opens goes through one helper
+  (`App.openExternal` → Rust `open_external`): Beacon, My time, task links, *Open the page again* and the sign-in page,
+  the Apps / Store pages, the tray items, and any `target=_blank` / `window.open` / navigation the webview tries on its
+  own (refused by the window and handed to the helper). Detection (`src-tauri/src/browser.rs`): Windows
+  `StartMenuInternet` (HKCU / HKLM, incl. `WOW6432Node`) plus `App Paths`; macOS LaunchServices https handlers
+  (`LSCopyAllHandlersForURLScheme`); Linux `.desktop` entries with `x-scheme-handler/https` in the XDG data dirs plus
+  the Flatpak and Snap export dirs (Brave, Firefox, Chrome, Chromium, Edge, Vivaldi, Opera, Safari …). Stored per
+  computer (`settings.browser`). A chosen browser that is gone falls back to the system default with a notice, and
+  Settings marks it *(not found)*.
+- **Copy link** next to My time, the running task's link and *Open the page again*, plus a right-click / long-press
+  menu (*Open in the browser* / *Copy link*) on every Beacon link. Copied with the clipboard-manager plugin
+  (write-text only); short confirmation in the status region (`aria-live`, never focused). When no browser opens,
+  the link is copied instead ("The browser could not be opened — link copied"). Copied links keep the same checks as
+  opening and drop user info, secret-looking query parameters (`token`, `key`, `signature`, `code` …) and
+  `#access_token=…` fragments.
+- **Empty states with the mascot** for the list: nothing pinned (tracked before) → *Pin a task* (scrolls to the list
+  and points at the pin), never tracked → *Start a timer* (focuses search), no task at all → *Open the tasks in
+  Beacon*. One fixed-height slot, the same 72 px picture (1x / 2x WebP) in the three; one line and one action in the
+  friendly-message language (7 languages). New owner art, imported with `scripts/mascot/import-poses.sh`: a
+  thumbtack (`pose-empty-pinned`), a stopwatch (`pose-empty-recent`) and a blank clipboard (`pose-empty-tasks`), each
+  with a `-dark` variant with a light outer stroke shown in the dark theme (CSS follows Settings → Theme and the system).
+  The mapping is data (`EMPTY_POSES`), with `peek-3` / `focus` / `teamwork` as fallbacks. `pnpm screenshots:links`
+  (`LINKS_SCREENS=<dir>`) renders them and the new
+  settings, light and dark, in Spanish.
+
 ### Security
 
+- Links no longer go through the opener plugin's JavaScript API: the `opener:allow-open-url` permission is gone from
+  the main window. `open_external` (main window only) re-checks the URL (https, or http to this computer; no
+  credentials, no quote / `$` / backtick / backslash / control characters), launches a chosen browser with an argv
+  array (never a shell; `open -a <app> <url>` on macOS) and resolves a detected browser from the OS again by id, so the
+  webview never supplies a command line. A custom browser must be an absolute path to an existing `.exe` / `.app` /
+  file. New permissions, main window only: `dialog:allow-open`, `clipboard-manager:allow-write-text` and the commands
+  `open_external`, `list_browsers`, `check_browser`; the prompt window gets nothing new and refuses navigation and new
+  windows.
 - App commands are ACL-scoped (security review 2026-11-05, FN-L1): `build.rs` declares them in the app manifest
   (`src-tauri/app-commands.rs`) and each capability grants its window only its own (`main`: keychain, tray,
   shortcut, updater, heartbeat, notifications, opening the prompt; `prompt`: `prompt_view`, `prompt_answer`,

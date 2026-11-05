@@ -6,8 +6,10 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
-import { openUrl } from '@tauri-apps/plugin-opener';
+import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+import { open as openFile } from '@tauri-apps/plugin-dialog';
 import { notificationBody, type NotificationPermission, type Platform, type PromptClient, type PromptHost, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
+import type { BrowserChoice, DetectedBrowser, OpenOutcome } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 
 const permission = (state: string): NotificationPermission => (state === 'granted' ? 'granted' : state === 'denied' ? 'denied' : 'prompt');
@@ -41,20 +43,24 @@ export function tauriPlatform(): Platform {
     secretSet: (token) => invoke('secret_set', { token }),
     secretDelete: () => invoke('secret_delete'),
     idleSeconds: () => invoke<number>('idle_seconds'),
-    openUrl: (url) => openUrl(url),
-    copyText: async (text) => {
-      // The webview's async clipboard API (secure context, user gesture); no clipboard plugin / capability needed.
-      if (navigator.clipboard?.writeText !== undefined) {
-        await navigator.clipboard.writeText(text);
-        return;
-      }
-      const area = document.createElement('textarea');
-      area.value = text;
-      document.body.append(area);
-      area.select();
-      document.execCommand('copy');
-      area.remove();
+    // Every link: the system default (opener plugin, no `with`) or the chosen browser, from Rust (src-tauri/src/browser.rs).
+    openExternal: (url, browser) => invoke<OpenOutcome>('open_external', { url, browser }),
+    listBrowsers: () => invoke<DetectedBrowser[]>('list_browsers'),
+    pickBrowser: async () => {
+      const mac = navigator.userAgent.includes('Mac');
+      const windows = navigator.userAgent.includes('Windows');
+      const path = await openFile({
+        multiple: false,
+        directory: false,
+        filters: windows ? [{ name: 'Browser', extensions: ['exe'] }] : mac ? [{ name: 'Browser', extensions: ['app'] }] : [],
+      });
+      if (typeof path !== 'string') return null;
+      const checked = await invoke<DetectedBrowser>('check_browser', { path });
+      return { kind: 'custom', path, name: checked.name } satisfies BrowserChoice;
     },
+    onOpenExternal: (handler) => void listen<string>('open-external', (event) => handler(event.payload)),
+    // Clipboard manager plugin, write-text permission only (capabilities/default.json).
+    copyText: (text) => writeText(text),
     setTray: (status) => invoke('set_tray_status', { status }),
     setTrayMenu: (menu) => invoke('set_tray_menu', { menu }),
     setShortcut: (accelerator) => invoke('set_global_shortcut', { accelerator }),

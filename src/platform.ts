@@ -1,3 +1,4 @@
+import type { BrowserChoice, DetectedBrowser, OpenOutcome } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 
 /**
@@ -128,7 +129,17 @@ export interface Platform {
   secretDelete(): Promise<void>;
   /** Seconds since the last input, read locally from the OS. Never sent. */
   idleSeconds(): Promise<number>;
-  openUrl(url: string): Promise<void>;
+  /**
+   * Opens an https link (already checked by the caller) in the system default browser or the chosen one
+   * (`open_external`); `fallback` when the chosen browser is gone and the default opened it. Rejects when nothing could.
+   */
+  openExternal(url: string, browser: BrowserChoice): Promise<OpenOutcome>;
+  /** Browsers installed on this computer (Settings → Open Beacon in). */
+  listBrowsers(): Promise<DetectedBrowser[]>;
+  /** Settings → Open Beacon in → Custom…: the file picker, checked by the host. `null` = cancelled; rejects when refused. */
+  pickBrowser(): Promise<BrowserChoice | null>;
+  /** A link the webview tried to open by itself (`target=_blank`, `window.open`, a navigation): the host refused it. */
+  onOpenExternal(handler: (url: string) => void): void;
   copyText(text: string): Promise<void>;
   setTray(status: TrayStatus): Promise<void>;
   setTrayMenu(menu: TrayMenu): Promise<void>;
@@ -166,6 +177,21 @@ export interface Platform {
 export interface BrowserHooks {
   idleSeconds: number;
   opened: string[];
+  /** Browser choice of each opened link (same order as `opened`). */
+  openedWith: BrowserChoice[];
+  /** Fake installed browsers. */
+  browsers: DetectedBrowser[];
+  /** Ids / paths of chosen browsers that are gone (the link opens in the default: `fallback`). */
+  goneBrowsers: string[];
+  /** Opening any link fails (no browser at all). */
+  openFails: boolean;
+  /** What the fake file picker returns (`null` = cancelled) or the refusal it throws. */
+  pickResult: BrowserChoice | null;
+  pickError: string | null;
+  /** Copying fails (no clipboard). */
+  copyFails: boolean;
+  /** The webview tried to open a link by itself. */
+  openExternal(url: string): void;
   copied: string[];
   notifications: string[];
   tray: TrayStatus;
@@ -219,9 +245,18 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
   const wakeHandlers: ((reason: WakeReason) => void)[] = [];
   const actionHandlers: ((id: string) => void)[] = [];
   const answerHandlers: ((answer: PromptAnswer) => void)[] = [];
+  const externalHandlers: ((url: string) => void)[] = [];
   const hooks: BrowserHooks = {
     idleSeconds: 0,
     opened: [],
+    openedWith: [],
+    browsers: [],
+    goneBrowsers: [],
+    openFails: false,
+    pickResult: null,
+    pickError: null,
+    copyFails: false,
+    openExternal: (url) => externalHandlers.forEach((handler) => handler(url)),
     copied: [],
     notifications: [],
     tray: { title: null, tooltip: '', status: '', running: false },
@@ -275,8 +310,23 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     secretSet: async (token) => void (secret = token),
     secretDelete: async () => void (secret = null),
     idleSeconds: async () => hooks.idleSeconds,
-    openUrl: async (url) => void hooks.opened.push(url),
-    copyText: async (text) => void hooks.copied.push(text),
+    openExternal: async (url, browser) => {
+      if (hooks.openFails) throw new Error('no browser');
+      hooks.opened.push(url);
+      hooks.openedWith.push(browser);
+      const gone = browser.kind === 'detected' ? hooks.goneBrowsers.includes(browser.id) || !hooks.browsers.some((item) => item.id === browser.id) : browser.kind === 'custom' && hooks.goneBrowsers.includes(browser.path);
+      return gone ? 'fallback' : 'opened';
+    },
+    listBrowsers: async () => [...hooks.browsers],
+    pickBrowser: async () => {
+      if (hooks.pickError !== null) throw new Error(hooks.pickError);
+      return hooks.pickResult;
+    },
+    onOpenExternal: (handler) => void externalHandlers.push(handler),
+    copyText: async (text) => {
+      if (hooks.copyFails) throw new Error('no clipboard');
+      hooks.copied.push(text);
+    },
     setTray: async (status) => void (hooks.tray = status),
     setTrayMenu: async (menu) => void (hooks.trayMenu = menu),
     setShortcut: async (accelerator) => {
