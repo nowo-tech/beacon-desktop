@@ -5,7 +5,28 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+Likely 0.5.0.
+
+### Added
+
+- **Light and dark theme switch**: Settings → Theme, *System* (default) / *Light* / *Dark*, stored locally
+  (`settings.theme`), applied before the first screen and to the native window (title bar) through Tauri's
+  `Window.setTheme` (capability `core:window:allow-set-theme`). Every colour comes from the CSS tokens; text pairs keep
+  WCAG AA in both themes and the new `--control-border` token gives inputs and buttons a ≥ 3:1 outline.
+- **Mascot moments**, the way symfony-beacon uses its robot: "You're in!" after signing in, a friendly saved notice
+  after Stop (three wordings), a calm "Still going strong?" nudge on a timer running for 8 hours or more (*Stop now* /
+  *Keep going*, never stops by itself), "Working offline" card, new poses for an expired code, no search results, the
+  idle check (paused / resume), server errors, unreachable server and updates (downloading, required). Six new poses
+  cropped from Beacon's illustrations (`pose-card`, `pose-hourglass`, `pose-reading`, `pose-wrench`, `pose-reconnect`,
+  `pose-pause`, 1x / @2x WebP, `scripts/mascot/build.py`); catalogue in `src/ui/mascot.ts`, provenance and rules in
+  `public/mascot/README.md`. Decorative art is `aria-hidden`; only the device-code arcs move, and not with reduced
+  motion. English and Spanish.
+- Screenshots of the key screens and moments in light and dark (`tests/screenshots/moments.spec.ts`).
+
 ### Changed
+
+- Lighter microcopy for an expired code, an empty task list and no search results; "Nothing on the clock yet" in the
+  idle timer card on first run; the empty "Pinned and recent" line no longer repeats the mascot.
 
 - Documentation screenshots regenerated from the 0.4.0 UI with `pnpm screenshots` (`playwright.screenshots.config.ts`,
   `tests/screenshots/`): placeholder Beacon `https://beacon.example.test` and neutral demo data; new images of the

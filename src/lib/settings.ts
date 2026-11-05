@@ -2,6 +2,7 @@ import type { Scope, Task, Timer } from '../api/types';
 import { DEFAULT_SHORTCUT } from '../platform';
 import { type IdleCheckState, WATCHING } from './idleCheck';
 import type { ServerFeatures } from './serverFeatures';
+import { isTheme, type ThemePreference } from './theme';
 
 /** Opt-in features. Each one is off by default and keeps a dated consent record. */
 export type Feature = 'idleDetection' | 'notifications' | 'autostart';
@@ -26,6 +27,8 @@ export interface Settings {
   autostart: boolean;
   /** Global shortcut (Tauri accelerator syntax). */
   shortcut: string;
+  /** Colour theme: follow the system (default), light or dark. */
+  theme: ThemePreference;
 }
 
 /** At most 9 pinned tasks (`Alt+1…9`). */
@@ -64,6 +67,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notifications: false,
   autostart: false,
   shortcut: DEFAULT_SHORTCUT,
+  theme: 'system',
 };
 
 const KEY = 'time-track-desktop';
@@ -90,7 +94,12 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
       ...emptyState(),
       ...raw,
       // 0.2 stored the old default (10) for everyone: only a different value was the person's own choice.
-      settings: { ...DEFAULT_SETTINGS, ...(raw.settings ?? {}), idleMinutes: typeof raw.settings?.idleMinutes === 'number' && raw.settings.idleMinutes !== 10 ? raw.settings.idleMinutes : null },
+      settings: {
+        ...DEFAULT_SETTINGS,
+        ...(raw.settings ?? {}),
+        idleMinutes: typeof raw.settings?.idleMinutes === 'number' && raw.settings.idleMinutes !== 10 ? raw.settings.idleMinutes : null,
+        theme: isTheme(raw.settings?.theme) ? raw.settings.theme : DEFAULT_SETTINGS.theme,
+      },
       idleCheck: typeof raw.idleCheck === 'object' && raw.idleCheck !== null && 'phase' in raw.idleCheck ? raw.idleCheck : WATCHING,
       pinned: Array.isArray(raw.pinned) ? raw.pinned.slice(0, MAX_PINNED) : [],
     };

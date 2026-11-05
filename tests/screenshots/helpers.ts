@@ -74,10 +74,12 @@ export async function connect(page: Page): Promise<string> {
   return code;
 }
 
-export async function signIn(page: Page): Promise<void> {
+/** Signs in; the "You're in!" card is dismissed unless `keepWelcome` (its own screenshot). */
+export async function signIn(page: Page, keepWelcome = false): Promise<void> {
   const code = await connect(page);
   await control('device/approve', { userCode: code });
   await expect(page.locator('#tasks li')).toHaveCount(8, { timeout: 15_000 });
+  if (!keepWelcome) await page.locator('#welcome-dismiss').click();
 }
 
 /** Viewport screenshot after checking that no local address or demo identity is visible. */

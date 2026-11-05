@@ -127,7 +127,7 @@ describe('desktop app', () => {
     await tick();
     expect(ui.root.querySelectorAll('#tasks li')).toHaveLength(1);
     await ui.app.search('zzz');
-    expect(ui.$('#tasks-empty').textContent).toBe('No tasks match “zzz”. Only tasks you can track time on appear.');
+    expect(ui.$('#tasks-empty').textContent).toBe('Nothing matches “zzz”, and the robot read the list twice. Only tasks you can track time on appear.');
     ui.platform.hooks.shortcutPressed();
     expect(document.activeElement?.id).toBe('search');
     await ui.app.start({ id: 'T-900', title: 'x' });
