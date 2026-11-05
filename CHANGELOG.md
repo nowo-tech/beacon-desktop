@@ -22,7 +22,8 @@ Likely 0.5.1.
   before. New commands `beacon_fetch` and `connection_security`, granted to `main` only. The pin set is the one the
   review (FY) checked: Let's Encrypt and Google Trust Services only. It also accepts a Cloudflare edge certificate
   from either of them, but not one from SSL.com or Sectigo, so `beacon.nowo.tech` stays *DNS only* (docs/PINNING.md,
-  *Cloudflare proxy*).
+  *Cloudflare proxy*). Server side (DEVOPS runbook DNS-CAA, S17 / S18): CAA `0 issue "letsencrypt.org"` at the
+  `nowo.tech` apex, no per-host CAA, and a pinned SSL monitor on `beacon.nowo.tech` with the same pins.
 - Pinning follow-ups (security review 2026-11-05, appendix FY):
   - `beacon_fetch`, the update check and the updater only talk to the origin (scheme, host, port) of the server being
     signed in to: new command `beacon_bind` (main window only), called before the sign-in requests and at start-up;
@@ -36,8 +37,8 @@ Likely 0.5.1.
   - Updater error details no longer carry URL query strings (pre-signed artifact URLs) into "Copy details" (FY-I2).
   - THIRD-PARTY-NOTICES.md lists `webpki-roots` (CDLA-Permissive-2.0) (FY-I6). README / SECURITY.md say that
     self-hosted servers behind a private or corporate CA are not supported, updater included (FY-I7).
-    docs/PINNING.md lists the server-side preconditions: CAA for `letsencrypt.org` and `pki.goog`, an explicit ACME
-    issuer (never ZeroSSL), and a chain monitor (FY-M1).
+    docs/PINNING.md lists the server-side preconditions: CAA for `letsencrypt.org` at the zone apex, an explicit ACME
+    issuer (never ZeroSSL), and a pinned chain monitor (FY-M1).
 - Every GitHub Action in `.github/workflows/*.yml` (`release.yml` included) is pinned to a full commit SHA, with its
   version in a trailing comment, instead of a movable tag such as `@v7`, `@v2` or the `@stable` branch (security
   review 2026-11-05, GC-I9). Dependabot (`github-actions`, monthly) keeps the SHAs and comments up to date;

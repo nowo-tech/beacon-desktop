@@ -80,17 +80,29 @@ openssl x509 -in ca.pem -pubkey -noout | openssl pkey -pubin -outform der | open
 ## Server-side preconditions (operations)
 
 A pinned app fails closed when the official host serves a chain without a pinned key, and the pinned update check
-fails too, so stuck apps cannot even learn about a fix. These must be in place on `beacon.nowo.tech` (and the name it
-points to, `little-vps.nowo.tech`) **before** a pinned build reaches users, and stay in place (audit FY-M1):
+fails too, so stuck apps cannot even learn about a fix. These must be in place for `beacon.nowo.tech` **before** a
+pinned build reaches users, and stay in place (audit FY-M1). The operator side is owned by DEVOPS: runbook
+`documents/present/runbooks/DNS-CAA.md` and OPEN-ITEMS **S17** (CAA) and **S18** (pinned SSL monitor) in the
+`devops` repository.
 
-1. **CAA records** that allow only the pinned CAs: `0 issue "letsencrypt.org"`, `0 issue "pki.goog"`, plus an
-   `iodef` contact (for example `0 iodef "mailto:security@…"`). No CAA record means any CA may issue.
-2. **An explicit ACME issuer** in the edge (Caddy / FrankenPHP / reverse proxy): Let's Encrypt only, or Let's Encrypt
-   plus Google Trust Services (with EAB). **Never ZeroSSL**: Caddy's default issuer list falls back to ZeroSSL after a
-   failed Let's Encrypt renewal, and one fallback would put an unpinned (Sectigo) chain on the host and lock out
-   every pinned install while browsers look fine.
-3. **A chain monitor** (CI cron or uptime check) that fails when no SPKI of the chain served by the host is in
-   `src-tauri/pins.json`, for example:
+1. **CAA at the zone apex** (S17, applied 2026-11-05): `nowo.tech. CAA 0 issue "letsencrypt.org"`. Subdomains,
+   `beacon.nowo.tech` included, inherit it (CAA tree climbing), so there is **no per-host CAA record**. `pki.goog`
+   is added only if a host ever moves to Google Trust Services, together with a desktop release whose pins cover it
+   (GTS R1 / R4 are already the backup pins). With Cloudflare Universal SSL on, Cloudflare also publishes CAA records
+   for its own CAs (`pki.goog`, `ssl.com`, `comodoca.com`, `digicert.com`), so issuance is limited to those five CAs in total,
+   not to Let's Encrypt only. **Strict mode** is to disable Universal SSL (safe while no host is proxied; it must be
+   re-enabled before any host is proxied); an operator decision. The pinning does not depend on CAA strictness: a
+   certificate from an unpinned CA fails the pin anyway. CAA is defence in depth that keeps a renewal from silently
+   landing on such a CA.
+2. **An explicit ACME issuer** at the TLS edge. TLS for `beacon.nowo.tech` terminates in **Traefik** on the VPS
+   (ACME resolver `letsencrypt`, HTTP challenge, Let's Encrypt only). Beacon's own Caddy / FrankenPHP serves plain
+   HTTP behind it with `auto_https off`. **Never ZeroSSL**: Caddy's default issuer list falls back to ZeroSSL after a
+   failed Let's Encrypt renewal, which would put an unpinned (Sectigo) chain on the host and lock out every pinned
+   install while browsers look fine.
+3. **A pinned chain monitor** (S18): a Beacon Uptime SSL monitor on `beacon.nowo.tech:443` with
+   `expected_spki_pins` set to the same 7 pins as `src-tauri/pins.json` (UptimeMonitorBundle 1.20, matched against
+   the issuer path signed into the leaf). *Down* means the served chain left the pinned set: check Traefik's
+   certificate before the desktops start refusing the server. The same check by hand:
 
    ```sh
    openssl s_client -connect beacon.nowo.tech:443 -servername beacon.nowo.tech -showcerts </dev/null 2>/dev/null \
@@ -99,44 +111,37 @@ points to, `little-vps.nowo.tech`) **before** a pinned build reaches users, and 
      | openssl dgst -sha256 -binary | base64; done | grep -qxFf <(jq -r '.pins[].sha256' src-tauri/pins.json)
    ```
 
-   It should also check that the served chain validates against `webpki-roots` (not only the system store), since
-   that is the only root store the app trusts.
+   The served chain must also validate against `webpki-roots` (not only the system store), since that is the only
+   root store the app trusts.
 
-Before any CA switch (runbook step 3), check the new chain against these three as well.
+Before any CA or intermediate change (runbook step 3), update the S18 monitor pins and `pins.json` together, adding the
+new key before removing the old one, and change the CAA record in the same step (DNS-CAA.md, section 4).
 
 ### Current state of `beacon.nowo.tech` (checked 2026-11-05)
 
-- **DNS only, TLS at the origin.** `beacon.nowo.tech` is a CNAME to `little-vps.nowo.tech` (an A record to the VPS,
-  not a Cloudflare address). Traefik terminates TLS with a Let's Encrypt certificate it gets over ACME, and serves
-  leaf → YR1 → Root YR (cross-signed by ISRG Root X1). That chain matches pin set v1.
-- **CAA is not yet restrictive.** The zone `nowo.tech` is on Cloudflare with Universal SSL active. When a zone has any
-  CAA record, Cloudflare adds CAA records for its own CAs automatically. So the effective set for `beacon.nowo.tech`
-  (no CAA of its own, and none at `little-vps.nowo.tech`, so the lookup climbs to `nowo.tech`) is `letsencrypt.org`,
-  `pki.goog`, `ssl.com`, `comodoca.com` (Sectigo) and `digicert.com`, for `issue` and `issuewild`. The intended
-  `0 issue "letsencrypt.org"` does not by itself stop the other CAs. To make precondition 1 hold, put the CAA records
-  on the name the CNAME points to (`little-vps.nowo.tech`: `0 issue "letsencrypt.org"`, `0 issue "pki.goog"`,
-  `0 issuewild ";"`, `0 iodef "mailto:…"`). A CNAME cannot carry CAA itself. Then check with a DNS-over-HTTPS query
-  that Cloudflare has not added its own CAs to that name as well.
+`beacon.nowo.tech` is a CNAME to the VPS host (an A record, not a Cloudflare address): **DNS only**, which the owner
+has confirmed it stays. Traefik serves leaf → YR1 → Root YR (cross-signed by ISRG Root X1), which matches pin set v1.
+No `nowo.tech` host is Cloudflare-proxied.
 
 ### Cloudflare proxy (orange cloud): decision
 
 The pin set stays as the security review (FY) left it: Let's Encrypt (ISRG X1 / X2 / YR / YE, YR1) plus Google Trust
-Services (GTS R1 / R4) as the backup CA. **No SSL.com or Sectigo pins.**
+Services (GTS R1 / R4) as the backup CA. **No SSL.com or Sectigo pins** (owner decision, 2026-11-05).
 
-- If `beacon.nowo.tech` is switched to *Proxied*, apps see Cloudflare's edge certificate, not Traefik's. Cloudflare
-  Universal SSL issues from Let's Encrypt, Google Trust Services or SSL.com, and its backup certificates can also come
-  from Sectigo. A Let's Encrypt or GTS edge certificate matches the pins (GTS WE1 / WR1 chain to GTS Root R4 / R1, also
-  when the GlobalSign cross-sign is served). An SSL.com or Sectigo edge certificate does **not**, and every pinned app
-  would fail closed.
-- Pinning SSL.com and Sectigo as well would make two more CA companies acceptable for the official host, which
-  removes most of the protection against a mis-issuing CA. The host does not need them: TLS is terminated by Traefik
-  with Let's Encrypt, and a proxied host would also give Cloudflare the plaintext, which is a separate decision.
-- **Rule:** keep `beacon.nowo.tech` *DNS only*. If it ever has to be proxied, first use an edge certificate whose CA
-  is fixed to Let's Encrypt or Google Trust Services (Cloudflare Advanced Certificate Manager lets you choose the CA),
-  check the served chain with the chain monitor above, and only then switch.
-- **Recovery is server side and immediate:** switching the record back to *DNS only* restores the origin's Let's
-  Encrypt chain, so pinned apps reconnect after the DNS TTL without an app update. The chain monitor (precondition 3)
-  is what notices the switch.
+- The risk: if `beacon.nowo.tech` were switched to *Proxied*, apps would see Cloudflare's edge certificate, not
+  Traefik's. Cloudflare Universal SSL issues from Let's Encrypt, Google Trust Services or SSL.com, and its backup
+  certificates can also come from Sectigo. A Let's Encrypt or GTS edge certificate matches the pins (GTS WE1 / WR1
+  chain to GTS Root R4 / R1, also when the GlobalSign cross-sign is served). An SSL.com or Sectigo edge certificate
+  does **not**, and every pinned app would fail closed.
+- Why not pin them: SSL.com and Sectigo would make two more CA companies acceptable for the official host, which
+  removes most of the protection against a mis-issuing CA. The host does not need them, since Traefik terminates TLS
+  with Let's Encrypt. A proxied host would also give Cloudflare the plaintext, which is a separate decision.
+- **Rule:** `beacon.nowo.tech` stays *DNS only*. Proxying it would need, first, an edge certificate whose CA is fixed
+  to Let's Encrypt or GTS, `pki.goog` in CAA if GTS (DNS-CAA.md, section 4), Universal SSL re-enabled if it was
+  disabled for strict CAA, and the S18 monitor showing *up* on the new chain.
+- **Recovery is server side and immediate:** switching the record back to *DNS only* restores Traefik's Let's
+  Encrypt chain, so pinned apps reconnect after the DNS TTL without an app update. The S18 monitor is what notices
+  the switch.
 
 ## Rotation runbook
 
