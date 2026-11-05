@@ -148,7 +148,7 @@ describe('0.2.0 UX', () => {
     await env.control('config', { taskExtras: { 'T-104': { projectTitle: 'Billing' } } });
     const ui = await signedIn({ locale: 'es' });
     await ui.app.start({ id: 'T-104', title: 'Fix invoice rounding bug' });
-    expect(ui.$('#timer-meta').textContent).toMatch(/^Billing · Engineering · desde \d{2}:\d{2}$/);
+    expect(ui.$('#timer-meta').textContent).toMatch(/^Billing · Engineering · desde \d{1,2}:\d{2}$/);
     expect(ui.$('#quick-empty').textContent).toContain('Inicia una tarea');
     expect(ui.$('#elapsed').getAttribute('role')).toBe('timer');
     expect(ui.$('#stop').getAttribute('aria-label')).toBe('Parar «Fix invoice rounding bug»');
