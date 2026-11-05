@@ -1,0 +1,3 @@
+# macOS 13: no process objects (kAudioHardwarePropertyProcessObjectList unknown), the input device runs.
+input-running: yes
+processes: none

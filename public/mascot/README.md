@@ -71,12 +71,20 @@ park have no art yet and show their fallback (`POSE_FALLBACK` in `src/ui/mascot.
 | Cheers | celebrate, cheer-up, thumbs, flag, music, focus, working, keep-going, progress, achievement (milestones), presentation, task-complete, finished, deadline |
 | Wellbeing | stretch, stretch-legs, water, eyes, mindfulness, rest, overtime ("take a real break") |
 | Moments | early, sunrise, coffee, lunch, moon, late-working, friday, holiday, weekend-start, shades |
+| Empty states of the list | empty-pinned (thumbtack), empty-recent (stopwatch), empty-tasks (blank clipboard), each with a `-dark` variant |
+
+The empty-state art (owner, 2026-11-05) was imported with `IMPORT_POSES_KEEP_DISTANCE=200` so the antenna arcs, which
+float further from the head than in the other poses, are kept. The `-dark` variants have a light outer stroke for the
+dark theme: `empty-recent-dark` is the owner's outlined alternate, `empty-pinned-dark` and `empty-tasks-dark` add a
+white stroke to the same art (ImageMagick `-morphology Dilate Disk:10` on the alpha, white, under the picture). They
+carry meaning next to a short line, so they have translated alt text.
 
 ## Rules
 
 - Decorative by default: `alt=""` and `aria-hidden="true"`; the heading next to the picture carries the meaning. Only
   the first-run hero has alt text (translated, `mascotAlt`).
-- Themes: the same art on light and dark paper (Beacon has no dark variants either). The dark theme dims it slightly
+- Themes: the same art on light and dark paper (Beacon has no dark variants either), except the empty states, whose
+  `-dark` variants are shown by CSS in the dark theme. The dark theme dims it slightly
   (`--mascot-filter`); crops have feathered edges so no glow ends in a hard rectangle.
 - Motion: only the device-code arcs pulse, and not under `prefers-reduced-motion: reduce`.
 - Size: tiny (3 rem) in cards and empty states, small (4 rem) on full screens, 7.5 rem for the first-run hero and error

@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type MeetingCatalog, type NudgeCatalog, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** Nederlands (je): vroege lunch, koffie om tien en om drie. */
 export const pools: Pools = {
@@ -223,4 +223,28 @@ export const reminders: ReminderCatalog = {
   actions: { start: 'Starten', stop: 'Stoppen', resume: 'Hervatten' },
   lastTask: 'Laatste taak: {task}.',
   today: 'Vandaag: {total}.',
+};
+
+/** "Working without a timer?" (input for a while during working hours, no timer running). */
+export const nudge: NudgeCatalog = {
+  lines: [
+    f('Je bent al een tijdje bezig en er loopt geen timer. Zullen we het bijhouden?', 'think'),
+    f('Drukke handen, stille timer. Eentje starten?', 'peek'),
+    f('Het lijkt erop dat je werkt, maar de klok niet. Zal ik hem starten?', 'working'),
+    f('Hé, de timer staat uit. Verdergaan waar je gebleven was?', 'wave'),
+  ],
+  title: 'Werk je zonder timer?',
+  lastTask: 'Laatste taak: {task}.',
+  actions: { resume: '{task} starten', choose: 'Taak kiezen' },
+};
+
+/** Meeting detection: the question while a call goes on, and the one when it ends. */
+export const meetings: MeetingCatalog = {
+  titles: { ask: 'Vergadering?', ended: 'Vergadering voorbij' },
+  ask: 'Je lijkt in een vergadering te zitten ({app}). Welke vergadering is het?',
+  askSwitch: 'Je lijkt in een vergadering te zitten ({app}) en de klok loopt nog op {task}. Overschakelen naar de vergadering?',
+  ended: 'Vergadering voorbij ({minutes} min). Terug naar {task}?',
+  endedStop: 'Vergadering voorbij ({minutes} min). Klok stoppen?',
+  browser: 'gesprek in de browser',
+  actions: { choose: 'Taak kiezen', generic: 'Algemene vergadering', switch: 'Naar de vergadering', notMeeting: 'Geen vergadering', mute: 'Niet vragen bij deze app', back: 'Terug', stop: 'Stoppen' },
 };

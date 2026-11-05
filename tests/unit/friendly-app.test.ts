@@ -156,7 +156,7 @@ describe('friendly messages in the app', () => {
     expect(ui.$('#idle-quip').getAttribute('lang')).toBe('de');
     expect(ui.$('#idle img').getAttribute('data-pose')).toBe(CATALOG.de.pools.idle[line]?.pose);
     expect(ui.$('#idle-text').textContent).toContain('Write onboarding guide');
-    expect(ui.$('#idle-here').textContent).toBe("Yes, I'm here");
+    expect(ui.$('#idle-here').textContent).toBe('Keep: yes, it was work');
     // Answered: the phrasing is cleared, the next prompt gets another one.
     (ui.app as unknown as { setIdleCheck(state: unknown): void }).setIdleCheck({ phase: 'watching' });
     expect(ui.app.state.messages.idleLine).toBeNull();

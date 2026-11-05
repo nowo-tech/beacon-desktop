@@ -13,11 +13,12 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "TimeTrack",
         "width": 400,
-        "height": 600,
-        "minWidth": 360,
-        "minHeight": 480,
+        "height": 640,
+        "minWidth": 380,
+        "minHeight": 560,
         "resizable": true,
         "visible": true,
         "backgroundThrottling": "disabled"
@@ -49,7 +50,8 @@
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "windows/installer-hooks.nsh"
       }
     },
     "macOS": {
@@ -58,7 +60,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE_WITH_TIMETRACK_UPDATER_PUBLIC_KEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIzOUU3RjkwNkM5MjM4OTMKUldTVE9KSnNrSCtlc3hMOHlWQlo0a3BkUlVaMHZ4b2ZpbWR5b3ZBamttMS9zTFdZa2Joa0NXNGUK",
       "endpoints": [],
       "requireSignedVersion": true,
       "windows": {

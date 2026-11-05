@@ -42,6 +42,7 @@ import {
   type PlanInput,
 } from '../../src/lib/friendly';
 import { POOL_KINDS, POSE_IDS, type Line } from '../../src/lib/messages/types';
+import { EMPTY_POSES } from '../../src/lib/emptyStates';
 import { POSE_ART, POSE_FALLBACK, poseArt, poseFile } from '../../src/ui/mascot';
 
 const MADRID = 'Europe/Madrid';
@@ -91,7 +92,9 @@ describe('message pools', () => {
   });
 
   it('every pose with art is used, every pose without art has an existing fallback; art is 1x / @2x WebP', () => {
-    const used = new Set(MESSAGE_LOCALES.flatMap((locale) => POOL_KINDS.flatMap((name) => CATALOG[locale].pools[name].map((line) => line.pose))));
+    const used = new Set<string>(MESSAGE_LOCALES.flatMap((locale) => POOL_KINDS.flatMap((name) => CATALOG[locale].pools[name].map((line) => line.pose))));
+    // The empty states of the list use theirs (and the dark-theme variants), not the message pools.
+    for (const id of Object.values(EMPTY_POSES)) used.add(id).add(`${id}-dark`);
     for (const id of POSE_ART) expect(used, id).toContain(id);
     for (const id of POSE_IDS) {
       if (!POSE_ART.has(id)) expect(existsSync(`public/mascot/${POSE_FALLBACK[id] ?? 'missing'}.webp`), id).toBe(true);

@@ -16,7 +16,7 @@ use tauri::{
 };
 
 pub const LABEL: &str = "prompt";
-/// Logical size of the prompt window (the content scrolls if a long translation needs more).
+/// Logical size of the prompt window, fixed (not resizable; the content scrolls if a long translation needs more).
 pub const WIDTH: f64 = 440.0;
 pub const HEIGHT: f64 = 560.0;
 
@@ -32,6 +32,10 @@ const ACTIONS: &[&str] = &[
     "gap-keep",
     "gap-reassign",
     "gap-discard",
+    "reassign-open",
+    "reassign-cancel",
+    "reassign-search",
+    "reassign-save",
     "resume",
     "not-now",
     "escape",
@@ -76,7 +80,8 @@ pub fn centred(area: Area, width: u32, height: u32) -> (i32, i32) {
     (x, y)
 }
 
-/// The answer, if it is one the main window understands: `{ action, note?, taskId? }` with bounded strings.
+/// The answer, if it is one the main window understands: `{ action, note?, taskId?, query? }` with bounded strings
+/// (`query`: the task search of "Reassign", which the main window runs).
 pub fn valid_answer(answer: &Value) -> bool {
     let Some(object) = answer.as_object() else {
         return false;
@@ -93,9 +98,10 @@ pub fn valid_answer(answer: &Value) -> bool {
     action_ok
         && short("note", 500)
         && short("taskId", 200)
+        && short("query", 200)
         && object
             .keys()
-            .all(|key| matches!(key.as_str(), "action" | "note" | "taskId"))
+            .all(|key| matches!(key.as_str(), "action" | "note" | "taskId" | "query"))
 }
 
 fn theme_of(view: &Value) -> Option<Theme> {
@@ -169,8 +175,7 @@ pub fn prompt_open(app: AppHandle, window: tauri::Window, view: Value) -> Result
     )
     .title(title)
     .inner_size(WIDTH, HEIGHT)
-    .min_inner_size(360.0, 420.0)
-    .resizable(true)
+    .resizable(false)
     .minimizable(false)
     .maximizable(false)
     .closable(false)
@@ -180,6 +185,9 @@ pub fn prompt_open(app: AppHandle, window: tauri::Window, view: Value) -> Result
     .focused(true)
     .visible(false)
     .theme(theme_of(&view))
+    // No links in this window: nothing loads but its own page, and no new windows.
+    .on_navigation(crate::internal_navigation)
+    .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
     .build()
     .map_err(|e| e.to_string())?;
     let _ = created.set_size(LogicalSize::new(WIDTH, HEIGHT));
@@ -302,6 +310,15 @@ mod tests {
         ));
         assert!(valid_answer(
             &json!({ "action": "gap-reassign", "taskId": "T-2", "note": null })
+        ));
+        assert!(valid_answer(
+            &json!({ "action": "reassign-search", "query": "sprint" })
+        ));
+        assert!(valid_answer(
+            &json!({ "action": "reassign-save", "taskId": "T-9" })
+        ));
+        assert!(!valid_answer(
+            &json!({ "action": "reassign-search", "query": "q".repeat(201) })
         ));
         assert!(!valid_answer(&json!({ "action": "quit" })));
         assert!(!valid_answer(&json!({ "action": "here", "extra": 1 })));

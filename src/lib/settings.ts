@@ -1,13 +1,15 @@
 import type { Scope, Task, Timer } from '../api/types';
-import { DEFAULT_SHORTCUT } from '../platform';
+import { defaultResumeShortcut, DEFAULT_SHORTCUT, type HostOs, hostOs, OLD_DEFAULT_RESUME_SHORTCUT } from '../platform';
 import { EMPTY_MESSAGES, type MessageState, sanitizeMessages } from './friendly';
 import { type IdleCheckState, WATCHING } from './idleCheck';
+import { DEFAULT_NUDGE_MINUTES, EMPTY_NUDGE, NUDGE_MINUTES_CHOICES, type NudgeState, sanitizeNudge } from './nudge';
+import { DEFAULT_MIN_CALL_MINUTES, type MeetingApp, type MeetingState, MIN_CALL_CHOICES, NO_MEETING, sanitizeMeeting, sanitizeMuted, sanitizeTaskRef, type TaskRef } from './meetings';
 import { DEFAULT_LEAD_MINUTES, EMPTY_SCHEDULE, LEAD_CHOICES, sanitizeSchedule, type ScheduleState } from './schedule';
 import type { ServerFeatures } from './serverFeatures';
 import { isTheme, type ThemePreference } from './theme';
 
 /** Opt-in features. Each one is off by default and keeps a dated consent record. */
-export type Feature = 'idleDetection' | 'notifications' | 'autostart';
+export type Feature = 'idleDetection' | 'notifications' | 'autostart' | 'meetingDetection';
 
 export interface ConsentRecord {
   granted: boolean;
@@ -45,6 +47,22 @@ export interface Settings {
   scheduleReminders: boolean;
   /** "Shall we start?" this many minutes before the start time (`LEAD_CHOICES`). */
   scheduleLeadMinutes: number;
+  /** Global shortcut that starts the last task again, window hidden or not (Tauri accelerator syntax). */
+  resumeShortcut: string;
+  /** "Working without a timer?" nudge during working hours (on by default). */
+  nudgeWithoutTimer: boolean;
+  /** Minutes of input without a timer before that nudge (`NUDGE_MINUTES_CHOICES`). */
+  nudgeMinutes: number;
+  /** A screen lock or system sleep counts as idle, and the return asks what to do with it (on by default). */
+  pauseOnLock: boolean;
+  /** Meeting detection (opt-in, off by default, dated consent): notice calls (microphone in use by a meeting app). */
+  meetingDetection: boolean;
+  /** Ask what a call is once it lasted this many minutes (`MIN_CALL_CHOICES`). */
+  meetingMinMinutes: number;
+  /** The task "Generic meeting" starts (chosen once, changeable in Settings). */
+  meetingGeneric: TaskRef | null;
+  /** Apps whose calls are never asked about ("Don't ask for this app"). */
+  meetingMuted: MeetingApp[];
   /** Pin set version whose expiry was already announced with a desktop notification (once per version). */
   pinExpiryNotified: number | null;
 }
@@ -90,6 +108,10 @@ export interface LocalState {
   messages: MessageState;
   /** My schedule: local overrides of Beacon's working hours, local days off, reminders already shown. Local only. */
   schedule: ScheduleState;
+  /** "Working without a timer?": current stretch and last nudge. Local only. */
+  nudge: NudgeState;
+  /** Meeting detection: the call going on and the question about it (app id and times only). Local only. */
+  meeting: MeetingState;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -106,6 +128,14 @@ export const DEFAULT_SETTINGS: Settings = {
   nativeIntroSeen: false,
   scheduleReminders: true,
   scheduleLeadMinutes: DEFAULT_LEAD_MINUTES,
+  resumeShortcut: defaultResumeShortcut(),
+  nudgeWithoutTimer: true,
+  nudgeMinutes: DEFAULT_NUDGE_MINUTES,
+  pauseOnLock: true,
+  meetingDetection: false,
+  meetingMinMinutes: DEFAULT_MIN_CALL_MINUTES,
+  meetingGeneric: null,
+  meetingMuted: [],
   pinExpiryNotified: null,
 };
 
@@ -125,19 +155,36 @@ export function emptyState(): LocalState {
     features: null,
     messages: { ...EMPTY_MESSAGES },
     schedule: { ...EMPTY_SCHEDULE },
+    nudge: { ...EMPTY_NUDGE },
+    meeting: { ...NO_MEETING },
   };
+}
+
+/**
+ * The stored "Continue last" shortcut: the 0.5.0 previews defaulted to `CommandOrControl+Alt+Space` (Spotlight /
+ * Finder search on macOS), so that value becomes this system's new default (`CommandOrControl+Alt+T` on Windows and
+ * macOS, `CommandOrControl+Alt+Shift+R` on Linux); any other shortcut the person set is kept.
+ */
+export function migrateResumeShortcut(raw: unknown, os: HostOs = hostOs()): string {
+  const fresh = defaultResumeShortcut(os);
+  if (typeof raw !== 'string' || raw.trim() === '') return fresh;
+  const keys = (value: string) => value.toLowerCase().replace(/\s+/g, '').replace(/^cmdorctrl\+/, 'commandorcontrol+');
+  return keys(raw) === keys(OLD_DEFAULT_RESUME_SHORTCUT) ? fresh : raw;
 }
 
 export function loadLocal(storage: Storage = localStorage): LocalState {
   try {
     const raw = JSON.parse(storage.getItem(KEY) ?? '{}') as Partial<LocalState>;
+    // 0.5.0 previews kept "Open Beacon in" here; the host owns it now (src-tauri/src/browser.rs).
+    const storedSettings: Partial<Settings> & { browser?: unknown } = { ...(raw.settings ?? {}) };
+    delete storedSettings.browser;
     return {
       ...emptyState(),
       ...raw,
       // 0.2 stored the old default (10) for everyone: only a different value was the person's own choice.
       settings: {
         ...DEFAULT_SETTINGS,
-        ...(raw.settings ?? {}),
+        ...storedSettings,
         idleMinutes: typeof raw.settings?.idleMinutes === 'number' && raw.settings.idleMinutes !== 10 ? raw.settings.idleMinutes : null,
         theme: isTheme(raw.settings?.theme) ? raw.settings.theme : DEFAULT_SETTINGS.theme,
         funMessages: typeof raw.settings?.funMessages === 'boolean' ? raw.settings.funMessages : DEFAULT_SETTINGS.funMessages,
@@ -147,10 +194,20 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
         nativeIntroSeen: raw.settings?.nativeIntroSeen === true,
         scheduleReminders: typeof raw.settings?.scheduleReminders === 'boolean' ? raw.settings.scheduleReminders : DEFAULT_SETTINGS.scheduleReminders,
         scheduleLeadMinutes: LEAD_CHOICES.includes(raw.settings?.scheduleLeadMinutes as number) ? (raw.settings?.scheduleLeadMinutes as number) : DEFAULT_SETTINGS.scheduleLeadMinutes,
+        resumeShortcut: migrateResumeShortcut(raw.settings?.resumeShortcut),
+        nudgeWithoutTimer: typeof raw.settings?.nudgeWithoutTimer === 'boolean' ? raw.settings.nudgeWithoutTimer : DEFAULT_SETTINGS.nudgeWithoutTimer,
+        nudgeMinutes: NUDGE_MINUTES_CHOICES.includes(raw.settings?.nudgeMinutes as number) ? (raw.settings?.nudgeMinutes as number) : DEFAULT_SETTINGS.nudgeMinutes,
+        pauseOnLock: typeof raw.settings?.pauseOnLock === 'boolean' ? raw.settings.pauseOnLock : DEFAULT_SETTINGS.pauseOnLock,
+        meetingDetection: raw.settings?.meetingDetection === true,
+        meetingMinMinutes: MIN_CALL_CHOICES.includes(raw.settings?.meetingMinMinutes as number) ? (raw.settings?.meetingMinMinutes as number) : DEFAULT_SETTINGS.meetingMinMinutes,
+        meetingGeneric: sanitizeTaskRef(raw.settings?.meetingGeneric),
+        meetingMuted: sanitizeMuted(raw.settings?.meetingMuted),
         pinExpiryNotified: typeof raw.settings?.pinExpiryNotified === 'number' ? raw.settings.pinExpiryNotified : null,
       },
+      meeting: sanitizeMeeting(raw.meeting),
       messages: sanitizeMessages(raw.messages),
       schedule: sanitizeSchedule(raw.schedule),
+      nudge: sanitizeNudge(raw.nudge),
       idleCheck: typeof raw.idleCheck === 'object' && raw.idleCheck !== null && 'phase' in raw.idleCheck ? raw.idleCheck : WATCHING,
       pinned: Array.isArray(raw.pinned) ? raw.pinned.slice(0, MAX_PINNED) : [],
     };

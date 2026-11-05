@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type MeetingCatalog, type NudgeCatalog, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** Deutsch (du): Kaffee und Kuchen am Nachmittag, früher Mittag. */
 export const pools: Pools = {
@@ -223,4 +223,28 @@ export const reminders: ReminderCatalog = {
   actions: { start: 'Starten', stop: 'Stoppen', resume: 'Fortsetzen' },
   lastTask: 'Letzte Aufgabe: {task}.',
   today: 'Heute: {total}.',
+};
+
+/** "Working without a timer?" (input for a while during working hours, no timer running). */
+export const nudge: NudgeCatalog = {
+  lines: [
+    f('Du bist schon eine Weile aktiv, aber kein Timer läuft. Sollen wir das erfassen?', 'think'),
+    f('Fleißige Hände, stiller Timer. Einen starten?', 'peek'),
+    f('Sieht nach Arbeit aus, nur die Uhr steht. Soll ich sie starten?', 'working'),
+    f('Hallo! Der Timer ist aus. Da weitermachen, wo du aufgehört hast?', 'wave'),
+  ],
+  title: 'Arbeit ohne Timer?',
+  lastTask: 'Letzte Aufgabe: {task}.',
+  actions: { resume: '{task} starten', choose: 'Aufgabe wählen' },
+};
+
+/** Meeting detection: the question while a call goes on, and the one when it ends. */
+export const meetings: MeetingCatalog = {
+  titles: { ask: 'Meeting?', ended: 'Meeting beendet' },
+  ask: 'Sieht nach einem Meeting aus ({app}). Welches Meeting ist es?',
+  askSwitch: 'Sieht nach einem Meeting aus ({app}), und die Uhr läuft noch auf {task}. Zum Meeting wechseln?',
+  ended: 'Meeting beendet ({minutes} Min.). Zurück zu {task}?',
+  endedStop: 'Meeting beendet ({minutes} Min.). Uhr stoppen?',
+  browser: 'Anruf im Browser',
+  actions: { choose: 'Aufgabe wählen', generic: 'Allgemeines Meeting', switch: 'Zum Meeting wechseln', notMeeting: 'Kein Meeting', mute: 'Bei dieser App nicht fragen', back: 'Zurück', stop: 'Stoppen' },
 };

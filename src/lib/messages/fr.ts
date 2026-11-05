@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type MeetingCatalog, type NudgeCatalog, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** Français (tutoiement) : déjeuner vers midi, pause café à 10 h et à 16 h. */
 export const pools: Pools = {
@@ -223,4 +223,28 @@ export const reminders: ReminderCatalog = {
   actions: { start: 'Démarrer', stop: 'Arrêter', resume: 'Reprendre' },
   lastTask: 'Dernière tâche : {task}.',
   today: 'Aujourd\'hui : {total}.',
+};
+
+/** "Working without a timer?" (input for a while during working hours, no timer running). */
+export const nudge: NudgeCatalog = {
+  lines: [
+    f('Vous êtes actif depuis un moment et aucun minuteur ne tourne. On l\'enregistre ?', 'think'),
+    f('Les mains s\'activent, le minuteur dort. On en lance un ?', 'peek'),
+    f('On dirait que vous travaillez, mais pas l\'horloge. Je la lance ?', 'working'),
+    f('Coucou, le minuteur est arrêté. On reprend là où vous en étiez ?', 'wave'),
+  ],
+  title: 'Vous travaillez sans minuteur ?',
+  lastTask: 'Dernière tâche : {task}.',
+  actions: { resume: 'Lancer {task}', choose: 'Choisir une tâche' },
+};
+
+/** Meeting detection: the question while a call goes on, and the one when it ends. */
+export const meetings: MeetingCatalog = {
+  titles: { ask: 'Réunion ?', ended: 'Réunion terminée' },
+  ask: 'On dirait que tu es en réunion ({app}). C\'est quelle réunion ?',
+  askSwitch: 'On dirait que tu es en réunion ({app}) et le chrono tourne encore sur {task}. On passe à la réunion ?',
+  ended: 'Réunion terminée ({minutes} min). Revenir à {task} ?',
+  endedStop: 'Réunion terminée ({minutes} min). J\'arrête le chrono ?',
+  browser: 'appel dans le navigateur',
+  actions: { choose: 'Choisir une tâche', generic: 'Réunion générique', switch: 'Passer à la réunion', notMeeting: 'Pas une réunion', mute: 'Ne plus demander pour cette app', back: 'Revenir', stop: 'Arrêter' },
 };

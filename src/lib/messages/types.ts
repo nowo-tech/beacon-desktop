@@ -55,6 +55,14 @@ export const POSE_IDS = [
   'beach',
   'sofa',
   'park',
+  // Empty states of the main list (src/lib/emptyStates.ts), each with a variant with a light outer stroke for the dark
+  // theme (`-dark`; without one the light art is used in both themes).
+  'empty-pinned',
+  'empty-recent',
+  'empty-tasks',
+  'empty-pinned-dark',
+  'empty-recent-dark',
+  'empty-tasks-dark',
 ] as const;
 
 export type PoseId = (typeof POSE_IDS)[number];
@@ -138,4 +146,39 @@ export interface ReminderCatalog {
   lastTask: string;
   /** After the end line. */
   today: string;
+}
+
+/**
+ * "Working without a timer?" (`src/lib/nudge.ts`), per locale: a few phrasings with their pose, the notification
+ * title, the add-on with the last task (`{task}`) and the two button labels (`{task}` in `resume`).
+ */
+export interface NudgeCatalog {
+  lines: readonly Line[];
+  title: string;
+  lastTask: string;
+  actions: { resume: string; choose: string };
+}
+
+/** Buttons of the meeting questions (`src/lib/meetings.ts`). */
+export const MEETING_ACTIONS = ['choose', 'generic', 'switch', 'notMeeting', 'mute', 'back', 'stop'] as const;
+export type MeetingAction = (typeof MEETING_ACTIONS)[number];
+
+/**
+ * Meeting detection (`src/lib/meetings.ts`), per locale: "Looks like you're in a meeting ({app}). Which meeting is it?"
+ * and, when the call ends, "Meeting over ({minutes} min). Back to {task}?". `{app}` is the app's name, or `browser`
+ * for a call in a web browser.
+ */
+export interface MeetingCatalog {
+  titles: { ask: string; ended: string };
+  /** No timer, or none to switch from. */
+  ask: string;
+  /** A timer runs on a task that is not a meeting (`{task}`). */
+  askSwitch: string;
+  /** The call ended and there is a task to go back to (`{task}`). */
+  ended: string;
+  /** The call ended, nothing to go back to. */
+  endedStop: string;
+  /** Name of a call in a web browser (Google Meet, Jitsi, Teams or Zoom on the web). */
+  browser: string;
+  actions: Record<MeetingAction, string>;
 }

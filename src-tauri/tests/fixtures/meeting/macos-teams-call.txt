@@ -1,0 +1,7 @@
+# CoreAudio process objects during a Teams call on macOS 14.6 (pid, bundle id, kAudioProcessPropertyIsRunningInput).
+input-running: yes
+88	com.apple.controlcenter	0
+412	com.apple.Music	0
+9876	com.microsoft.teams2	1
+9901	com.google.Chrome.helper	0
+1203	com.apple.WebKit.GPU	0

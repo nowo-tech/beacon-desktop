@@ -1,6 +1,6 @@
 {
   "name": "time-track-desktop",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "TimeTrack desktop app (Tauri 2) for symfony-beacon (TimeTrackBundle 1.10 client API, 1.9 compatible).",
   "license": "MIT",
@@ -21,7 +21,11 @@
     "screenshots": "playwright test -c playwright.screenshots.config.ts",
     "screenshots:friendly": "FRIENDLY_SCREENS=${FRIENDLY_SCREENS:-out/friendly-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/friendly.spec.ts",
     "screenshots:native": "NATIVE_SCREENS=${NATIVE_SCREENS:-out/native-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/native.spec.ts",
+    "screenshots:quickwins": "QUICKWIN_SCREENS=${QUICKWIN_SCREENS:-out/quickwin-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/quickwins.spec.ts",
     "screenshots:schedule": "SCHEDULE_SCREENS=${SCHEDULE_SCREENS:-out/schedule-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/schedule.spec.ts",
+    "screenshots:layout": "LAYOUT_SCREENS=${LAYOUT_SCREENS:-out/layout-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/layout.spec.ts",
+    "screenshots:links": "LINKS_SCREENS=${LINKS_SCREENS:-out/links-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/links.spec.ts",
+    "screenshots:meetings": "MEETING_SCREENS=${MEETING_SCREENS:-out/meeting-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/meetings.spec.ts",
     "mock": "node mock-server/server.mjs",
     "release:check": "node scripts/release/check-updater-key.mjs",
     "store:manifest": "node scripts/store/msix-manifest.mjs"
@@ -30,8 +34,8 @@
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-autostart": "^2.7.0",
-    "@tauri-apps/plugin-notification": "^2.8.0",
-    "@tauri-apps/plugin-opener": "^2.7.2"
+    "@tauri-apps/plugin-clipboard-manager": "^2.5.0",
+    "@tauri-apps/plugin-notification": "^2.8.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",

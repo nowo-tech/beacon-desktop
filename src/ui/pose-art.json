@@ -38,5 +38,11 @@
   "holiday",
   "weekend-start",
   "shades",
-  "teamwork"
+  "teamwork",
+  "empty-pinned",
+  "empty-recent",
+  "empty-tasks",
+  "empty-pinned-dark",
+  "empty-recent-dark",
+  "empty-tasks-dark"
 ]

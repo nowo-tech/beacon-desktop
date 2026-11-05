@@ -1,3 +1,5 @@
+import type { Rect, Screens } from './lib/layout';
+import type { BrowserChoice, BrowserRequest, DetectedBrowser, OpenOutcome } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 
 /**
@@ -29,7 +31,26 @@ export interface TrayStatus {
   /** Status line at the top of the tray menu (disabled item). */
   status: string;
   running: boolean;
+  /**
+   * While a timer runs: the start (Unix ms) and the translated title / tooltip with `{time}` (elapsed, `H:MM`) and
+   * `{today}`, which the host keeps current every minute on its own (src-tauri/src/tray_clock.rs). `null` when stopped.
+   */
+  clock?: TrayClock | null;
 }
+
+export interface TrayClock {
+  startedAt: number;
+  title: string;
+  tooltip: string;
+  /** Seconds tracked today without the running entry's elapsed time. */
+  todayBaseSeconds: number;
+}
+
+/** Screen lock and system sleep, from the OS (src-tauri/src/session.rs). Local only. */
+export type SessionEvent = 'lock' | 'unlock' | 'suspend' | 'resume';
+
+/** Which global shortcut: `open` shows the window and the search, `resume` starts the last task again. */
+export type ShortcutSlot = 'open' | 'resume';
 
 export interface TrayMenuItem {
   id: string;
@@ -48,6 +69,8 @@ export interface TrayMenu {
   switchTo: TrayMenuItem[];
   search: string;
   open: string;
+  /** "Full view" (`layout-full`) / "Compact view" (`layout-compact`): the other view (absent while signed out). */
+  layout?: TrayMenuItem | null;
   /** Present only while connected to an https server (see lib/beacon.ts). */
   openBeacon: string | null;
   myTime: string | null;
@@ -68,6 +91,8 @@ export interface WakePlan {
   idleAfterSeconds: number | null;
   /** The next working-hours reminder (lib/schedule.ts). */
   reminderAt: number | null;
+  /** Meeting detection is on: look at the microphone this often (seconds; absent = never). */
+  micEverySeconds?: number;
 }
 
 /** A notification button: the id sent back when pressed (`schedule-start` …) and its translated label. */
@@ -82,6 +107,8 @@ export interface FriendlyNotification {
   body: string;
   pose: string | null;
   action?: NotificationAction | null;
+  /** Up to two buttons ("Working without a timer?"); the host drops unknown ids. */
+  actions?: NotificationAction[];
 }
 
 /** `unsupported`: the host has no desktop notifications (plain browser). */
@@ -125,8 +152,41 @@ export interface ConnectionSecurity {
   pinSetVersion: number;
 }
 
+/** The main window's size and position, in physical pixels (lib/layout.ts). */
+export interface WindowHost {
+  /** Outer position and inner size; `null` while maximised or minimised (nothing worth remembering). */
+  bounds(): Promise<Rect | null>;
+  screens(): Promise<Screens>;
+  /** Restores a maximised window first. */
+  setBounds(rect: Rect): Promise<void>;
+  /** The window was moved or resized (by the person or by `setBounds`). */
+  onChange(handler: () => void): void;
+}
+
 /** Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME, so the default adds Shift. */
 export const DEFAULT_SHORTCUT = 'CommandOrControl+Alt+Shift+T';
+/** Default "Continue the last task" shortcut on Windows and macOS (Ctrl+Alt+T, ⌘⌥T). */
+export const DEFAULT_RESUME_SHORTCUT = 'CommandOrControl+Alt+T';
+/** On Linux Ctrl+Alt+T opens a terminal (Ubuntu / GNOME), so "R" for resume: Ctrl+Alt+Shift+R. */
+export const LINUX_RESUME_SHORTCUT = 'CommandOrControl+Alt+Shift+R';
+/** The 0.5.0 previews' default (⌘⌥Space is taken by Finder search on macOS); migrated to the new one on load. */
+export const OLD_DEFAULT_RESUME_SHORTCUT = 'CommandOrControl+Alt+Space';
+
+export type HostOs = 'windows' | 'mac' | 'linux' | 'other';
+
+/** The system the window runs on, from the webview's navigator (`other` when it cannot tell). */
+export function hostOs(nav: { platform?: string; userAgent?: string } | undefined = globalThis.navigator): HostOs {
+  const text = `${nav?.platform ?? ''} ${nav?.userAgent ?? ''}`;
+  if (/mac/i.test(text)) return 'mac';
+  if (/win/i.test(text)) return 'windows';
+  if (/linux|x11|bsd/i.test(text)) return 'linux';
+  return 'other';
+}
+
+/** The default "Continue last" shortcut of a system (owner decision 2026-11-05). */
+export function defaultResumeShortcut(os: HostOs = hostOs()): string {
+  return os === 'linux' ? LINUX_RESUME_SHORTCUT : DEFAULT_RESUME_SHORTCUT;
+}
 
 export interface Platform {
   readonly kind: 'tauri' | 'browser';
@@ -145,12 +205,27 @@ export interface Platform {
   secretDelete(): Promise<void>;
   /** Seconds since the last input, read locally from the OS. Never sent. */
   idleSeconds(): Promise<number>;
-  openUrl(url: string): Promise<void>;
+  /**
+   * Opens an https link (already checked by the caller) in the browser the host keeps for "Open Beacon in"
+   * (`open_external`, URL only); `fallback` when the chosen browser is gone and the default opened it. Rejects when
+   * nothing could.
+   */
+  openExternal(url: string): Promise<OpenOutcome>;
+  /** Browsers installed on this computer (Settings → Open Beacon in). */
+  listBrowsers(): Promise<DetectedBrowser[]>;
+  /** The "Open Beacon in" choice the host keeps (`get_browser`). */
+  getBrowser(): Promise<BrowserChoice>;
+  /** The system default or a detected browser, by id (`set_browser`); the host answers with what it stored. */
+  setBrowser(request: BrowserRequest): Promise<BrowserChoice>;
+  /** Settings → Open Beacon in → Custom…: the host's native file picker, checked and kept by the host. `null` = cancelled; rejects when refused. */
+  pickBrowser(): Promise<BrowserChoice | null>;
+  /** A link the webview tried to open by itself (`target=_blank`, `window.open`, a navigation): the host refused it. */
+  onOpenExternal(handler: (url: string) => void): void;
   copyText(text: string): Promise<void>;
   setTray(status: TrayStatus): Promise<void>;
   setTrayMenu(menu: TrayMenu): Promise<void>;
-  /** Registers the global shortcut (replacing the previous one). Rejects when the OS refuses it (in use, invalid). */
-  setShortcut(accelerator: string): Promise<void>;
+  /** Registers a global shortcut (replacing the slot's previous one). Rejects when the OS refuses it (in use, invalid). */
+  setShortcut(accelerator: string, slot?: ShortcutSlot): Promise<void>;
   notify(title: string, body: string): Promise<void>;
   /** A friendly message as a native notification (pose picture, click brings the window forward). False when it could not be shown. */
   notifyFriendly(note: FriendlyNotification): Promise<boolean>;
@@ -160,9 +235,13 @@ export interface Platform {
   onWake(handler: (reason: WakeReason) => void): void;
   /** A notification button was pressed (its `NotificationAction.id`). */
   onNotificationAction(handler: (id: string) => void): void;
+  /** What holds the microphone (meeting detection, only while `WakePlan.micEverySeconds` asks for it; lib/meetings.ts). */
+  onMic(handler: (signal: unknown) => void): void;
   setWakePlan(plan: WakePlan): Promise<void>;
   /** The "Still there?" window; `null` when the host has none (the prompt is then a modal in the main window). */
   readonly promptWindow: PromptHost | null;
+  /** Size and position of the main window ("Compact view" / "Full view"). */
+  readonly windowHost: WindowHost;
   /** Native window theme (title bar, menus): `null` follows the system. */
   setWindowTheme(theme: 'light' | 'dark' | null): Promise<void>;
   autostartEnabled(): Promise<boolean>;
@@ -175,6 +254,10 @@ export interface Platform {
   installUpdate(server: string, token: string, onProgress?: (progress: UpdateProgress) => void): Promise<void>;
   /** The global shortcut was pressed (the window is already shown). */
   onShortcut(handler: () => void): void;
+  /** The "Continue the last task" shortcut was pressed (the window stays as it is, hidden or not). */
+  onResumeShortcut(handler: () => void): void;
+  /** The screen was locked / unlocked or the computer went to sleep / woke up. */
+  onSessionEvent(handler: (event: SessionEvent) => void): void;
   /** A tray menu item was chosen (see `TrayMenu`). */
   onTray(handler: (action: string) => void): void;
 }
@@ -183,11 +266,30 @@ export interface Platform {
 export interface BrowserHooks {
   idleSeconds: number;
   opened: string[];
+  /** Browser choice of each opened link (same order as `opened`), as the fake host had it. */
+  openedWith: BrowserChoice[];
+  /** The fake host's "Open Beacon in" choice (`get_browser` / `set_browser` / `pick_browser`). */
+  browserChoice: BrowserChoice;
+  /** Fake installed browsers. */
+  browsers: DetectedBrowser[];
+  /** Ids / paths of chosen browsers that are gone (the link opens in the default: `fallback`). */
+  goneBrowsers: string[];
+  /** Opening any link fails (no browser at all). */
+  openFails: boolean;
+  /** What the fake file picker returns (`null` = cancelled) or the refusal it throws. */
+  pickResult: BrowserChoice | null;
+  pickError: string | null;
+  /** Copying fails (no clipboard). */
+  copyFails: boolean;
+  /** The webview tried to open a link by itself. */
+  openExternal(url: string): void;
   copied: string[];
   notifications: string[];
   tray: TrayStatus;
   trayMenu: TrayMenu | null;
   shortcut: string | null;
+  /** "Continue the last task" shortcut registered. */
+  resumeShortcut: string | null;
   /** Accelerators the fake OS refuses. */
   refusedShortcuts: string[];
   installable: boolean;
@@ -198,6 +300,10 @@ export interface BrowserHooks {
   installStepMs: number;
   /** Number of successful fake installs (the real app relaunches instead). */
   installed: number;
+  /** Fake main window: its bounds (`null` = maximised), the screens and every `setBounds` asked for. */
+  window: { bounds: Rect | null; screens: Screens; set: Rect[] };
+  /** The fake window was moved or resized. */
+  windowChanged(): void;
   /** Last native window theme asked for (`null` = follow the system; `undefined` = never set). */
   windowTheme: 'light' | 'dark' | null | undefined;
   /** Fake OS notification permission (`unsupported` by default: friendly messages stay in the app). */
@@ -223,6 +329,9 @@ export interface BrowserHooks {
   /** The server the app bound (`bindServer`), `null` after `secretDelete`. */
   boundServer: string | null;
   shortcutPressed(): void;
+  resumeShortcutPressed(): void;
+  /** The fake OS locks / unlocks the screen or sleeps / wakes. */
+  sessionEvent(event: SessionEvent): void;
   trayAction(action: string): void;
   /** The fake heartbeat fires. */
   wake(reason?: WakeReason): void;
@@ -230,24 +339,41 @@ export interface BrowserHooks {
   notificationAction(id: string): void;
   /** An answer from the fake prompt window. */
   answerPrompt(answer: PromptAnswer): void;
+  /** The fake heartbeat reports the microphone (`{ at, inUse, apps, source }`, as src-tauri/src/meeting). */
+  mic(signal: unknown): void;
 }
 
 export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o) => globalThis.fetch(i, o)): Platform & { hooks: BrowserHooks } {
   let secret: string | null = null;
   let autostart = false;
   const shortcutHandlers: (() => void)[] = [];
+  const resumeHandlers: (() => void)[] = [];
+  const sessionHandlers: ((event: SessionEvent) => void)[] = [];
   const trayHandlers: ((action: string) => void)[] = [];
   const wakeHandlers: ((reason: WakeReason) => void)[] = [];
   const actionHandlers: ((id: string) => void)[] = [];
   const answerHandlers: ((answer: PromptAnswer) => void)[] = [];
+  const windowHandlers: (() => void)[] = [];
+  const externalHandlers: ((url: string) => void)[] = [];
+  const micHandlers: ((signal: unknown) => void)[] = [];
   const hooks: BrowserHooks = {
     idleSeconds: 0,
     opened: [],
+    openedWith: [],
+    browserChoice: { kind: 'system' },
+    browsers: [],
+    goneBrowsers: [],
+    openFails: false,
+    pickResult: null,
+    pickError: null,
+    copyFails: false,
+    openExternal: (url) => externalHandlers.forEach((handler) => handler(url)),
     copied: [],
     notifications: [],
     tray: { title: null, tooltip: '', status: '', running: false },
     trayMenu: null,
     shortcut: null,
+    resumeShortcut: null,
     refusedShortcuts: [],
     installable: true,
     installError: null,
@@ -259,6 +385,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     ],
     installStepMs: 0,
     installed: 0,
+    window: { bounds: { x: 760, y: 220, width: 400, height: 640 }, screens: { areas: [{ x: 0, y: 0, width: 1920, height: 1040 }], current: { x: 0, y: 0, width: 1920, height: 1040 }, scale: 1 }, set: [] },
+    windowChanged: () => windowHandlers.forEach((handler) => handler()),
     windowTheme: undefined,
     notificationPermission: 'unsupported',
     permissionAnswer: 'granted',
@@ -273,10 +401,13 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     connectionSecurity: null,
     boundServer: null,
     shortcutPressed: () => shortcutHandlers.forEach((handler) => handler()),
+    resumeShortcutPressed: () => resumeHandlers.forEach((handler) => handler()),
+    sessionEvent: (event) => sessionHandlers.forEach((handler) => handler(event)),
     trayAction: (action) => trayHandlers.forEach((handler) => handler(action)),
     wake: (reason = 'tick') => wakeHandlers.forEach((handler) => handler(reason)),
     notificationAction: (id) => actionHandlers.forEach((handler) => handler(id)),
     answerPrompt: (answer) => answerHandlers.forEach((handler) => handler(answer)),
+    mic: (signal) => micHandlers.forEach((handler) => handler(signal)),
   };
   const promptHost: PromptHost = {
     open: async (view) => {
@@ -308,13 +439,39 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
       hooks.boundServer = null;
     },
     idleSeconds: async () => hooks.idleSeconds,
-    openUrl: async (url) => void hooks.opened.push(url),
-    copyText: async (text) => void hooks.copied.push(text),
+    openExternal: async (url) => {
+      if (hooks.openFails) throw new Error('no browser');
+      const browser = hooks.browserChoice;
+      hooks.opened.push(url);
+      hooks.openedWith.push(browser);
+      const gone = browser.kind === 'detected' ? hooks.goneBrowsers.includes(browser.id) || !hooks.browsers.some((item) => item.id === browser.id) : browser.kind === 'custom' && hooks.goneBrowsers.includes(browser.path);
+      return gone ? 'fallback' : 'opened';
+    },
+    listBrowsers: async () => [...hooks.browsers],
+    getBrowser: async () => hooks.browserChoice,
+    setBrowser: async (request) => {
+      if (request.kind === 'system') return (hooks.browserChoice = { kind: 'system' });
+      const found = hooks.browsers.find((item) => item.id === request.id);
+      if (found === undefined) throw new Error('this browser is not installed');
+      return (hooks.browserChoice = { kind: 'detected', id: found.id, name: found.name });
+    },
+    pickBrowser: async () => {
+      if (hooks.pickError !== null) throw new Error(hooks.pickError);
+      if (hooks.pickResult !== null) hooks.browserChoice = hooks.pickResult;
+      return hooks.pickResult;
+    },
+    onOpenExternal: (handler) => void externalHandlers.push(handler),
+    copyText: async (text) => {
+      if (hooks.copyFails) throw new Error('no clipboard');
+      hooks.copied.push(text);
+    },
     setTray: async (status) => void (hooks.tray = status),
     setTrayMenu: async (menu) => void (hooks.trayMenu = menu),
-    setShortcut: async (accelerator) => {
-      if (hooks.refusedShortcuts.includes(accelerator)) throw new Error(`${accelerator} is already registered`);
-      hooks.shortcut = accelerator;
+    setShortcut: async (accelerator, slot = 'open') => {
+      const other = slot === 'resume' ? hooks.shortcut : hooks.resumeShortcut;
+      if (hooks.refusedShortcuts.includes(accelerator) || other?.toLowerCase() === accelerator.toLowerCase()) throw new Error(`${accelerator} is already registered`);
+      if (slot === 'resume') hooks.resumeShortcut = accelerator;
+      else hooks.shortcut = accelerator;
     },
     notify: async (title, body) => void hooks.notifications.push(`${title}: ${body}`),
     notifyFriendly: async (note) => {
@@ -329,9 +486,19 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     },
     onWake: (handler) => void wakeHandlers.push(handler),
     onNotificationAction: (handler) => void actionHandlers.push(handler),
+    onMic: (handler) => void micHandlers.push(handler),
     setWakePlan: async (plan) => void (hooks.wakePlan = plan),
     get promptWindow() {
       return hooks.nativePrompt ? promptHost : null;
+    },
+    windowHost: {
+      bounds: async () => hooks.window.bounds,
+      screens: async () => hooks.window.screens,
+      setBounds: async (rect) => {
+        hooks.window.set.push(rect);
+        hooks.window.bounds = rect;
+      },
+      onChange: (handler) => void windowHandlers.push(handler),
     },
     setWindowTheme: async (theme) => void (hooks.windowTheme = theme),
     autostartEnabled: async () => autostart,
@@ -357,6 +524,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
       hooks.installed += 1;
     },
     onShortcut: (handler) => void shortcutHandlers.push(handler),
+    onResumeShortcut: (handler) => void resumeHandlers.push(handler),
+    onSessionEvent: (handler) => void sessionHandlers.push(handler),
     onTray: (handler) => void trayHandlers.push(handler),
   };
 }

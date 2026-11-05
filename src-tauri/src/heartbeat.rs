@@ -14,6 +14,9 @@
 //!
 //! The thread only reads the clock and, while the UI asked for it, the OS "seconds since last input" counter. Nothing
 //! is stored or sent: the UI decides, exactly as before, from its own clock and the same counter.
+//!
+//! With meeting detection on (opt-in, `mic_every_seconds`), [`Heartbeat::mic_due`] also says when to look whether a
+//! meeting app holds the microphone (`meeting/`), every 15–30 s; the thread then sends the UI a `mic` event.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +26,9 @@ pub const TICK_MS: i64 = 30_000;
 pub const POLL_MS: u64 = 1_000;
 /// A gap between two polls longer than this means the process (or the computer) was suspended.
 pub const RESUME_GAP_MS: i64 = 15_000;
+/// Bounds of the microphone check interval (meeting detection), in seconds.
+pub const MIC_MIN_SECONDS: u64 = 15;
+pub const MIC_MAX_SECONDS: u64 = 30;
 
 /// What the UI wants to be woken for, besides the regular tick (`set_wake_plan`).
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
@@ -35,6 +41,10 @@ pub struct WakePlan {
     /// Unix milliseconds of the next working-hours reminder; `None` when there is none (absent from older UIs).
     #[serde(default)]
     pub reminder_at: Option<i64>,
+    /// Meeting detection is on: look at the microphone this often (clamped to 15–30 s); `None` never looks (absent
+    /// from older UIs).
+    #[serde(default)]
+    pub mic_every_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -62,6 +72,8 @@ pub struct Heartbeat {
     plan: WakePlan,
     /// The idle threshold was reported and no input happened since (one `Idle` per idle stretch).
     idle_reported: bool,
+    /// Next microphone check (meeting detection); `None` checks on the next poll.
+    next_mic: Option<i64>,
 }
 
 impl Heartbeat {
@@ -75,7 +87,27 @@ impl Heartbeat {
         if plan.idle_after_seconds != self.plan.idle_after_seconds {
             self.idle_reported = false;
         }
+        if plan.mic_every_seconds != self.plan.mic_every_seconds {
+            self.next_mic = None;
+        }
         self.plan = plan;
+    }
+
+    /// Whether to look at the microphone at `now` (meeting detection on and its interval passed). Never while off.
+    pub fn mic_due(&mut self, now: i64) -> bool {
+        let Some(every) = self.plan.mic_every_seconds else {
+            self.next_mic = None;
+            return false;
+        };
+        let every = every.clamp(MIC_MIN_SECONDS, MIC_MAX_SECONDS) as i64 * 1000;
+        match self.next_mic {
+            // Due, or the clock went back past a whole interval: check now and restart the cadence.
+            Some(at) if now < at && at - now <= every => false,
+            _ => {
+                self.next_mic = Some(now + every);
+                true
+            }
+        }
     }
 
     #[cfg(test)]
@@ -184,6 +216,7 @@ mod tests {
             deadline_at: Some(T0 + 12_500),
             idle_after_seconds: None,
             reminder_at: None,
+            ..WakePlan::default()
         });
         let fired = run(&mut hb, T0, T0 + 29_000, |_| 0);
         assert_eq!(
@@ -206,6 +239,7 @@ mod tests {
             deadline_at: None,
             idle_after_seconds: Some(300),
             reminder_at: None,
+            ..WakePlan::default()
         });
         // Idle since T0 - 290 s: the threshold is reached at T0 + 10 s.
         let idle = |now: i64| ((now - (T0 - 290_000)) / 1000) as u64;
@@ -249,6 +283,7 @@ mod tests {
             deadline_at: Some(T0 + 60_000),
             idle_after_seconds: None,
             reminder_at: None,
+            ..WakePlan::default()
         });
         assert_eq!(hb.poll(T0, || 0), None);
         // The lid closed at T0 and opened 20 minutes later.
@@ -273,6 +308,7 @@ mod tests {
             deadline_at: None,
             idle_after_seconds: None,
             reminder_at: Some(T0 + 7_200),
+            ..WakePlan::default()
         });
         let fired = run(&mut hb, T0, T0 + 20_000, |_| 0);
         assert_eq!(
@@ -292,6 +328,7 @@ mod tests {
             deadline_at: None,
             idle_after_seconds: None,
             reminder_at: Some(T0 + 60_000),
+            ..WakePlan::default()
         });
         assert_eq!(hb.poll(T0, || 0), None);
         let wake = hb.poll(T0 + 3 * 3_600_000, || 0).expect("wake after sleep");
@@ -326,18 +363,21 @@ mod tests {
             deadline_at: None,
             idle_after_seconds: Some(60),
             reminder_at: None,
+            ..WakePlan::default()
         });
         assert_eq!(hb.poll(T0, || 61).map(|w| w.reason), Some(WakeReason::Idle));
         hb.set_plan(WakePlan {
             deadline_at: None,
             idle_after_seconds: Some(60),
             reminder_at: None,
+            ..WakePlan::default()
         });
         assert_eq!(hb.poll(T0 + 1000, || 62), None);
         hb.set_plan(WakePlan {
             deadline_at: None,
             idle_after_seconds: Some(30),
             reminder_at: None,
+            ..WakePlan::default()
         });
         assert_eq!(
             hb.poll(T0 + 2000, || 63).map(|w| w.reason),
@@ -346,13 +386,69 @@ mod tests {
     }
 
     #[test]
+    fn the_microphone_is_only_checked_while_meeting_detection_is_on() {
+        let mut hb = Heartbeat::new();
+        let checks = |hb: &mut Heartbeat, from: i64, to: i64| {
+            (from..=to)
+                .step_by(POLL_MS as usize)
+                .filter(|now| hb.mic_due(*now))
+                .map(|now| now - T0)
+                .collect::<Vec<_>>()
+        };
+        assert!(checks(&mut hb, T0, T0 + 60_000).is_empty());
+        hb.set_plan(WakePlan {
+            mic_every_seconds: Some(20),
+            ..WakePlan::default()
+        });
+        // At once when turned on, then every 20 s.
+        assert_eq!(
+            checks(&mut hb, T0, T0 + 60_000),
+            vec![0, 20_000, 40_000, 60_000]
+        );
+        // Out-of-range intervals are clamped to 15–30 s.
+        hb.set_plan(WakePlan {
+            mic_every_seconds: Some(1),
+            ..WakePlan::default()
+        });
+        assert_eq!(
+            checks(&mut hb, T0 + 61_000, T0 + 91_000),
+            vec![61_000, 76_000, 91_000]
+        );
+        hb.set_plan(WakePlan {
+            mic_every_seconds: Some(600),
+            ..WakePlan::default()
+        });
+        assert_eq!(
+            checks(&mut hb, T0 + 92_000, T0 + 152_000),
+            vec![92_000, 122_000, 152_000]
+        );
+        // The clock going back more than an interval checks at once.
+        assert!(hb.mic_due(T0));
+        // Turned off: never again, and turning it on checks at once.
+        hb.set_plan(WakePlan::default());
+        assert!(!hb.mic_due(T0 + 500_000));
+        hb.set_plan(WakePlan {
+            mic_every_seconds: Some(20),
+            ..WakePlan::default()
+        });
+        assert!(hb.mic_due(T0 + 500_001));
+        assert!(!hb.mic_due(T0 + 500_002));
+    }
+
+    #[test]
     fn plan_and_wake_cross_the_ipc_boundary() {
         let plan: WakePlan =
             serde_json::from_str(r#"{"deadlineAt":1762300012500,"idleAfterSeconds":300}"#).unwrap();
         assert_eq!(plan.deadline_at, Some(1_762_300_012_500));
         assert_eq!(plan.idle_after_seconds, Some(300));
-        // An older UI sends no reminder.
+        // An older UI sends no reminder and no microphone interval.
         assert_eq!(plan.reminder_at, None);
+        assert_eq!(plan.mic_every_seconds, None);
+        let plan: WakePlan = serde_json::from_str(
+            r#"{"deadlineAt":null,"idleAfterSeconds":null,"reminderAt":null,"micEverySeconds":20}"#,
+        )
+        .unwrap();
+        assert_eq!(plan.mic_every_seconds, Some(20));
         let plan: WakePlan = serde_json::from_str(
             r#"{"deadlineAt":null,"idleAfterSeconds":null,"reminderAt":1762300060000}"#,
         )

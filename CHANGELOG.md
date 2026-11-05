@@ -5,9 +5,95 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
-Likely 0.5.0.
+Likely 0.5.1.
+
+### Security
+
+- **TLS public-key pinning for the official Beacon host** (`beacon.nowo.tech`, docs/PINNING.md). Every Beacon request
+  (API calls, update check, updater) now goes through a Rust HTTP client (reqwest + rustls, `src-tauri/src/net.rs`)
+  instead of the Tauri HTTP plugin, which is removed (crate, npm package and `http:default` permission). Validation:
+  WebPKI against the compiled-in Mozilla roots (the OS store is not consulted), then, on the pinned host, a valid
+  chain must contain a pinned CA key (SPKI SHA-256; pin set v1: ISRG Root YR / YE / X1 / X2, Let's Encrypt YR1, and
+  Google Trust Services R1 / R4 as the backup CA; never a leaf key). On mismatch the app fails closed before sending
+  anything: "La conexión con Beacon no es de confianza (certificado inesperado)", no offline queueing, no "continue
+  anyway"; a non-sensitive event (host, pin set version) goes to stderr. Self-hosted servers keep standard WebPKI and
+  Settings says "Connection not pinned"; loopback is never pinned. The pin set (`src-tauri/pins.json`) has a version
+  and an expiry (2028-05-01); past it the app falls back to WebPKI and asks for an update, and CI fails 90 days
+  before. New commands `beacon_fetch` and `connection_security`, granted to `main` only.
+- Pinning follow-ups (security review 2026-11-05, appendix FY):
+  - `beacon_fetch`, the update check and the updater only talk to the origin (scheme, host, port) of the server being
+    signed in to: new command `beacon_bind` (main window only), called before the sign-in requests and at start-up;
+    other origins are refused, so `Authorization` never leaves that origin; switching servers needs a sign-out
+    (`secret_delete` clears the binding). Plain `http://` to `localhost` / `127.0.0.1` / `[::1]` is accepted in debug
+    builds only (FY-L1).
+  - Pin set expiry tripwire: `.github/workflows/pins.yml` runs `scripts/release/check-pin-expiry.mjs` every Monday and
+    on demand (fails within 90 days), and `release.yml` refuses to build when the set expires within 180 days (FY-L2).
+  - An expired pin set is shown in the main view (card) and once per pin set version as a desktop notification, not
+    only in Settings (FY-I1).
+  - Updater error details no longer carry URL query strings (pre-signed artifact URLs) into "Copy details" (FY-I2).
+  - THIRD-PARTY-NOTICES.md lists `webpki-roots` (CDLA-Permissive-2.0) (FY-I6). README / SECURITY.md say that
+    self-hosted servers behind a private or corporate CA are not supported, updater included (FY-I7).
+    docs/PINNING.md lists the server-side preconditions: CAA for `letsencrypt.org` and `pki.goog`, an explicit ACME
+    issuer (never ZeroSSL), and a chain monitor (FY-M1).
+## [0.5.0] - 2026-11-05
+
+**Upgrading on Windows from 0.1.0 (`.msi`):** the in-app update installs in passive mode, so it removes a leftover
+0.1.0 `.msi` install **without asking first**; Windows then shows an **administrator (UAC) prompt** in the middle of
+the update (that copy was installed for all users in Program Files). Approve it to remove the old copy, or decline and
+remove *TimeTrack* 0.1.0 later from Settings → Apps. Installing 0.5.0 by hand asks before removing it.
+
+**"Continue last" shortcut:** the default is now **Ctrl+Alt+T** on Windows, **⌘⌥T** on macOS (⌘⌥Space of the
+previews is Finder search) and **Ctrl+Alt+Shift+R** on Linux (Ctrl+Alt+T opens a terminal on Ubuntu / GNOME; the
+window shortcut stays Ctrl+Alt+Shift+T). A stored shortcut still at the old default moves to the new default of its
+system, any other is kept.
 
 ### Added
+
+- **Compact and full window views** (`src/lib/layout.ts`). Below 900 px the window keeps the quick tracker: one
+  column, at most 33rem wide and centred, so a window a bit wider never shows a stretched, empty UI. From 900 px (and
+  signed in) the full desktop view takes over: a sections sidebar (*Tasks*, *Pinned & recent*, *My time*, *Settings*),
+  the task list with the running timer pinned to the top of its pane, and a detail pane with the selected (or running)
+  task — Start / Switch / Stop, Pin, Open in Beacon, its time today and this week, today's entries on it — and the week
+  by day. *My time* lists today's entries of every task and the week by day; *Settings* opens as a page in the main
+  pane. Everything comes from the entries the app already reads (`src/lib/week.ts`), computed locally.
+- **"Compact view" / "Full view" toggle** in the header, in the tray menu (`layout-full` / `layout-compact`) and with
+  Ctrl/⌘+Shift+L: the window is resized to the size remembered for that view (else 400 × 640 or 1200 × 780), kept on
+  a screen it fits on or centred on the current one, never larger than the work area. The view, size and position of
+  each view are remembered per device (`time-track-desktop.window` in local storage; removed by *Clear local data*;
+  listed in *What we collect*); maximised or minimised windows are not remembered. Capabilities
+  `core:window:allow-set-size`, `allow-set-position` and `allow-unmaximize` (main window only).
+- Keyboard and screen readers in the full view: F6 / Shift+F6 move between the sidebar, the main pane and the detail
+  pane; arrow keys or a click on a row show that task in the detail pane (the row is marked `aria-current`); landmarks
+  `nav` (Sections), `main` and `aside` (Task details); the week is a list with the time as text (the bars are
+  decorative) and today marked `aria-current="date"`. Panes are inert behind the "Still there?" modal. English and
+  Spanish.
+- Tests: `tests/unit/layout.test.ts`, `tests/unit/layout-app.test.ts`, and `tests/e2e/layout.spec.ts` (400 × 640 and
+  1280 × 800 in light and dark: no horizontal scroll, panes never overlap, axe; view toggle, Ctrl+Shift+L, F6).
+  `pnpm screenshots:layout` writes Spanish review screenshots of both views and the width in between. The mock
+  server gets `POST /__mock/entries/seed`.
+- **Continue last** (desktop quick win Q1–Q3): the stopped timer card's button now reads *Continue last* and shows the
+  global shortcut; a second global shortcut (`set_global_shortcut` slot `resume`, default `CommandOrControl+Alt+T`, `CommandOrControl+Alt+Shift+R` on Linux,
+  Settings → *Continue, reminders and lock*) starts the last task again as a new entry with the window hidden. The
+  tray's elapsed time is refreshed every minute by the Rust heartbeat (`tray_clock.rs`; `set_tray_status` takes an
+  optional `clock` with the start and the translated templates): menu-bar title on macOS, tooltip everywhere.
+- **Three answers on return from idle** (Q4): *Keep* · *Discard* (stop at the idle start) · *Reassign* with a task picker
+  (pinned, recent, search run by the main window, quick *Meeting* choice) in the prompt window and the in-app modal;
+  the idle span becomes its own entry through the queue and the API client (`discard-idle` `reassign` `then:
+  continue`, or four backdated stops / starts without `features.idle_reassign`). The gap question uses the same
+  picker. New prompt actions `reassign-open` / `-cancel` / `-search` / `-save` and the `query` answer field
+  (`prompt.rs`). The prompt is not redrawn for an identical view (a typed note, search or choice survives a tick).
+- **Pause on screen lock or sleep** (Q6, on by default): OS events in `session.rs` behind `SessionSource` /
+  `SessionSink` (Windows WTS session notifications and power broadcasts on a hidden window, macOS
+  `com.apple.screenIsLocked` / `screenIsUnlocked` and workspace sleep / wake, Linux logind `Lock` / `Unlock` /
+  `LockedHint` / `PrepareForSleep`), sent to the UI as `session-event`; the lock time counts as idle and the three
+  answers follow on return (`lockReturn`, `src/lib/idleChoices.ts`).
+- **"Working without a timer?"** (Q5, on by default): input for N minutes (5–30, default 10) during working hours with
+  no timer → a notification with *Start <last task>* / *Choose task* (two buttons, `notify.rs` `actions`), at most
+  once every 45 minutes, not on days off, at lunch, while paused or right after another message; no *Start* when the
+  last task was a meeting. Lines and poses in the seven languages (`src/lib/nudge.ts`, `nudge` in `messages/*.ts`).
+- `docs/ROADMAP.md`: the recommended next steps with status, owner component, value, effort and privacy risk, the
+  items considered but not scheduled, and what TimeTrack deliberately will not do (worker trust, GDPR, Estatuto de
+  los Trabajadores, LOPDGDD).
 
 - **Light and dark theme switch**: Settings → Theme, *System* (default) / *Light* / *Dark*, stored locally
   (`settings.theme`), applied before the first screen and to the native window (title bar) through Tauri's
@@ -115,34 +201,74 @@ Likely 0.5.0.
     Settings → My schedule, the four reminders as Windows toasts and the in-app toast, light and dark, in Spanish.
   - Mock server: `daysOff` and `locale` on `GET me` (config).
 
+- **Open Beacon in** (Settings): *System default browser* (default), one of the browsers installed on this computer, or
+  *Custom…* (native file dialog opened by the app: an `.exe` on Windows, an `.app` on macOS, an executable on Linux). Every link the app opens goes through one helper
+  (`App.openExternal` → Rust `open_external`): Beacon, My time, task links, *Open the page again* and the sign-in page,
+  the Apps / Store pages, the tray items, and any `target=_blank` / `window.open` / navigation the webview tries on its
+  own (refused by the window and handed to the helper). Detection (`src-tauri/src/browser.rs`): Windows
+  `StartMenuInternet` (HKCU / HKLM, incl. `WOW6432Node`) plus `App Paths`; macOS LaunchServices https handlers
+  (`LSCopyAllHandlersForURLScheme`); Linux `.desktop` entries with `x-scheme-handler/https` in the XDG data dirs plus
+  the Flatpak and Snap export dirs (Brave, Firefox, Chrome, Chromium, Edge, Vivaldi, Opera, Safari …). Kept per
+  computer by the Rust side (`browser.json` in the app's config folder). A chosen browser that is gone falls back to the system default with a notice, and
+  Settings marks it *(not found)*.
+- **Copy link** next to My time, the running task's link and *Open the page again*, plus a right-click / long-press
+  menu (*Open in the browser* / *Copy link*) on every Beacon link. Copied with the clipboard-manager plugin
+  (write-text only); short confirmation in the status region (`aria-live`, never focused). When no browser opens,
+  the link is copied instead ("The browser could not be opened — link copied"). Copied links keep the same checks as
+  opening and drop user info, secret-looking query parameters (`token`, `key`, `signature`, `code` …) and
+  `#access_token=…` fragments.
+- **Empty states with the mascot** for the list: nothing pinned (tracked before) → *Pin a task* (scrolls to the list
+  and points at the pin), never tracked → *Start a timer* (focuses search), no task at all → *Open the tasks in
+  Beacon*. One fixed-height slot, the same 72 px picture (1x / 2x WebP) in the three; one line and one action in the
+  friendly-message language (7 languages). New owner art, imported with `scripts/mascot/import-poses.sh`: a
+  thumbtack (`pose-empty-pinned`), a stopwatch (`pose-empty-recent`) and a blank clipboard (`pose-empty-tasks`), each
+  with a `-dark` variant with a light outer stroke shown in the dark theme (CSS follows Settings → Theme and the system).
+  The mapping is data (`EMPTY_POSES`), with `peek-3` / `focus` / `teamwork` as fallbacks. `pnpm screenshots:links`
+  (`LINKS_SCREENS=<dir>`) renders them and the new
+  settings, light and dark, in Spanish.
+- **Meeting detection** (opt-in, off by default, dated consent; Settings → Meetings): when a known meeting app (Teams,
+  Zoom, Webex, Slack, Discord, Skype, GoTo, Jitsi Meet) or a browser call holds the microphone for 2 minutes
+  (configurable 1 / 2 / 5 / 10), a desktop notification (falling back to an in-app toast) with the teamwork pose asks
+  "Looks like you're in a meeting (Teams). Which meeting is it?": *Choose task* (meeting-like tasks first, pinned,
+  recent, search), *Generic meeting* (asked once, then remembered), *Not a meeting*, *Don't ask for this app*; with a
+  non-meeting timer running, *Switch to the meeting*. Nothing is asked while a meeting-like task already runs. When the
+  microphone stays free for a minute: "Meeting over (32 min). Back to <previous task>?" with *Back* / *Stop*. During
+  the call the "Still there?" prompt is the softer meeting one. Questions respect the 1 h pause, the "Still there?"
+  question, working hours / days off (with no timer running) and a 10-minute gap. Texts in the seven message languages,
+  UI in English and Spanish.
+  - Rust: `src-tauri/src/meeting/` with a `MicDetector` per OS (Windows microphone consent store via `winreg`, macOS
+    CoreAudio default input + process objects on 14+ with a running-apps fallback, Linux `pactl` / `pw-dump`), pure
+    parsers tested on recorded fixtures (`src-tauri/tests/fixtures/meeting/`). Polled by the heartbeat every 20 s
+    (`WakePlan.micEverySeconds`, clamped to 15–30 s) only while the switch is on; `mic` events carry app ids only. No
+    new command or capability.
+  - UI: `src/lib/meetings.ts` (state machine: debounce, end grace, rate limit, notes), `src/ui/meetings.ts` (toast,
+    picker, Settings), `pnpm screenshots:meetings`.
+
 ### Security
 
-- **TLS public-key pinning for the official Beacon host** (`beacon.nowo.tech`, docs/PINNING.md). Every Beacon request
-  (API calls, update check, updater) now goes through a Rust HTTP client (reqwest + rustls, `src-tauri/src/net.rs`)
-  instead of the Tauri HTTP plugin, which is removed (crate, npm package and `http:default` permission). Validation:
-  WebPKI against the compiled-in Mozilla roots (the OS store is not consulted), then, on the pinned host, a valid
-  chain must contain a pinned CA key (SPKI SHA-256; pin set v1: ISRG Root YR / YE / X1 / X2, Let's Encrypt YR1, and
-  Google Trust Services R1 / R4 as the backup CA; never a leaf key). On mismatch the app fails closed before sending
-  anything: "La conexión con Beacon no es de confianza (certificado inesperado)", no offline queueing, no "continue
-  anyway"; a non-sensitive event (host, pin set version) goes to stderr. Self-hosted servers keep standard WebPKI and
-  Settings says "Connection not pinned"; loopback is never pinned. The pin set (`src-tauri/pins.json`) has a version
-  and an expiry (2028-05-01); past it the app falls back to WebPKI and asks for an update, and CI fails 90 days
-  before. New commands `beacon_fetch` and `connection_security`, granted to `main` only.
-- Pinning follow-ups (security review 2026-11-05, appendix FY):
-  - `beacon_fetch`, the update check and the updater only talk to the origin (scheme, host, port) of the server being
-    signed in to: new command `beacon_bind` (main window only), called before the sign-in requests and at start-up;
-    other origins are refused, so `Authorization` never leaves that origin; switching servers needs a sign-out
-    (`secret_delete` clears the binding). Plain `http://` to `localhost` / `127.0.0.1` / `[::1]` is accepted in debug
-    builds only (FY-L1).
-  - Pin set expiry tripwire: `.github/workflows/pins.yml` runs `scripts/release/check-pin-expiry.mjs` every Monday and
-    on demand (fails within 90 days), and `release.yml` refuses to build when the set expires within 180 days (FY-L2).
-  - An expired pin set is shown in the main view (card) and once per pin set version as a desktop notification, not
-    only in Settings (FY-I1).
-  - Updater error details no longer carry URL query strings (pre-signed artifact URLs) into "Copy details" (FY-I2).
-  - THIRD-PARTY-NOTICES.md lists `webpki-roots` (CDLA-Permissive-2.0) (FY-I6). README / SECURITY.md say that
-    self-hosted servers behind a private or corporate CA are not supported, updater included (FY-I7).
-    docs/PINNING.md lists the server-side preconditions: CAA for `letsencrypt.org` and `pki.goog`, an explicit ACME
-    issuer (never ZeroSSL), and a chain monitor (FY-M1).
+- Links no longer go through the opener plugin's JavaScript API: the `opener:allow-open-url` permission is gone from
+  the main window. `open_external` (main window only) re-checks the URL (https, or http to this computer; no
+  credentials, no quote / `$` / backtick / backslash / control characters), launches a chosen browser with an argv
+  array (never a shell; `open -a <app> <url>` on macOS) and resolves a detected browser from the OS again by id, so the
+  webview never supplies a command line. New permissions, main window only: `clipboard-manager:allow-write-text` and
+  the commands `open_external`, `list_browsers`, `get_browser`, `set_browser`, `pick_browser`; the prompt window gets
+  nothing new and refuses navigation and new windows.
+- The browser choice is kept on the Rust side, not taken from the webview (security review 2026-11-05, GC-L1):
+  `open_external` takes only the URL and reads the choice from `BrowserState` (`browser.json` in the app's config
+  folder). `set_browser` accepts only the system default or the id of a browser detected again on this computer;
+  a custom browser is chosen only in the native file dialog that Rust opens itself (`pick_browser`), so the webview has
+  no `dialog:allow-open` permission and never passes a path. A custom browser must be an absolute path to an existing
+  regular file: an `.exe` outside `C:\Windows` on Windows, an `.app` bundle with `Contents/Info.plist` on macOS, a
+  file with an execute bit on Linux; shells, interpreters and launchers (`sh`, `bash`, `env`, `python3`, `perl`,
+  `xdg-open`, `cmd`, `powershell`, `mshta`, `rundll32` …) are refused, also behind a symbolic link. It is checked again
+  before every launch, and the resolved path that was checked is the one launched (GC-I7). *Clear local data* resets it to the system default.
+- `platforms.yml` runs Rust clippy and tests on hosted Windows and macOS for pull requests that touch `src-tauri`
+  and by hand; ci.yml keeps Linux (GC-I4).
+- Linux `.desktop` entries whose `Exec` hands the URL to a shell (`sh -c "browser %u"`, `bash -lc …`, or the URL inside
+  a quoted command string, which the Desktop Entry spec forbids) are not offered as browsers (GC-I1).
+- Signing out also deletes the last task, the pinned tasks, the "Working without a timer?" state and the generic
+  meeting task (GC-L2), so a previous account's task titles never reach the next person's notifications, buttons or
+  "Continue last".
 - App commands are ACL-scoped (security review 2026-11-05, FN-L1): `build.rs` declares them in the app manifest
   (`src-tauri/app-commands.rs`) and each capability grants its window only its own (`main`: keychain, tray,
   shortcut, updater, heartbeat, notifications, opening the prompt; `prompt`: `prompt_view`, `prompt_answer`,
@@ -156,6 +282,8 @@ Likely 0.5.0.
 
 ### Changed
 
+- The main window opens at 400 × 640 and can no longer be made smaller than the compact layout (`minWidth` 380,
+  `minHeight` 560, was 360 × 480). The "Still there?" window keeps a fixed size (no longer resizable).
 - Overtime lines ("take a real break", from 6 h) carry no figure at all in any language: no hour count, no "ten
   minutes" (owner decision); a test enforces it.
 - The in-app toast (fallback) reserves room below the page while it is visible, so it never covers the last task rows.
@@ -166,7 +294,28 @@ Likely 0.5.0.
   `tests/screenshots/`): placeholder Beacon `https://beacon.example.test` and neutral demo data; new images of the
   Microsoft Store build (Settings → About, update required). The e2e tests no longer write screenshots.
 
-## [0.4.0] - unreleased
+### Fixed
+
+- **Windows: upgrading from 0.1.0.** 0.1.0 was built without `bundle.publisher`, so Tauri registered it under the
+  manufacturer "nowo"; 0.4.0 sets "nowo.tech". The 0.4.0 installer therefore (a) offered *Uninstall before installing*
+  for a 0.1.0 per-user install, read the install folder from the new `HKCU\Software\nowo.tech\TimeTrack` key, found
+  nothing, ran `uninstall.exe _?=` and stopped with "Unable to uninstall!", and (b) never noticed a 0.1.0 `.msi`
+  install (per machine, Program Files), which stayed next to the new per-user one (two *TimeTrack* entries in
+  Settings → Apps). Reproduced on GitHub-hosted Windows runners with the 0.1.0 and 0.4.0 release installers.
+  NSIS installer hooks (`src-tauri/windows/installer-hooks.nsh`, `bundle.windows.nsis.installerHooks`) now, before
+  Tauri's pages: point the new key at a 0.1.0 per-user install, so the upgrade lands in the same folder and the
+  uninstall choice works; and, for a 0.1.0 `.msi`, ask to remove it (`msiexec /x {ProductCode} /passive`, Windows asks
+  for administrator approval; the old copy, tray included, is closed first), with a message saying how to remove it by
+  hand when that fails or is declined. After installing, the stale 0.1.0 key is deleted (unless that `.msi` is still
+  installed) and a *start at login* entry pointing at the removed Program Files copy follows the app. Identifier,
+  publisher and per-user install mode are unchanged (a unit test pins them); the in-app updater route (`/P /UPDATE`)
+  is unchanged. A running app (tray included) is closed by the installer before files are replaced.
+- Manual Windows upgrade test (`.github/workflows/installer-upgrade-test.yml`, `scripts/windows/upgrade-test.ps1`):
+  installs 0.1.0 (MSI, NSIS or both) or the previous release on a clean runner, optionally with the app running,
+  upgrades silently (`/S`), the updater's way (`/P /UPDATE`) or through the installer UI, and checks the exit code, a
+  single Uninstall entry with the new version, no MSI left and that the app starts.
+
+## [0.4.0] - 2026-11-04
 
 Zero-cost signing and auto-update (owner decision 2026-11-04). Plan, Beacon changes and owner steps:
 [docs/RELEASE-PLAN-0.4.0.md](docs/RELEASE-PLAN-0.4.0.md).
@@ -198,7 +347,7 @@ Zero-cost signing and auto-update (owner decision 2026-11-04). Plan, Beacon chan
   they cannot use (the updater request carries `bundle_type`).
 - macOS bundles are ad-hoc signed (`signingIdentity: "-"`), so Apple Silicon shows the normal "cannot verify" prompt
   instead of "damaged".
-- The updater public key is committed in `tauri.conf.json` (placeholder until the owner adds it); the
+- The updater public key is committed in `tauri.conf.json` (the owner's minisign key, B39E7F906C923893); the
   `TAURI_UPDATER_PUBKEY` variable is now an optional override (also compiled in). The release workflow requires the
   signing key instead of skipping updater artifacts.
 - Release workflow runners come from repository variables (`LINUX_RUNNER`, `WINDOWS_RUNNER`, `MACOS_RUNNER`, JSON

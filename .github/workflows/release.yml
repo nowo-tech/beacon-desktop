@@ -257,6 +257,12 @@ jobs:
           pattern: desktop-*
           path: out
           merge-multiple: true
+      # Test installers of installer-upgrade-test.yml carry a throwaway updater key and this marker (GC-I6).
+      - name: No test build among the files
+        run: |
+          if find out -iname '*DO-NOT-PUBLISH*' | grep -q .; then
+            echo "::error::a test build (throwaway updater key) is among the release files"; exit 1
+          fi
       - name: stable.json
         run: |
           node scripts/release/channel.mjs stable --version "${{ needs.prepare.outputs.version }}" --changelog CHANGELOG.md \

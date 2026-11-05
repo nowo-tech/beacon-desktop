@@ -16,8 +16,9 @@ POSE_HEIGHT=96
 QUALITY=80
 # Clean-up, in pixels of a 1024 px wide source (scaled to the real width):
 # parts more than KEEP_DISTANCE from the character are stray fragments (crop leftovers at the edges of the art);
-# the soft glow is kept within GLOW of what stays.
-KEEP_DISTANCE=64
+# the soft glow is kept within GLOW of what stays. IMPORT_POSES_KEEP_DISTANCE overrides KEEP_DISTANCE (art whose
+# antenna arcs float further from the head).
+KEEP_DISTANCE=${IMPORT_POSES_KEEP_DISTANCE:-64}
 GLOW=16
 # White background → transparent: flood fill from the four corners with this fuzz.
 WHITE_FUZZ=8%

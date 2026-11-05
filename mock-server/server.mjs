@@ -559,6 +559,29 @@ export function createMockServer(options = {}) {
         return send(res, 204);
       case 'POST device/approve':
         return approveDevice(body.userCode, body.approve !== false) ? send(res, 204) : error(res, 404, 'not_found', 'Unknown code.');
+      // Finished entries of the demo user ({entries: [{taskId, startedAt, endedAt}]}), for the week / today views.
+      case 'POST entries/seed': {
+        const list = state.entries.get(USERS[0].id) ?? [];
+        for (const item of body.entries ?? []) {
+          const task = TASKS.find((t) => t.id === item.taskId) ?? { id: item.taskId, title: item.taskId, boardId: null };
+          const from = new Date(item.startedAt);
+          const to = new Date(item.endedAt);
+          list.push({
+            id: randomUUID(),
+            taskId: task.id,
+            taskTitle: task.title,
+            boardId: task.boardId,
+            startedAt: from.toISOString(),
+            endedAt: to.toISOString(),
+            durationSeconds: Math.round((to.getTime() - from.getTime()) / 1000),
+            source: 'web',
+            metadata: null,
+          });
+        }
+        list.sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+        state.entries.set(USERS[0].id, list);
+        return send(res, 204);
+      }
       case 'POST timer/backdate': {
         for (const timer of state.timers.values()) {
           timer.startedAt = new Date(new Date(timer.startedAt).getTime() - Number(body.seconds ?? 0) * 1000).toISOString();

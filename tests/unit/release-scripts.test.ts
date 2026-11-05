@@ -9,9 +9,11 @@ const SHAPED_KEY = Buffer.from(`untrusted comment: minisign public key: 01234567
 const config = (pubkey?: string) => ({ plugins: { updater: pubkey === undefined ? undefined : { pubkey } } });
 
 describe('updater key release check', () => {
-  it('the committed config carries the placeholder, and the Rust side knows the same marker', () => {
+  it('the committed config carries the owner\'s updater public key, and the Rust side knows the placeholder marker', () => {
     const conf = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
-    expect(conf.plugins.updater.pubkey).toBe(PLACEHOLDER);
+    expect(conf.plugins.updater.pubkey).not.toBe(PLACEHOLDER);
+    expect(describePubkey(conf.plugins.updater.pubkey)).toBe('B39E7F906C923893');
+    expect(checkUpdaterKey({ config: conf, env: {} })).toMatchObject({ ok: true, level: 'ok' });
     expect(conf.bundle.createUpdaterArtifacts).toBe(true);
     expect(conf.bundle.windows.nsis.installMode).toBe('currentUser');
     expect(conf.bundle.targets).not.toContain('msi');
@@ -121,5 +123,28 @@ describe('pin set expiry tripwire (FY-L2)', () => {
     expect(parseArgs(['--min-days', '180', 'x.json'])).toEqual({ minDays: 180, path: 'x.json' });
     expect(() => parseArgs(['--min-days', 'soon'])).toThrow('whole number');
     expect(() => parseArgs(['--min-days', '-1'])).toThrow('whole number');
+  });
+});
+
+describe('Windows installer upgrades', () => {
+  const conf = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+  const hooks = readFileSync(`src-tauri/${conf.bundle.windows.nsis.installerHooks}`, 'utf8');
+
+  it('keeps what an in-place upgrade depends on: identifier, publisher, per-user NSIS', () => {
+    // Changing any of these makes the next installer look for the previous install in the wrong place (0.4.0 changed
+    // the publisher and its reinstall page could not uninstall 0.1.0).
+    expect(conf.identifier).toBe('tech.nowo.timetrack');
+    expect(conf.productName).toBe('TimeTrack');
+    expect(conf.bundle.publisher).toBe('nowo.tech');
+    expect(conf.bundle.windows.nsis.installMode).toBe('currentUser');
+    expect(conf.plugins.updater.windows.installMode).toBe('passive');
+  });
+
+  it('the NSIS hooks know the current and the 0.1.0 registry keys', () => {
+    expect(hooks).toContain(`!define TT_PRODUCT "${conf.productName}"`);
+    expect(hooks).toContain(`!define TT_KEY "Software\\${conf.bundle.publisher}\\${conf.productName}"`);
+    // 0.1.0 had no bundle.publisher: Tauri used the identifier's second part.
+    expect(hooks).toContain(`!define TT_LEGACY_KEY "Software\\${conf.identifier.split('.')[1]}\\${conf.productName}"`);
+    expect(hooks).toContain('!macro NSIS_HOOK_POSTINSTALL');
   });
 });

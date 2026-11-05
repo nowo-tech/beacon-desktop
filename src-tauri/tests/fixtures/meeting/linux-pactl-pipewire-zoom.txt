@@ -1,0 +1,58 @@
+Source Output #87
+	Driver: PipeWire
+	Owner Module: n/a
+	Client: 86
+	Source: 55
+	Sample Specification: float32le 1ch 48000Hz
+	Channel Map: mono
+	Format: pcm, format.sample_format = "\"float32le\""  format.rate = "48000"  format.channels = "1"  format.channel_map = "\"mono\""
+	Corked: no
+	Mute: no
+	Volume: mono: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Buffer Latency: 0 usec
+	Source Latency: 0 usec
+	Resample method: PipeWire
+	Properties:
+		client.api = "pipewire-pulse"
+		pulse.server.type = "unix"
+		application.name = "ZOOM VoiceEngine"
+		application.process.id = "48211"
+		application.process.user = "ana"
+		application.process.host = "laptop"
+		application.process.binary = "zoom"
+		application.language = "es_ES.UTF-8"
+		window.x11.display = ":0"
+		application.process.session_id = "2"
+		media.name = "record"
+		node.rate = "1/48000"
+		node.latency = "960/48000"
+		stream.is-live = "true"
+		node.name = "ZOOM VoiceEngine"
+		node.autoconnect = "true"
+		media.class = "Stream/Input/Audio"
+		object.serial = "1311"
+		module-stream-restore.id = "source-output-by-application-name:ZOOM VoiceEngine"
+
+Source Output #102
+	Driver: PipeWire
+	Owner Module: n/a
+	Client: 99
+	Source: 55
+	Sample Specification: float32le 1ch 25Hz
+	Channel Map: mono
+	Format: pcm, format.sample_format = "\"float32le\""  format.rate = "25"  format.channels = "1"  format.channel_map = "\"mono\""
+	Corked: yes
+	Mute: no
+	Volume: mono: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Buffer Latency: 0 usec
+	Source Latency: 0 usec
+	Resample method: PipeWire
+	Properties:
+		client.api = "pipewire-pulse"
+		application.name = "PulseAudio Volume Control"
+		application.id = "org.PulseAudio.pavucontrol"
+		application.process.binary = "pavucontrol"
+		media.name = "Peak detect"
+		media.class = "Stream/Input/Audio"

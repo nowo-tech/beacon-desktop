@@ -116,7 +116,9 @@ describe('0.2.0 UX', () => {
     expect(ui.$('#total-today').textContent).toBe('Today0:00');
     expect(ui.$('#total-week').textContent).toBe('This week0:00');
     expect(ui.$('#last-task').textContent).toBe('Last: Review pull request queue');
-    expect(ui.$('#resume').getAttribute('aria-label')).toBe('Resume “Review pull request queue”');
+    expect(ui.$('#resume').getAttribute('aria-label')).toBe('Continue last: “Review pull request queue” (new entry)');
+    expect(ui.$('#resume').textContent).toBe('Continue last');
+    expect(ui.$('#continue-shortcut').textContent).toBe('Shortcut: Ctrl+Alt+Shift+R');
     expect(ui.platform.hooks.trayMenu?.primary).toEqual({ id: 'resume', label: 'Resume “Review pull request queue”' });
     expect(ui.platform.hooks.trayMenu?.switchTo.map((item) => item.id)).toEqual(['switch:T-102', 'switch:T-101']);
     ui.click('#resume');
@@ -156,7 +158,7 @@ describe('0.2.0 UX', () => {
       vi.useRealTimers();
     }
     expect(ui.$('#timer-meta').textContent).toBe('Billing · Engineering · desde 8:05');
-    expect(ui.$('#quick-empty').textContent).toContain('Inicia una tarea');
+    expect(ui.$('#quick-empty').textContent).toContain('Fija una tarea');
     expect(ui.$('#elapsed').getAttribute('role')).toBe('timer');
     expect(ui.$('#stop').getAttribute('aria-label')).toBe('Parar «Fix invoice rounding bug»');
     expect(ui.platform.hooks.trayMenu?.search).toBe('Buscar tarea…');
