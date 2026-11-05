@@ -98,6 +98,21 @@ Italian, Dutch and Portuguese (the Beacon user's language when the server sends 
 local times per language. Settings → **Friendly messages**: *Fun messages* and *Wellbeing reminders*, both on by
 default. Pools: `src/lib/messages/`; rules: `src/lib/friendly.ts`.
 
+### Working-hours reminders
+
+Settings → **My schedule** holds your week: start, end and lunch break per weekday, or a day off. It is filled in from
+the working hours your organisation publishes in Beacon (`GET me.workingHours`; the gap between two slots of a day is
+the lunch break) and you can change any value on this computer only; local values are marked *This computer*, and
+*Reset to Beacon's schedule* goes back. Holidays and vacations come from Beacon (`GET me.daysOff`, once
+TimeTrackBundle publishes them) and from days off you add there.
+
+With *Working-hours reminders* on (default), a desktop notification with a button arrives at your start time ("Shall we
+start? Last task: …" → *Start* resumes it), at lunch ("Lunch time. Shall I stop the timer?" → *Stop*; then "Back to
+…?" → *Resume*) and at the end of the day ("Shall we call it a day?" with today's total → *Stop*). None on days off,
+none that make no sense (no "start" with a timer running, no "stop" without one), each once a day, in the schedule's
+time zone, and after a sleep only within 15 minutes of its time. They follow the 1 h pause but not the 50-minute
+gap of the friendly messages. Rules: `src/lib/schedule.ts`; texts: `reminders` in `src/lib/messages/`.
+
 "Still there?" itself opens in **its own small window, always on top and centred on the monitor you are using**, also
 while the main window is in the tray (`src-tauri/src/prompt.rs`, `src/ui/prompt.ts`), with a countdown (2 minutes, 10
 during meetings): with no answer the timer stops at the start of the idle time, and the window offers **Resume …

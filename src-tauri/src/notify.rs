@@ -6,13 +6,15 @@
 //! - **macOS**: Notification Center, the pose as the content image (the app icon is the sender's).
 //! - **Linux**: the Desktop Notifications service (GNOME, KDE, …), the pose through the `image-path` hint.
 //!
-//! A click on the notification brings the main window forward. The pictures are compiled in (`pose_art.rs`) and
+//! A click on the notification brings the main window forward. A working-hours reminder may carry one button
+//! (Start / Stop / Resume, ids in `ACTION_IDS`): pressing it sends the main window a `notification-action` event with
+//! the id, and the UI starts or stops the timer; any other id from the UI is dropped. The pictures are compiled in (`pose_art.rs`) and
 //! written once to the app's cache folder, since every OS API wants a file.
 
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::pose_art::POSE_ART;
 
@@ -22,9 +24,38 @@ pub struct FriendlyNote {
     pub title: String,
     pub body: String,
     pub pose: Option<String>,
+    /// One button (working-hours reminders); absent for the other messages.
+    #[serde(default)]
+    pub action: Option<NoteAction>,
 }
 
+/// A notification button: what it sends back (`id`) and its translated label.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct NoteAction {
+    pub id: String,
+    pub label: String,
+}
+
+/// The only button ids the UI may ask for (`src/lib/reminders.ts`).
+pub const ACTION_IDS: [&str; 3] = ["schedule-start", "schedule-stop", "schedule-resume"];
+
 const TITLE_MAX: usize = 80;
+const LABEL_MAX: usize = 24;
+
+/// The button of `note` when its id is a known one and its label not empty (capped), else none.
+pub fn checked_action(note: &FriendlyNote) -> Option<NoteAction> {
+    let action = note.action.as_ref()?;
+    let label = cap(&action.label, LABEL_MAX);
+    (ACTION_IDS.contains(&action.id.as_str()) && !label.is_empty()).then(|| NoteAction {
+        id: action.id.clone(),
+        label,
+    })
+}
+
+/// Tells the main window that a notification button was pressed.
+fn dispatch(app: &AppHandle, id: &str) {
+    let _ = app.emit_to("main", "notification-action", id.to_string());
+}
 const BODY_MAX: usize = 300;
 
 fn cap(text: &str, max: usize) -> String {
@@ -115,6 +146,23 @@ fn msix_cache(local_app_data: &Path, family: &str) -> PathBuf {
 }
 
 #[cfg_attr(windows, allow(dead_code))]
+/// The button pressed, from what the notification server reported (XDG sends its id, macOS' NSUserNotification its
+/// label), or `None`.
+pub fn pressed<'a>(
+    response: &notify_rust::NotificationResponse,
+    action: Option<&'a NoteAction>,
+) -> Option<&'a NoteAction> {
+    match (response, action) {
+        (notify_rust::NotificationResponse::Action(value), Some(action))
+            if *value == action.id || *value == action.label =>
+        {
+            Some(action)
+        }
+        _ => None,
+    }
+}
+
+#[cfg_attr(windows, allow(dead_code))]
 /// Whether what the notification server reported is a click on the notification itself.
 pub fn is_click(response: &notify_rust::NotificationResponse) -> bool {
     matches!(response, notify_rust::NotificationResponse::Default)
@@ -133,7 +181,7 @@ pub fn show(app: &AppHandle, note: &FriendlyNote) -> Result<(), String> {
         (Some(id), Some(cache)) => pose_file(&cache, id),
         _ => None,
     };
-    platform::show(app, &title, &body, image.as_deref())
+    platform::show(app, &title, &body, image.as_deref(), checked_action(note))
 }
 
 #[cfg(windows)]
@@ -146,6 +194,7 @@ mod platform {
         title: &str,
         body: &str,
         image: Option<&Path>,
+        action: Option<NoteAction>,
     ) -> Result<(), String> {
         let exe = tauri::utils::platform::current_exe().map_err(|e| e.to_string())?;
         let aumid = windows_aumid(&exe, &app.config().identifier)
@@ -154,10 +203,17 @@ mod platform {
         if let Some(path) = image {
             toast = toast.icon(path, IconCrop::Square, "");
         }
+        if let Some(action) = &action {
+            toast = toast.add_button(&action.label, &action.id);
+        }
         let handle = app.clone();
+        let id = action.map(|action| action.id);
         toast
-            .on_activated(move |_| {
-                crate::show_main(&handle);
+            .on_activated(move |argument| {
+                match (&argument, &id) {
+                    (Some(pressed), Some(id)) if pressed == id => dispatch(&handle, id),
+                    _ => crate::show_main(&handle),
+                }
                 Ok(())
             })
             .show()
@@ -174,6 +230,7 @@ mod platform {
         title: &str,
         body: &str,
         image: Option<&Path>,
+        action: Option<NoteAction>,
     ) -> Result<(), String> {
         let mut notification = notify_rust::Notification::new();
         notification
@@ -200,6 +257,9 @@ mod platform {
         // `default`, and only for a notification that offers it.
         #[cfg(not(target_os = "macos"))]
         notification.action("default", "");
+        if let Some(action) = &action {
+            notification.action(&action.id, &action.label);
+        }
         #[cfg(not(target_os = "macos"))]
         let handle = notification.show().map_err(|e| e.to_string())?;
         let app = app.clone();
@@ -214,7 +274,9 @@ mod platform {
                     Err(_) => return,
                 };
                 let _ = handle.wait_for_response(|response: &notify_rust::NotificationResponse| {
-                    if is_click(response) {
+                    if let Some(action) = pressed(response, action.as_ref()) {
+                        dispatch(&app, &action.id);
+                    } else if is_click(response) {
                         crate::show_main(&app);
                     }
                 });
@@ -305,6 +367,74 @@ mod tests {
         assert!(
             msix_cache(Path::new("/L"), "NowoTech.TimeTrack_8wekyb3d8bbwe")
                 .ends_with("Packages/NowoTech.TimeTrack_8wekyb3d8bbwe/LocalCache")
+        );
+    }
+
+    #[test]
+    fn only_known_buttons_with_a_label_are_offered() {
+        let note = |id: &str, label: &str| FriendlyNote {
+            title: "t".into(),
+            body: "b".into(),
+            pose: None,
+            action: Some(NoteAction {
+                id: id.into(),
+                label: label.into(),
+            }),
+        };
+        assert_eq!(
+            checked_action(&note("schedule-stop", " Parar\n")),
+            Some(NoteAction {
+                id: "schedule-stop".into(),
+                label: "Parar".into()
+            })
+        );
+        assert_eq!(checked_action(&note("open-url", "Go")), None);
+        assert_eq!(checked_action(&note("schedule-start", "  ")), None);
+        let long = checked_action(&note("schedule-resume", &"x".repeat(60))).unwrap();
+        assert_eq!(long.label.chars().count(), LABEL_MAX);
+        let plain: FriendlyNote =
+            serde_json::from_str(r#"{"title":"t","body":"b","pose":null}"#).unwrap();
+        assert_eq!(checked_action(&plain), None);
+        let with: FriendlyNote = serde_json::from_str(
+            r#"{"title":"t","body":"b","pose":"lunch","action":{"id":"schedule-stop","label":"Stop"}}"#,
+        )
+        .unwrap();
+        assert_eq!(with.action.unwrap().id, "schedule-stop");
+    }
+
+    #[test]
+    fn a_button_is_recognised_by_its_id_or_its_label() {
+        use notify_rust::{CloseReason, NotificationResponse};
+        let stop = NoteAction {
+            id: "schedule-stop".into(),
+            label: "Parar".into(),
+        };
+        assert_eq!(
+            pressed(
+                &NotificationResponse::Action("schedule-stop".into()),
+                Some(&stop)
+            ),
+            Some(&stop)
+        );
+        assert_eq!(
+            pressed(&NotificationResponse::Action("Parar".into()), Some(&stop)),
+            Some(&stop)
+        );
+        assert_eq!(
+            pressed(&NotificationResponse::Action("default".into()), Some(&stop)),
+            None
+        );
+        assert_eq!(pressed(&NotificationResponse::Default, Some(&stop)), None);
+        assert_eq!(
+            pressed(
+                &NotificationResponse::Closed(CloseReason::Dismissed),
+                Some(&stop)
+            ),
+            None
+        );
+        assert_eq!(
+            pressed(&NotificationResponse::Action("schedule-stop".into()), None),
+            None
         );
     }
 

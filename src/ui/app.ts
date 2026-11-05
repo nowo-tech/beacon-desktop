@@ -3,7 +3,7 @@ import type { DeviceCode, Entry, Me, Task, Timer } from '../api/types';
 import { dashboardUrl, myTimeUrl, sameOriginHttps, taskUrl } from '../lib/beacon';
 import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
 import { type ErrorStage, type ErrorView, describeError } from '../lib/errors';
-import { type Card, type Switches, afterStop, beaconLocale, beaconTimeZone, CATALOG, DAILY_TOAST_MS, IDLE_COUNTDOWN_MINUTES, lineText, MEETING_COUNTDOWN_MINUTES, messageLocale, MIN_GAP_MINUTES, nextCard, noticeTitle, pausedAt, pauseMessages, pickDailyDone, pickIdleLine, resumeMessages, taskKind, visibleCard } from '../lib/friendly';
+import { type Card, type Switches, afterStop, beaconLocale, beaconTimeZone, CARD_TTL_MINUTES, CATALOG, DAILY_TOAST_MS, IDLE_COUNTDOWN_MINUTES, lineText, MEETING_COUNTDOWN_MINUTES, messageLocale, MIN_GAP_MINUTES, nextCard, noticeTitle, pausedAt, pauseMessages, pickDailyDone, pickIdleLine, resumeMessages, taskKind, visibleCard, zonedParts } from '../lib/friendly';
 import type { NoticeKind, PoseId, TaskKind } from '../lib/messages/types';
 import { createTranslator, detectLocale, type Locale, type MessageKey, type Translate } from '../lib/i18n';
 import { type GapChoice, type IdleCheckState, type IdleChoice, WATCHING, decide, decideGap, observeIdle, promptSpan } from '../lib/idleCheck';
@@ -18,8 +18,32 @@ import { elapsedSeconds, formatElapsed } from '../lib/time';
 import { applyTheme, forcedTheme, THEMES, type ThemePreference } from '../lib/theme';
 import { appsPage, safeVerificationUri } from '../lib/urls';
 import { compareVersions, isVersion, updateRequired } from '../lib/version';
+import { ACTION_IDS, actionOfId, composeReminder, type ReminderNote } from '../lib/reminders';
+import {
+  type DayField,
+  type DayOff,
+  type Merged,
+  type ReminderAction,
+  type ReminderLineKind,
+  type Week,
+  type Weekday,
+  EMPTY_SCHEDULE,
+  LEAD_CHOICES,
+  WEEKDAYS,
+  allDaysOff,
+  beaconDaysOff,
+  beaconPart,
+  beaconWeek,
+  dayOffOn,
+  dueReminder,
+  markSeen,
+  mergeWeek,
+  nextReminderAt,
+  setOverride,
+  toggleLocalDayOff,
+} from '../lib/schedule';
 import { withinWorkingHours } from '../lib/workingHours';
-import type { Platform, TrayMenu, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
+import type { FriendlyNotification, Platform, TrayMenu, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
 import { art, ERROR_POSES, moment, poseArt, variant, type Moment } from './mascot';
@@ -183,6 +207,12 @@ export class DesktopApp {
   private wakePlanKey = '';
   /** In-app note about the desktop notifications: the first one was shown (`intro`), or the OS refused them (`off`). */
   nativeNotice: 'intro' | 'off' | null = null;
+  /** Working-hours reminder shown as a toast (desktop notifications off, refused or failing). */
+  reminderToast: ReminderNote | null = null;
+  /** Day of the schedule open in Settings (`<details>`), kept across renders. */
+  private openDays = new Set<Weekday>();
+  /** "Add a day off" date typed in Settings. */
+  private dayOffDraft = '';
   /** "Daily done" toast after a daily-type timer stops. */
   dailyToast: { text: string; pose: PoseId; locale: string } | null = null;
   private dailyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -240,6 +270,8 @@ export class DesktopApp {
     this.platform.onTray((action) => void this.trayAction(action));
     // The regular check, woken by the host (on time while the window is hidden).
     this.platform.onWake(() => void this.tick());
+    // A button of a working-hours reminder notification (Start / Stop / Resume).
+    this.platform.onNotificationAction((id) => void this.reminderAction(actionOfId(id)));
     this.platform.onShortcut(() => this.focusSearch());
     await this.applyShortcut(this.state.settings.shortcut, false);
     this.token = await this.platform.secretGet();
@@ -394,7 +426,9 @@ export class DesktopApp {
   private async signedOut(notice: string | null): Promise<void> {
     await this.platform.secretDelete();
     this.token = null;
-    this.persist({ session: null, activeTimer: null, idleCheck: WATCHING, pendingNote: null });
+    // The schedule (overrides, days off, Beacon's copy) belongs to the person who signs out.
+    this.persist({ session: null, activeTimer: null, idleCheck: WATCHING, pendingNote: null, schedule: { ...EMPTY_SCHEDULE } });
+    this.reminderToast = null;
     this.queue.clear();
     this.tasks = [];
     this.entries = null;
@@ -434,7 +468,7 @@ export class DesktopApp {
 
   private setMe(me: Me): void {
     this.me = me;
-    this.persist({ features: serverFeatures(me) });
+    this.persist({ features: serverFeatures(me), schedule: { ...this.state.schedule, beacon: beaconPart(me) } });
     const minimum = isVersion(me.minSupportedVersion) ? me.minSupportedVersion : null;
     if (minimum !== this.meMinimum) {
       this.meMinimum = minimum;
@@ -691,6 +725,11 @@ export class DesktopApp {
    * service is remembered (Settings says so) and the messages stay inside the app.
    */
   async sendNative(kind: NoticeKind, text: string, pose: PoseId, locale: ReturnType<typeof messageLocale>): Promise<boolean> {
+    return this.sendNativeNote({ title: noticeTitle(locale, kind), body: text, pose });
+  }
+
+  /** `sendNative` for a ready note (title, body, pose and an optional button). */
+  async sendNativeNote(note: FriendlyNotification): Promise<boolean> {
     const before = this.state.settings.nativeStatus;
     let status = before;
     if (status !== 'granted') {
@@ -698,7 +737,7 @@ export class DesktopApp {
       if (permission === 'prompt') permission = await this.platform.requestNotificationPermission();
       status = permission === 'granted' ? 'granted' : permission === 'unsupported' ? 'unsupported' : 'denied';
     }
-    const ok = status === 'granted' && (await this.platform.notifyFriendly({ title: noticeTitle(locale, kind), body: text, pose }));
+    const ok = status === 'granted' && (await this.platform.notifyFriendly(note));
     if (status === 'granted' && !ok) status = 'failed';
     const intro = ok && !this.state.settings.nativeIntroSeen;
     if (status !== this.state.settings.nativeStatus || intro) {
@@ -744,6 +783,149 @@ export class DesktopApp {
     if (card !== null) this.persist({ messages: { ...this.state.messages, card: { ...card, dismissed: true } } });
     this.render();
     this.main?.root.querySelector<HTMLButtonElement>('#stop')?.focus();
+  }
+
+  // ---- Working-hours reminders (local only) -----------------------------------------------------------------------
+
+  /** Beacon's week (live, else as last seen), the effective week with the local overrides, days off, time zone. */
+  scheduleView(): { beacon: Week | null; merged: Merged; daysOff: DayOff[]; timeZone: string | null } {
+    const source = this.me ?? this.state.schedule.beacon;
+    const beacon = beaconWeek(source === null ? null : (source as { workingHours?: unknown }).workingHours);
+    return {
+      beacon,
+      merged: mergeWeek(beacon, this.state.schedule.overrides),
+      daysOff: allDaysOff(beaconDaysOff(source), this.state.schedule.daysOff),
+      timeZone: beaconTimeZone(source),
+    };
+  }
+
+  private remindersOn(): boolean {
+    return this.state.session !== null && this.state.settings.scheduleReminders;
+  }
+
+  /** The next reminder instant for the host's wake-up (null with the reminders off). */
+  private nextReminderAt(): number | null {
+    if (!this.remindersOn()) return null;
+    const view = this.scheduleView();
+    return nextReminderAt({ now: this.now(), timeZone: view.timeZone, week: view.merged.week, daysOff: view.daysOff, leadMinutes: this.state.settings.scheduleLeadMinutes, seen: this.state.schedule.seen });
+  }
+
+  /**
+   * On every tick: the working-hours reminder that is due (start, lunch, end of the day), or the one "working on a day
+   * off?" line when a timer runs on a holiday. They follow their own switch and the pause, never the 50-minute gap
+   * (they are functional), and set it for the cards that come after them. Not over the "Still there?" question.
+   */
+  checkReminders(): void {
+    // A toast that expired (or whose button no longer applies) goes away on the next check.
+    if (this.reminderToast !== null && this.visibleReminder() === null) this.showReminderToast(null);
+    if (!this.remindersOn() || this.view === 'update-required') return;
+    const now = this.now();
+    if (pausedAt(this.state.messages, now) || this.state.idleCheck.phase !== 'watching') return;
+    const view = this.scheduleView();
+    const timer = this.state.activeTimer;
+    const schedule = this.state.schedule;
+    const today = zonedParts(now, view.timeZone).date;
+    if (timer !== null && dayOffOn(today, view.daysOff) !== null && !schedule.seen.includes(`dayOff:${today}`)) {
+      this.fireReminder('dayOff', `dayOff:${today}`, [], today);
+      return;
+    }
+    const due = dueReminder({
+      now,
+      timeZone: view.timeZone,
+      week: view.merged.week,
+      daysOff: view.daysOff,
+      leadMinutes: this.state.settings.scheduleLeadMinutes,
+      running: timer !== null,
+      hasLastTask: this.lastTask() !== null,
+      seen: schedule.seen,
+    });
+    if (due.reminder !== null) this.fireReminder(due.reminder.kind, due.reminder.slot, due.skip, due.reminder.date);
+    else if (due.skip.length > 0) this.persist({ schedule: { ...schedule, seen: markSeen(schedule.seen, due.skip) } });
+  }
+
+  private fireReminder(kind: ReminderLineKind, slot: string, skip: readonly string[], date: string): void {
+    const now = this.now();
+    const timer = this.state.activeTimer;
+    const last = kind === 'start' || kind === 'lunchEnd' ? this.lastTask() : null;
+    const total = kind === 'end' ? formatHoursMinutes(computeTotals(this.entries ?? [], timer, now).today) : null;
+    const { note, state } = composeReminder({ kind, slot, locale: this.messageLocale(), state: this.state.schedule, rng: this.random, now, task: last?.title ?? null, total });
+    // The end-of-day reminder replaces that evening's "it's getting late" card.
+    const messages = this.state.messages;
+    const seen = kind === 'end' ? [...messages.seen, `lateWork:${date}`].slice(-40) : messages.seen;
+    this.persist({ schedule: { ...state, seen: markSeen(state.seen, [...skip, slot]) }, messages: { ...messages, seen, lastShownAt: note.shownAt } });
+    this.deliverReminder(note);
+  }
+
+  /** A desktop notification with the button when the OS shows them, else (or until it answers) the toast. */
+  private deliverReminder(note: ReminderNote): void {
+    const native: FriendlyNotification = {
+      title: note.title,
+      body: note.text,
+      pose: note.pose,
+      action: note.action !== null && note.actionLabel !== null ? { id: ACTION_IDS[note.action], label: note.actionLabel } : null,
+    };
+    if (this.nativeGranted()) {
+      void this.sendNativeNote(native).then((ok) => void (ok || this.showReminderToast(note)));
+    } else {
+      this.showReminderToast(note);
+      if (this.nativeUsable()) void this.sendNativeNote(native).then((ok) => void (ok && this.reminderToast === note && this.showReminderToast(null)));
+    }
+  }
+
+  showReminderToast(note: ReminderNote | null): void {
+    this.reminderToast = note;
+    this.render();
+  }
+
+  /** Whether the reminder's button still makes sense (Start / Resume with no timer, Stop with one). */
+  reminderActionable(note: ReminderNote): boolean {
+    if (note.action === null) return false;
+    return note.action === 'stop' ? this.state.activeTimer !== null : this.state.activeTimer === null && this.lastTask() !== null;
+  }
+
+  /** The reminder toast to show: not expired, and not a Start / Stop whose moment has passed. */
+  visibleReminder(): ReminderNote | null {
+    const note = this.reminderToast;
+    if (note === null || this.now().getTime() - Date.parse(note.shownAt) >= CARD_TTL_MINUTES * 60_000) return null;
+    return note.action === null || this.reminderActionable(note) ? note : null;
+  }
+
+  /** A reminder's button (toast or notification): Start / Resume the last task, or Stop the timer. */
+  async reminderAction(action: ReminderAction | null): Promise<void> {
+    if (action === null || this.state.session === null) return;
+    this.reminderToast = null;
+    if (action === 'stop') {
+      if (this.state.activeTimer !== null) await this.stop();
+    } else {
+      await this.resume();
+    }
+    this.render();
+  }
+
+  /** Settings → My schedule: one value of one day (a value equal to Beacon's drops the override). */
+  setScheduleField(day: Weekday, name: DayField, value: boolean | string | null): void {
+    const overrides = setOverride(this.state.schedule.overrides, this.scheduleView().beacon, day, name, value);
+    this.persist({ schedule: { ...this.state.schedule, overrides } });
+    this.render();
+  }
+
+  /** "Reset to Beacon's schedule": drops every local value of the week (days off stay). */
+  resetSchedule(): void {
+    this.persist({ schedule: { ...this.state.schedule, overrides: {} } });
+    this.render();
+  }
+
+  setScheduleSetting(patch: Partial<Pick<LocalState['settings'], 'scheduleReminders' | 'scheduleLeadMinutes'>>): void {
+    this.persist({ settings: { ...this.state.settings, ...patch } });
+    this.render();
+  }
+
+  /** Marks (or unmarks) a local day off. */
+  setLocalDayOff(date: string, on: boolean): void {
+    const today = zonedParts(this.now(), this.scheduleView().timeZone).date;
+    this.persist({ schedule: { ...this.state.schedule, daysOff: toggleLocalDayOff(this.state.schedule.daysOff, date, on, today) } });
+    if (on) this.dayOffDraft = '';
+    this.render();
   }
 
   /** Settings → Friendly messages. */
@@ -1006,7 +1188,10 @@ export class DesktopApp {
   private async check(): Promise<void> {
     await this.updateTray();
     if (this.view === 'main' && this.longRunning() !== (this.main?.banners.querySelector('#long-running') !== null)) this.render();
+    this.checkReminders();
     this.checkFriendly();
+    // The next reminder instant moves as the day goes by (and when one was skipped).
+    this.syncWakePlan();
     const now = this.now();
     const suspendedSince = this.lastCheck !== null && now.getTime() - this.lastCheck.getTime() > SUSPEND_GAP_MS ? this.lastCheck : null;
     this.lastCheck = now;
@@ -1552,11 +1737,13 @@ export class DesktopApp {
    */
   wakePlan(): WakePlan {
     const state = this.state.idleCheck;
-    if (!this.idleCheckEnabled()) return { deadlineAt: null, idleAfterSeconds: null };
+    const reminderAt = this.nextReminderAt();
+    if (!this.idleCheckEnabled()) return { deadlineAt: null, idleAfterSeconds: null, reminderAt };
     const settings = this.idleSettings();
     return {
       deadlineAt: state.phase === 'asking' && state.returnedAt === null ? Date.parse(state.askedAt) + settings.answerTimeoutMinutes * 60_000 : null,
       idleAfterSeconds: state.phase === 'watching' && this.state.activeTimer !== null ? settings.thresholdMinutes * 60 : null,
+      reminderAt,
     };
   }
 
@@ -1851,10 +2038,15 @@ export class DesktopApp {
   private renderToasts(): void {
     const card = this.view === 'main' ? this.currentCard() : null;
     const daily = this.view === 'main' ? this.dailyToast : null;
-    const key = `${card === null ? '' : `${card.kind}:${card.line}:${card.shownAt}`}|${daily?.text ?? ''}`;
+    const reminder = this.view === 'main' ? this.visibleReminder() : null;
+    const key = `${card === null ? '' : `${card.kind}:${card.line}:${card.shownAt}`}|${daily?.text ?? ''}|${reminder === null ? '' : `${reminder.slot}:${reminder.shownAt}:${this.reminderActionable(reminder)}`}`;
     if (key === this.toastKey) return;
     this.toastKey = key;
-    patch(this.toastRegion, [card !== null && this.renderCheer(), daily !== null && this.toast('daily-toast', daily.pose, daily.text, daily.locale, () => this.showDailyToast(null))]);
+    patch(this.toastRegion, [
+      reminder !== null && this.renderReminder(reminder),
+      card !== null && this.renderCheer(),
+      daily !== null && this.toast('daily-toast', daily.pose, daily.text, daily.locale, () => this.showDailyToast(null)),
+    ]);
     // While a toast is up, the page gets room below its last rows (the list never ends under the toast).
     const shown = this.toastRegion.childElementCount > 0;
     this.root.classList.toggle('with-toasts', shown);
@@ -1863,12 +2055,12 @@ export class DesktopApp {
     else this.root.style.removeProperty('--toast-space');
   }
 
-  private toast(id: string, pose: PoseId, text: string, locale: string, dismiss: () => void, kind?: string): HTMLElement {
+  private toast(id: string, pose: PoseId, text: string, locale: string, dismiss: () => void, kind?: string, extra: Child = null): HTMLElement {
     return h(
       'section',
       { class: 'toast', id, key: id, attrs: { 'aria-label': this.t('cheerLabel'), 'data-kind': kind } },
       poseArt(pose, 'toast-art'),
-      h('p', { class: 'toast-text', id: `${id}-text`, attrs: { lang: locale } }, text),
+      h('div', { class: 'toast-body' }, h('p', { class: 'toast-text', id: `${id}-text`, attrs: { lang: locale } }, text), extra),
       h('button', { class: 'icon-button toast-close', id: `${id}-dismiss`, key: `${id}-dismiss`, attrs: { type: 'button', 'aria-label': this.t('toastDismiss'), title: this.t('toastDismiss') }, on: { click: dismiss } }, icon('close')),
     );
   }
@@ -2028,6 +2220,14 @@ export class DesktopApp {
   }
 
   /** A friendly message: smile, cheer or a gentle nudge, in the Beacon user's language. A toast, never focused. */
+  /** A working-hours reminder as a toast: its line, the button (Start / Stop / Resume) while it applies, ×. */
+  private renderReminder(note: ReminderNote): HTMLElement {
+    const action = note.action !== null && note.actionLabel !== null && this.reminderActionable(note)
+      ? h('button', { class: 'secondary small toast-action', id: 'reminder-action', key: 'reminder-action', attrs: { type: 'button', lang: note.locale, 'data-action': note.action }, on: { click: () => void this.reminderAction(note.action) } }, note.actionLabel)
+      : null;
+    return this.toast('reminder', note.pose, note.text, note.locale, () => this.showReminderToast(null), note.kind, action);
+  }
+
   private renderCheer(): HTMLElement | null {
     const card = this.currentCard();
     const timer = this.state.activeTimer;
@@ -2552,6 +2752,7 @@ export class DesktopApp {
         ),
       ),
       this.renderIdleSettings(),
+      this.renderSchedule(),
       this.renderFriendlySettings(),
       this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText'),
       // Store (MSIX) builds cannot register the login item the autostart plugin writes: no switch there.
@@ -2578,6 +2779,134 @@ export class DesktopApp {
         ),
       ),
       h('button', { class: 'danger', id: 'logout', on: { click: () => void this.logout() } }, t('logout')),
+    );
+  }
+
+  /** Settings → My schedule: the reminders switch, the week (Beacon's, adjustable here) and the days off. */
+  private renderSchedule(): HTMLElement {
+    const t = this.t;
+    const settings = this.state.settings;
+    const view = this.scheduleView();
+    const toggle = h('input', { id: 'schedule-reminders', attrs: { type: 'checkbox', 'aria-describedby': 'schedule-reminders-help' } });
+    toggle.checked = settings.scheduleReminders;
+    toggle.addEventListener('change', () => this.setScheduleSetting({ scheduleReminders: toggle.checked }));
+    const lead = h('select', { id: 'schedule-lead' });
+    for (const minutes of LEAD_CHOICES) {
+      const option = h('option', { attrs: { value: String(minutes) } }, minutes === 0 ? t('scheduleLeadNone') : t('scheduleLeadMinutes', { minutes }));
+      option.selected = minutes === settings.scheduleLeadMinutes;
+      lead.append(option);
+    }
+    lead.addEventListener('change', () => this.setScheduleSetting({ scheduleLeadMinutes: Number(lead.value) }));
+    const hasLocal = Object.keys(this.state.schedule.overrides).length > 0;
+    return h(
+      'section',
+      { class: 'feature', id: 'schedule-settings', attrs: { 'aria-labelledby': 'schedule-title' } },
+      h('h2', { id: 'schedule-title' }, t('scheduleTitle')),
+      h('label', { class: 'switch' }, toggle, t('scheduleReminders')),
+      h('p', { class: 'help', id: 'schedule-reminders-help' }, t('scheduleRemindersHelp')),
+      settings.scheduleReminders && h('label', { class: 'inline' }, t('scheduleLead'), lead),
+      h('p', { class: 'help', id: 'schedule-source' }, t(view.beacon !== null ? 'scheduleFromBeacon' : 'scheduleNoBeacon')),
+      h('p', { class: 'schedule-legend', id: 'schedule-legend' }, h('span', { class: 'source-badge', attrs: { 'data-source': 'beacon' } }, 'Beacon'), ' ', t('scheduleLegendBeacon'), ' · ', h('span', { class: 'source-badge', attrs: { 'data-source': 'local' } }, t('sourceLocal')), ' ', t('scheduleLegendLocal')),
+      h('div', { class: 'schedule-days', id: 'schedule-days' }, ...WEEKDAYS.map((day) => this.renderScheduleDay(day, view))),
+      h(
+        'p',
+        { class: 'row-actions' },
+        h('button', { class: 'secondary small', id: 'schedule-reset', key: 'schedule-reset', attrs: { type: 'button', disabled: !hasLocal || view.beacon === null }, on: { click: () => this.resetSchedule() } }, t('scheduleReset')),
+      ),
+      this.renderDaysOff(view),
+      h('p', { class: 'muted' }, t('scheduleLocal')),
+    );
+  }
+
+  private dayName(day: Weekday, style: 'long' | 'short' = 'long'): string {
+    // 2024-01-01 was a Monday.
+    const name = new Intl.DateTimeFormat(this.locale, { weekday: style, timeZone: 'UTC' }).format(new Date(Date.UTC(2024, 0, day)));
+    return name.charAt(0).toLocaleUpperCase(this.locale) + name.slice(1);
+  }
+
+  private renderScheduleDay(day: Weekday, view: ReturnType<DesktopApp['scheduleView']>): HTMLElement {
+    const t = this.t;
+    const plan = view.merged.week[day];
+    const source = view.merged.source[day];
+    const local = Object.values(source).includes('local');
+    const summary = plan.off
+      ? t('scheduleDayOff')
+      : plan.start === null && plan.end === null
+        ? t('scheduleNoHours')
+        : [`${plan.start ?? '–'}–${plan.end ?? '–'}`, plan.lunchStart !== null && plan.lunchEnd !== null ? t('scheduleLunchSummary', { from: plan.lunchStart, to: plan.lunchEnd }) : null].filter(Boolean).join(' · ');
+    const badge = (name: DayField) => source[name] !== 'none' && h('span', { class: 'source-badge', id: `day-${day}-${name}-source`, attrs: { 'data-source': source[name] } }, source[name] === 'local' ? t('sourceLocal') : 'Beacon');
+    const time = (name: 'start' | 'end' | 'lunchStart' | 'lunchEnd', label: MessageKey) => {
+      const input = h('input', { id: `day-${day}-${name}`, key: `day-${day}-${name}`, attrs: { type: 'time', step: '300', 'data-source': source[name] } });
+      input.value = plan[name] ?? '';
+      input.addEventListener('change', () => this.setScheduleField(day, name, input.value === '' ? null : input.value));
+      return h('label', { class: 'schedule-field', attrs: { 'data-source': source[name] } }, h('span', { class: 'schedule-field-label' }, t(label), badge(name)), input);
+    };
+    const off = h('input', { id: `day-${day}-off`, key: `day-${day}-off`, attrs: { type: 'checkbox' } });
+    off.checked = plan.off;
+    off.addEventListener('change', () => this.setScheduleField(day, 'off', off.checked));
+    const details = h(
+      'details',
+      { class: 'schedule-day', id: `day-${day}`, attrs: { open: this.openDays.has(day), 'data-local': local ? 'true' : undefined } },
+      h(
+        'summary',
+        { key: `day-${day}-summary` },
+        h('span', { class: 'schedule-day-name' }, this.dayName(day)),
+        h('span', { class: 'schedule-day-summary', id: `day-${day}-summary` }, summary),
+        local && h('span', { class: 'source-badge', attrs: { 'data-source': 'local' } }, t('sourceLocal')),
+      ),
+      h('label', { class: 'switch' }, off, t('scheduleDayOffToggle'), badge('off')),
+      !plan.off &&
+        h(
+          'div',
+          { class: 'schedule-grid' },
+          time('start', 'scheduleStart'),
+          time('end', 'scheduleEnd'),
+          time('lunchStart', 'scheduleLunchStart'),
+          time('lunchEnd', 'scheduleLunchEnd'),
+        ),
+    );
+    details.addEventListener('toggle', () => void (details.open ? this.openDays.add(day) : this.openDays.delete(day)));
+    return details;
+  }
+
+  /** Holidays and vacations: Beacon's (read only) and the ones marked here (removable), upcoming only. */
+  private renderDaysOff(view: ReturnType<DesktopApp['scheduleView']>): HTMLElement {
+    const t = this.t;
+    const today = zonedParts(this.now(), view.timeZone).date;
+    const upcoming = view.daysOff.filter((item) => item.date >= today).slice(0, 12);
+    const format = new Intl.DateTimeFormat(this.locale, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+    const label = (item: DayOff) => item.label ?? t(item.source === 'local' ? 'dayOffLocal' : item.kind === 'vacation' ? 'dayOffVacation' : 'dayOffHoliday');
+    const date = h('input', { id: 'day-off-date', key: 'day-off-date', attrs: { type: 'date', min: today, 'aria-label': t('dayOffDate') } });
+    date.value = this.dayOffDraft;
+    date.addEventListener('input', () => void (this.dayOffDraft = date.value));
+    return h(
+      'div',
+      { class: 'days-off', id: 'days-off' },
+      h('h3', {}, t('daysOffTitle')),
+      h('p', { class: 'help' }, t('daysOffHelp')),
+      upcoming.length === 0
+        ? h('p', { class: 'muted', id: 'days-off-empty' }, t('daysOffEmpty'))
+        : h(
+            'ul',
+            { class: 'plain days-off-list', id: 'days-off-list' },
+            ...upcoming.map((item) =>
+              h(
+                'li',
+                { attrs: { 'data-date': item.date, 'data-source': item.source } },
+                h('span', { class: 'day-off-date' }, format.format(new Date(`${item.date}T00:00:00Z`))),
+                h('span', { class: 'day-off-label' }, label(item)),
+                h('span', { class: 'source-badge', attrs: { 'data-source': item.source } }, item.source === 'local' ? t('sourceLocal') : 'Beacon'),
+                item.source === 'local' &&
+                  h('button', { class: 'link', id: `day-off-remove-${item.date}`, key: `day-off-remove-${item.date}`, attrs: { type: 'button', 'aria-label': t('dayOffRemove', { date: format.format(new Date(`${item.date}T00:00:00Z`)) }) }, on: { click: () => this.setLocalDayOff(item.date, false) } }, t('remove')),
+              ),
+            ),
+          ),
+      h(
+        'form',
+        { class: 'row-actions', id: 'day-off-form', on: { submit: (event) => { event.preventDefault(); this.setLocalDayOff(date.value, true); } } },
+        date,
+        h('button', { class: 'secondary small', id: 'day-off-add', key: 'day-off-add', attrs: { type: 'submit' } }, t('dayOffAdd')),
+      ),
     );
   }
 

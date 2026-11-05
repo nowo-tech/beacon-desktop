@@ -55,6 +55,16 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - To recognise meetings and dailies, the name, type and labels of the running task (as Beacon sent them) are matched
   against a word list on this computer; nothing extra is stored or sent.
 
+## Working-hours reminders
+
+- Your schedule (start, end, lunch, days off) is read from Beacon (`me.workingHours`, `me.daysOff`) and the reminders
+  are worked out on this computer from it, the clock and whether a timer runs. Changes you make in Settings → My
+  schedule and the days off you add stay in the app's local storage, with a copy of Beacon's schedule for an offline
+  start and which reminders were shown today; none of it is sent. Signing out deletes them.
+- As desktop notifications, their title, line, picture and button label are handed to your operating system like the
+  friendly messages. Pressing *Start* / *Stop* / *Resume* does what the same button in the app does (`timer/start`,
+  `timer/stop`).
+
 ## Optional features (off by default, dated consent, revocable in Settings)
 
 - **Notifications**: never shown outside the working hours your organisation publishes (`me.workingHours`).

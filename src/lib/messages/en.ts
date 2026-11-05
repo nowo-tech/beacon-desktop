@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** English. */
 export const pools: Pools = {
@@ -183,4 +183,44 @@ export const titles: Titles = {
   weekendRest: 'Enjoy your weekend',
   meetingAfter: 'After the meeting',
   dailyDone: 'Daily done',
+};
+
+/** Working-hours reminders (start, lunch, end of the day) and the day-off line. */
+export const reminders: ReminderCatalog = {
+  lines: {
+    start: [
+      f('Shall we start?', 'sunrise'),
+      f('Morning! Ready when you are.', 'early'),
+      f('Time to get going. Shall I start the clock?', 'early'),
+      f('Your workday starts now. Off we go?', 'sunrise'),
+    ],
+    lunchStart: [
+      f('Lunch time. Shall I stop the timer?', 'lunch'),
+      f('Your lunch break is here. Pause the clock?', 'lunch'),
+      f('Food first, keyboard later. Stop the timer?', 'lunch'),
+      f('Break time! Shall I stop tracking while you eat?', 'lunch'),
+    ],
+    lunchEnd: [
+      f('Back to {task}?', 'lunch'),
+      f('Lunch is over. Resume {task}?', 'keep-going'),
+      f('Fed and ready? Pick up {task} again?', 'keep-going'),
+      f('Break done. Shall I restart {task}?', 'lunch'),
+    ],
+    end: [
+      f('Shall we call it a day?', 'finished'),
+      f('That\'s the end of your workday. Stop the timer?', 'finished'),
+      f('Home time! Shall I stop the clock?', 'finished'),
+      f('Workday done. Wrap up and stop the timer?', 'finished'),
+    ],
+    dayOff: [
+      f('Working on your holiday? Keep it short!', 'shades'),
+      f('Isn\'t today a day off? Don\'t forget to rest.', 'holiday'),
+      f('Holiday mode is on… and so is the timer. A quick one?', 'shades'),
+      f('On a day off? I\'ll keep you company, briefly.', 'holiday'),
+    ],
+  },
+  titles: { start: 'Workday starts', lunchStart: 'Lunch break', lunchEnd: 'Back from lunch', end: 'End of the day', dayOff: 'Day off' },
+  actions: { start: 'Start', stop: 'Stop', resume: 'Resume' },
+  lastTask: 'Last task: {task}.',
+  today: 'Today: {total}.',
 };

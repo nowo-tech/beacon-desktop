@@ -1,3 +1,4 @@
+import type { ReminderAction, ReminderLineKind } from '../schedule';
 /**
  * Friendly messages (0.5.0): the "Still there?" phrasings, the cheers on long stretches and the time-of-day moments.
  * Each locale has its own pools, written natively (not translated line by line). Every line carries the mascot pose
@@ -124,3 +125,17 @@ export const hm = (hours: number, minutes = 0): number => hours * 60 + minutes;
 export const f = (text: string, pose: PoseId): Line => ({ text, pose });
 /** A wellbeing line. */
 export const w = (text: string, pose: PoseId): Line => ({ text, pose, wellbeing: true });
+
+/**
+ * Working-hours reminders (`src/lib/schedule.ts`), per locale: a few phrasings per moment, the notification titles, the
+ * button labels, and the two short add-ons (`{task}` = the last task, `{total}` = `H:MM` tracked today).
+ */
+export interface ReminderCatalog {
+  lines: Record<ReminderLineKind, readonly Line[]>;
+  titles: Record<ReminderLineKind, string>;
+  actions: Record<ReminderAction, string>;
+  /** After the start line, when there is a task to resume. */
+  lastTask: string;
+  /** After the end line. */
+  today: string;
+}

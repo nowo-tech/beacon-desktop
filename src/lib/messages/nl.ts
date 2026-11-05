@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** Nederlands (je): vroege lunch, koffie om tien en om drie. */
 export const pools: Pools = {
@@ -183,4 +183,44 @@ export const titles: Titles = {
   weekendRest: 'Geniet van je weekend',
   meetingAfter: 'Na de meeting',
   dailyDone: 'Daily klaar',
+};
+
+/** Working-hours reminders (start, lunch, end of the day) and the day-off line. */
+export const reminders: ReminderCatalog = {
+  lines: {
+    start: [
+      f('Zullen we beginnen?', 'sunrise'),
+      f('Goedemorgen! Klaar wanneer jij het bent.', 'early'),
+      f('Tijd om te starten. Zal ik de klok aanzetten?', 'early'),
+      f('Je werkdag begint. Daar gaan we?', 'sunrise'),
+    ],
+    lunchStart: [
+      f('Lunchtijd. Zal ik de timer stoppen?', 'lunch'),
+      f('Je lunchpauze is er. Klok even stilzetten?', 'lunch'),
+      f('Eerst eten, dan weer verder. Timer stoppen?', 'lunch'),
+      f('Pauze! Zal ik niet meetellen terwijl je eet?', 'lunch'),
+    ],
+    lunchEnd: [
+      f('Verder met {task}?', 'lunch'),
+      f('Lunch voorbij. {task} hervatten?', 'keep-going'),
+      f('Weer opgeladen? Terug naar {task}?', 'keep-going'),
+      f('Pauze is om. Zal ik {task} weer starten?', 'lunch'),
+    ],
+    end: [
+      f('Zullen we er een punt achter zetten?', 'finished'),
+      f('Je werkdag zit erop. Timer stoppen?', 'finished'),
+      f('Tijd om naar huis te gaan! Klok stilzetten?', 'finished'),
+      f('Klaar voor vandaag. Afronden en de timer stoppen?', 'finished'),
+    ],
+    dayOff: [
+      f('Aan het werk tijdens je vakantie? Houd het kort!', 'shades'),
+      f('Was vandaag niet je vrije dag? Vergeet niet uit te rusten.', 'holiday'),
+      f('Vakantiemodus aan… en de timer ook. Iets snels?', 'shades'),
+      f('Op je vrije dag hier? Ik houd je even gezelschap.', 'holiday'),
+    ],
+  },
+  titles: { start: 'Begin van de dag', lunchStart: 'Lunchpauze', lunchEnd: 'Terug van de lunch', end: 'Einde van de dag', dayOff: 'Vrije dag' },
+  actions: { start: 'Starten', stop: 'Stoppen', resume: 'Hervatten' },
+  lastTask: 'Laatste taak: {task}.',
+  today: 'Vandaag: {total}.',
 };

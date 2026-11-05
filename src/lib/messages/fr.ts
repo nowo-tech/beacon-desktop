@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** Français (tutoiement) : déjeuner vers midi, pause café à 10 h et à 16 h. */
 export const pools: Pools = {
@@ -183,4 +183,44 @@ export const titles: Titles = {
   weekendRest: 'Bon week-end',
   meetingAfter: 'Après la réunion',
   dailyDone: 'Daily terminé',
+};
+
+/** Working-hours reminders (start, lunch, end of the day) and the day-off line. */
+export const reminders: ReminderCatalog = {
+  lines: {
+    start: [
+      f('On s\'y met ?', 'sunrise'),
+      f('Bonjour ! Prêt quand tu l\'es.', 'early'),
+      f('C\'est l\'heure de commencer. Je lance le chrono ?', 'early'),
+      f('Ta journée commence. C\'est parti ?', 'sunrise'),
+    ],
+    lunchStart: [
+      f('C\'est l\'heure du déjeuner. J\'arrête le chrono ?', 'lunch'),
+      f('La pause déjeuner est là. On met le chrono en pause ?', 'lunch'),
+      f('D\'abord l\'assiette, ensuite le clavier. J\'arrête le minuteur ?', 'lunch'),
+      f('À table ! J\'arrête de compter pendant le repas ?', 'lunch'),
+    ],
+    lunchEnd: [
+      f('On reprend {task} ?', 'lunch'),
+      f('Fin du déjeuner. On continue {task} ?', 'keep-going'),
+      f('Rechargé à bloc ? On retourne sur {task} ?', 'keep-going'),
+      f('La pause est finie. Je relance {task} ?', 'lunch'),
+    ],
+    end: [
+      f('On s\'arrête là pour aujourd\'hui ?', 'finished'),
+      f('C\'est la fin de ta journée. J\'arrête le chrono ?', 'finished'),
+      f('L\'heure de rentrer ! J\'arrête le minuteur ?', 'finished'),
+      f('Journée bouclée. On range et on arrête le chrono ?', 'finished'),
+    ],
+    dayOff: [
+      f('Tu travailles en vacances ? Pas trop longtemps !', 'shades'),
+      f('Ce n\'était pas ton jour de congé ? N\'oublie pas de te reposer.', 'holiday'),
+      f('Mode vacances activé… et le chrono aussi. Un petit truc rapide ?', 'shades'),
+      f('Un jour de congé et te voilà ? Je t\'accompagne, mais pas longtemps.', 'holiday'),
+    ],
+  },
+  titles: { start: 'Début de journée', lunchStart: 'Pause déjeuner', lunchEnd: 'Retour du déjeuner', end: 'Fin de journée', dayOff: 'Jour de congé' },
+  actions: { start: 'Démarrer', stop: 'Arrêter', resume: 'Reprendre' },
+  lastTask: 'Dernière tâche : {task}.',
+  today: 'Aujourd\'hui : {total}.',
 };

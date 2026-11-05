@@ -8,7 +8,9 @@
 //! - `Deadline`: the instant the UI asked for has passed (the end of the "Still there?" countdown);
 //! - `Idle`: the OS idle time just reached the threshold the UI asked for (the question appears on time, not up to
 //!   30 s late);
-//! - `Resumed`: polls stopped for a while (the computer slept), so the UI re-checks at once.
+//! - `Reminder`: the next working-hours reminder is due (start, lunch, end of the day; `schedule.ts` in the UI);
+//! - `Resumed`: polls stopped for a while (the computer slept), so the UI re-checks at once (and decides itself
+//!   whether a reminder missed during the sleep is still within its grace window).
 //!
 //! The thread only reads the clock and, while the UI asked for it, the OS "seconds since last input" counter. Nothing
 //! is stored or sent: the UI decides, exactly as before, from its own clock and the same counter.
@@ -30,6 +32,9 @@ pub struct WakePlan {
     pub deadline_at: Option<i64>,
     /// Idle threshold in seconds while a timer runs and nobody was asked yet; `None` stops reading the idle counter.
     pub idle_after_seconds: Option<u64>,
+    /// Unix milliseconds of the next working-hours reminder; `None` when there is none (absent from older UIs).
+    #[serde(default)]
+    pub reminder_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -38,6 +43,7 @@ pub enum WakeReason {
     Tick,
     Deadline,
     Idle,
+    Reminder,
     Resumed,
 }
 
@@ -91,6 +97,9 @@ impl Heartbeat {
             if matches!(self.plan.deadline_at, Some(at) if now >= at) {
                 self.plan.deadline_at = None;
             }
+            if matches!(self.plan.reminder_at, Some(at) if now >= at) {
+                self.plan.reminder_at = None;
+            }
             return wake(WakeReason::Resumed);
         }
         if let Some(at) = self.plan.deadline_at {
@@ -98,6 +107,13 @@ impl Heartbeat {
                 self.plan.deadline_at = None;
                 self.next_tick = Some(now + TICK_MS);
                 return wake(WakeReason::Deadline);
+            }
+        }
+        if let Some(at) = self.plan.reminder_at {
+            if now >= at {
+                self.plan.reminder_at = None;
+                self.next_tick = Some(now + TICK_MS);
+                return wake(WakeReason::Reminder);
             }
         }
         if let Some(threshold) = self.plan.idle_after_seconds {
@@ -167,6 +183,7 @@ mod tests {
         hb.set_plan(WakePlan {
             deadline_at: Some(T0 + 12_500),
             idle_after_seconds: None,
+            reminder_at: None,
         });
         let fired = run(&mut hb, T0, T0 + 29_000, |_| 0);
         assert_eq!(
@@ -188,6 +205,7 @@ mod tests {
         hb.set_plan(WakePlan {
             deadline_at: None,
             idle_after_seconds: Some(300),
+            reminder_at: None,
         });
         // Idle since T0 - 290 s: the threshold is reached at T0 + 10 s.
         let idle = |now: i64| ((now - (T0 - 290_000)) / 1000) as u64;
@@ -230,6 +248,7 @@ mod tests {
         hb.set_plan(WakePlan {
             deadline_at: Some(T0 + 60_000),
             idle_after_seconds: None,
+            reminder_at: None,
         });
         assert_eq!(hb.poll(T0, || 0), None);
         // The lid closed at T0 and opened 20 minutes later.
@@ -245,6 +264,47 @@ mod tests {
         );
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].at, T0 + 20 * 60_000 + 30_000);
+    }
+
+    #[test]
+    fn a_reminder_fires_once_on_time() {
+        let mut hb = Heartbeat::new();
+        hb.set_plan(WakePlan {
+            deadline_at: None,
+            idle_after_seconds: None,
+            reminder_at: Some(T0 + 7_200),
+        });
+        let fired = run(&mut hb, T0, T0 + 20_000, |_| 0);
+        assert_eq!(
+            fired,
+            vec![Wake {
+                reason: WakeReason::Reminder,
+                at: T0 + 8_000
+            }]
+        );
+        assert_eq!(hb.plan().reminder_at, None);
+    }
+
+    #[test]
+    fn a_reminder_passed_during_sleep_becomes_one_resumed_wake() {
+        let mut hb = Heartbeat::new();
+        hb.set_plan(WakePlan {
+            deadline_at: None,
+            idle_after_seconds: None,
+            reminder_at: Some(T0 + 60_000),
+        });
+        assert_eq!(hb.poll(T0, || 0), None);
+        let wake = hb.poll(T0 + 3 * 3_600_000, || 0).expect("wake after sleep");
+        assert_eq!(wake.reason, WakeReason::Resumed);
+        assert_eq!(hb.plan().reminder_at, None);
+        // No second, stale wake for it afterwards.
+        let fired = run(
+            &mut hb,
+            T0 + 3 * 3_600_000 + 1000,
+            T0 + 3 * 3_600_000 + 29_000,
+            |_| 0,
+        );
+        assert!(fired.is_empty());
     }
 
     #[test]
@@ -265,16 +325,19 @@ mod tests {
         hb.set_plan(WakePlan {
             deadline_at: None,
             idle_after_seconds: Some(60),
+            reminder_at: None,
         });
         assert_eq!(hb.poll(T0, || 61).map(|w| w.reason), Some(WakeReason::Idle));
         hb.set_plan(WakePlan {
             deadline_at: None,
             idle_after_seconds: Some(60),
+            reminder_at: None,
         });
         assert_eq!(hb.poll(T0 + 1000, || 62), None);
         hb.set_plan(WakePlan {
             deadline_at: None,
             idle_after_seconds: Some(30),
+            reminder_at: None,
         });
         assert_eq!(
             hb.poll(T0 + 2000, || 63).map(|w| w.reason),
@@ -288,6 +351,17 @@ mod tests {
             serde_json::from_str(r#"{"deadlineAt":1762300012500,"idleAfterSeconds":300}"#).unwrap();
         assert_eq!(plan.deadline_at, Some(1_762_300_012_500));
         assert_eq!(plan.idle_after_seconds, Some(300));
+        // An older UI sends no reminder.
+        assert_eq!(plan.reminder_at, None);
+        let plan: WakePlan = serde_json::from_str(
+            r#"{"deadlineAt":null,"idleAfterSeconds":null,"reminderAt":1762300060000}"#,
+        )
+        .unwrap();
+        assert_eq!(plan.reminder_at, Some(1_762_300_060_000));
+        assert_eq!(
+            serde_json::to_value(WakeReason::Reminder).unwrap(),
+            "reminder"
+        );
         let json = serde_json::to_value(Wake {
             reason: WakeReason::Resumed,
             at: 5,
