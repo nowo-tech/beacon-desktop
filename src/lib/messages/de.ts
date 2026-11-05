@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** Deutsch (du): Kaffee und Kuchen am Nachmittag, früher Mittag. */
 export const pools: Pools = {
@@ -183,4 +183,44 @@ export const titles: Titles = {
   weekendRest: 'Schönes Wochenende',
   meetingAfter: 'Nach dem Meeting',
   dailyDone: 'Daily erledigt',
+};
+
+/** Working-hours reminders (start, lunch, end of the day) and the day-off line. */
+export const reminders: ReminderCatalog = {
+  lines: {
+    start: [
+      f('Wollen wir loslegen?', 'sunrise'),
+      f('Guten Morgen! Bereit, wenn du es bist.', 'early'),
+      f('Arbeitsbeginn. Soll ich die Uhr starten?', 'early'),
+      f('Dein Arbeitstag beginnt. Auf geht\'s?', 'sunrise'),
+    ],
+    lunchStart: [
+      f('Mittagszeit. Soll ich den Timer stoppen?', 'lunch'),
+      f('Deine Mittagspause ist da. Uhr anhalten?', 'lunch'),
+      f('Erst essen, dann weiter. Timer stoppen?', 'lunch'),
+      f('Pause! Soll ich beim Essen nicht mitzählen?', 'lunch'),
+    ],
+    lunchEnd: [
+      f('Weiter mit {task}?', 'lunch'),
+      f('Mittag vorbei. {task} fortsetzen?', 'keep-going'),
+      f('Gestärkt zurück? Wieder an {task}?', 'keep-going'),
+      f('Pause zu Ende. Soll ich {task} wieder starten?', 'lunch'),
+    ],
+    end: [
+      f('Machen wir Feierabend?', 'finished'),
+      f('Dein Arbeitstag ist zu Ende. Timer stoppen?', 'finished'),
+      f('Zeit für den Heimweg! Soll ich die Uhr anhalten?', 'finished'),
+      f('Geschafft für heute. Abschließen und Timer stoppen?', 'finished'),
+    ],
+    dayOff: [
+      f('Arbeiten im Urlaub? Aber nur kurz!', 'shades'),
+      f('Ist heute nicht dein freier Tag? Vergiss die Erholung nicht.', 'holiday'),
+      f('Urlaubsmodus an … und der Timer auch. Nur schnell?', 'shades'),
+      f('Am freien Tag hier? Ich leiste dir kurz Gesellschaft.', 'holiday'),
+    ],
+  },
+  titles: { start: 'Arbeitsbeginn', lunchStart: 'Mittagspause', lunchEnd: 'Zurück vom Mittag', end: 'Feierabend', dayOff: 'Freier Tag' },
+  actions: { start: 'Starten', stop: 'Stoppen', resume: 'Fortsetzen' },
+  lastTask: 'Letzte Aufgabe: {task}.',
+  today: 'Heute: {total}.',
 };

@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** Português (tu): almoço por volta das 13h, café a meio da manhã e da tarde. */
 export const pools: Pools = {
@@ -183,4 +183,44 @@ export const titles: Titles = {
   weekendRest: 'Aproveita o fim de semana',
   meetingAfter: 'Depois da reunião',
   dailyDone: 'Daily feita',
+};
+
+/** Working-hours reminders (start, lunch, end of the day) and the day-off line. */
+export const reminders: ReminderCatalog = {
+  lines: {
+    start: [
+      f('Vamos começar?', 'sunrise'),
+      f('Bom dia! Quando quiseres, arrancamos.', 'early'),
+      f('Está na hora de começar. Ligo o cronómetro?', 'early'),
+      f('O teu dia de trabalho começa agora. Bora?', 'sunrise'),
+    ],
+    lunchStart: [
+      f('Hora de almoço. Paro o temporizador?', 'lunch'),
+      f('Chegou a pausa do almoço. Ponho o relógio em pausa?', 'lunch'),
+      f('Primeiro o prato, depois o teclado. Paro o contador?', 'lunch'),
+      f('Para a mesa! Deixo de contar enquanto comes?', 'lunch'),
+    ],
+    lunchEnd: [
+      f('Retomamos {task}?', 'lunch'),
+      f('Almoço terminado. Continuamos com {task}?', 'keep-going'),
+      f('Bateria carregada? Voltamos a {task}?', 'keep-going'),
+      f('Acabou a pausa. Volto a ligar {task}?', 'lunch'),
+    ],
+    end: [
+      f('Fechamos por hoje?', 'finished'),
+      f('Chegou a tua hora de saída. Paro o temporizador?', 'finished'),
+      f('Hora de ir para casa! Paro o cronómetro?', 'finished'),
+      f('Dia cumprido. Arrumamos e paramos o temporizador?', 'finished'),
+    ],
+    dayOff: [
+      f('A trabalhar nas férias? Que seja rapidinho!', 'shades'),
+      f('Hoje não era o teu dia de folga? Não te esqueças de descansar.', 'holiday'),
+      f('Modo férias ligado… e o temporizador também. Algo rápido?', 'shades'),
+      f('No teu dia de folga por aqui? Faço-te companhia, mas pouco.', 'holiday'),
+    ],
+  },
+  titles: { start: 'Início do dia', lunchStart: 'Pausa para almoço', lunchEnd: 'Regresso do almoço', end: 'Fim do dia', dayOff: 'Dia de folga' },
+  actions: { start: 'Começar', stop: 'Parar', resume: 'Retomar' },
+  lastTask: 'Última tarefa: {task}.',
+  today: 'Hoje: {total}.',
 };

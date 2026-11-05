@@ -2,6 +2,7 @@ import type { Scope, Task, Timer } from '../api/types';
 import { DEFAULT_SHORTCUT } from '../platform';
 import { EMPTY_MESSAGES, type MessageState, sanitizeMessages } from './friendly';
 import { type IdleCheckState, WATCHING } from './idleCheck';
+import { DEFAULT_LEAD_MINUTES, EMPTY_SCHEDULE, LEAD_CHOICES, sanitizeSchedule, type ScheduleState } from './schedule';
 import type { ServerFeatures } from './serverFeatures';
 import { isTheme, type ThemePreference } from './theme';
 
@@ -40,6 +41,10 @@ export interface Settings {
   nativeStatus: NativeStatus;
   /** The in-app note explaining that the messages now appear as desktop notifications was read. */
   nativeIntroSeen: boolean;
+  /** Working-hours reminders (start, lunch, end of the day; on by default). */
+  scheduleReminders: boolean;
+  /** "Shall we start?" this many minutes before the start time (`LEAD_CHOICES`). */
+  scheduleLeadMinutes: number;
 }
 
 /**
@@ -81,6 +86,8 @@ export interface LocalState {
   features: ServerFeatures | null;
   /** Friendly messages: what was shown lately (no repeats, rate limit, once per window per day). Local only. */
   messages: MessageState;
+  /** My schedule: local overrides of Beacon's working hours, local days off, reminders already shown. Local only. */
+  schedule: ScheduleState;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -95,6 +102,8 @@ export const DEFAULT_SETTINGS: Settings = {
   desktopNotifications: true,
   nativeStatus: 'unknown',
   nativeIntroSeen: false,
+  scheduleReminders: true,
+  scheduleLeadMinutes: DEFAULT_LEAD_MINUTES,
 };
 
 const KEY = 'time-track-desktop';
@@ -112,6 +121,7 @@ export function emptyState(): LocalState {
     pendingNote: null,
     features: null,
     messages: { ...EMPTY_MESSAGES },
+    schedule: { ...EMPTY_SCHEDULE },
   };
 }
 
@@ -132,8 +142,11 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
         desktopNotifications: typeof raw.settings?.desktopNotifications === 'boolean' ? raw.settings.desktopNotifications : DEFAULT_SETTINGS.desktopNotifications,
         nativeStatus: NATIVE_STATUSES.includes(raw.settings?.nativeStatus as string) ? (raw.settings?.nativeStatus as NativeStatus) : DEFAULT_SETTINGS.nativeStatus,
         nativeIntroSeen: raw.settings?.nativeIntroSeen === true,
+        scheduleReminders: typeof raw.settings?.scheduleReminders === 'boolean' ? raw.settings.scheduleReminders : DEFAULT_SETTINGS.scheduleReminders,
+        scheduleLeadMinutes: LEAD_CHOICES.includes(raw.settings?.scheduleLeadMinutes as number) ? (raw.settings?.scheduleLeadMinutes as number) : DEFAULT_SETTINGS.scheduleLeadMinutes,
       },
       messages: sanitizeMessages(raw.messages),
+      schedule: sanitizeSchedule(raw.schedule),
       idleCheck: typeof raw.idleCheck === 'object' && raw.idleCheck !== null && 'phase' in raw.idleCheck ? raw.idleCheck : WATCHING,
       pinned: Array.isArray(raw.pinned) ? raw.pinned.slice(0, MAX_PINNED) : [],
     };

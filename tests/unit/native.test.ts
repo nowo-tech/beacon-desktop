@@ -272,23 +272,23 @@ describe('wake-ups from the host (on time while the window is hidden)', () => {
 
   it('asks for the idle threshold while a timer runs, then the end of the countdown', async () => {
     const ui = await signedIn();
-    expect(ui.hooks.wakePlan).toEqual({ deadlineAt: null, idleAfterSeconds: null });
+    expect(ui.hooks.wakePlan).toEqual({ deadlineAt: null, idleAfterSeconds: null, reminderAt: null });
     running(ui, 30);
     const threshold = ui.app.idleSettings().thresholdMinutes;
-    expect(ui.hooks.wakePlan).toEqual({ deadlineAt: null, idleAfterSeconds: threshold * 60 });
+    expect(ui.hooks.wakePlan).toEqual({ deadlineAt: null, idleAfterSeconds: threshold * 60, reminderAt: null });
     // The host says the idle threshold was reached: the check runs at once and asks.
     ui.hooks.idleSeconds = threshold * 60 + 5;
     ui.hooks.wake('idle');
     await tick();
     expect(ui.app.state.idleCheck.phase).toBe('asking');
     const askedAt = Date.parse((ui.app.state.idleCheck as { askedAt: string }).askedAt);
-    expect(ui.hooks.wakePlan).toEqual({ deadlineAt: askedAt + IDLE_COUNTDOWN_MINUTES * 60_000, idleAfterSeconds: null });
+    expect(ui.hooks.wakePlan).toEqual({ deadlineAt: askedAt + IDLE_COUNTDOWN_MINUTES * 60_000, idleAfterSeconds: null, reminderAt: null });
     // The deadline passes (window hidden: no countdown ticker ran): the timer stops at the start of the idle time.
     ui.advance(IDLE_COUNTDOWN_MINUTES + 0.1);
     ui.hooks.wake('deadline');
     await tick(150);
     expect(ui.app.state.idleCheck.phase).toBe('away');
-    expect(ui.hooks.wakePlan).toEqual({ deadlineAt: null, idleAfterSeconds: null });
+    expect(ui.hooks.wakePlan).toEqual({ deadlineAt: null, idleAfterSeconds: null, reminderAt: null });
     ui.app.destroy();
   });
 });

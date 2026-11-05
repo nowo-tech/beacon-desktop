@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** Español (España): se come a las 14:00 y el café de la tarde va después. */
 export const pools: Pools = {
@@ -183,4 +183,44 @@ export const titles: Titles = {
   weekendRest: 'Disfruta del finde',
   meetingAfter: 'Tras la reunión',
   dailyDone: 'Daily hecha',
+};
+
+/** Working-hours reminders (start, lunch, end of the day) and the day-off line. */
+export const reminders: ReminderCatalog = {
+  lines: {
+    start: [
+      f('¿Empezamos?', 'sunrise'),
+      f('¡Buenos días! Cuando quieras, arrancamos.', 'early'),
+      f('Es tu hora de entrada. ¿Le damos al reloj?', 'early'),
+      f('Empieza la jornada. ¿Nos ponemos?', 'sunrise'),
+    ],
+    lunchStart: [
+      f('Hora de comer, ¿paro el temporizador?', 'lunch'),
+      f('Llegó la pausa de la comida. ¿Detengo el reloj?', 'lunch'),
+      f('Primero el plato, luego el teclado. ¿Paro el contador?', 'lunch'),
+      f('¡A comer! ¿Dejo de contar mientras tanto?', 'lunch'),
+    ],
+    lunchEnd: [
+      f('¿Retomamos {task}?', 'lunch'),
+      f('Se acabó la comida. ¿Seguimos con {task}?', 'keep-going'),
+      f('Con las pilas cargadas: ¿volvemos a {task}?', 'keep-going'),
+      f('Fin de la pausa. ¿Reanudo {task}?', 'lunch'),
+    ],
+    end: [
+      f('¿Cerramos por hoy?', 'finished'),
+      f('Es tu hora de salida. ¿Paro el temporizador?', 'finished'),
+      f('Jornada cumplida. ¿Lo dejamos aquí?', 'finished'),
+      f('Hora de desconectar. ¿Detengo el reloj?', 'finished'),
+    ],
+    dayOff: [
+      f('¿Trabajando en vacaciones? Que sea poquito.', 'shades'),
+      f('¿Hoy no era tu día libre? No te olvides de descansar.', 'holiday'),
+      f('Modo vacaciones activado… y el temporizador también. ¿Algo rápido?', 'shades'),
+      f('¿En tu día libre por aquí? Te acompaño, pero un ratito.', 'holiday'),
+    ],
+  },
+  titles: { start: 'Hora de entrada', lunchStart: 'Pausa para comer', lunchEnd: 'Vuelta de la comida', end: 'Hora de salida', dayOff: 'Día libre' },
+  actions: { start: 'Empezar', stop: 'Parar', resume: 'Retomar' },
+  lastTask: 'Última tarea: {task}.',
+  today: 'Hoy llevas {total}.',
 };

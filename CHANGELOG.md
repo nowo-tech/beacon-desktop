@@ -84,6 +84,37 @@ Likely 0.5.0.
 - `pnpm screenshots:native` (`NATIVE_SCREENS=<dir>`): mock-ups of the Windows 11, macOS and GNOME notifications, the
   prompt window over a desktop (fresh, mid-countdown, paused) and the Windows tray menu, light and dark.
 
+- **Working-hours reminders** (`src/lib/schedule.ts`, texts in `src/lib/messages/` → `reminders`, `src/lib/reminders.ts`):
+  - **Start time** ("¿Empezamos? Última tarea: X", *Start* resumes the last task; skipped when a timer already runs;
+    optional lead of 5 / 10 / 15 min), **lunch** ("Hora de comer, ¿paro el temporizador?" with *Stop* while a timer
+    runs; "¿Retomamos X?" with *Resume* when it ends) and **end of the day** ("¿Cerramos por hoy?" with *Stop* and the
+    total tracked today; it replaces that evening's "it's getting late" card). Native in the 7 languages, four
+    phrasings per moment, no repeats, poses early / sunrise, lunch, finished, shades / holiday.
+  - **Schedule**: Beacon's `GET me.workingHours` by default (the gap between two slots of a day is the lunch break;
+    both the `slots` shape and TimeTrackBundle's documented `days` shape are read), adjustable per weekday in
+    Settings → **My schedule** (start, end, lunch from / until, day off). Local values are stored on this computer
+    only, marked *This computer* next to Beacon's, and *Reset to Beacon's schedule* drops them. The last Beacon schedule
+    is kept for an offline start; signing out forgets it and the local changes.
+  - **Holidays and vacations**: no schedule reminders on them. Read from the forward-compatible `GET me.daysOff`
+    (`[{date, kind: 'holiday' | 'vacation', label?}]`, not sent by TimeTrackBundle 1.11 yet) plus days off marked in
+    Settings. A timer started on one gets a single "¿Trabajando en vacaciones?" line that day.
+  - **Delivery**: a desktop notification with the mascot pose and **one button** (Windows toast button, Linux
+    notification action, macOS action; ids `schedule-start` / `schedule-stop` / `schedule-resume` only, anything else
+    is dropped in Rust) that starts or stops the timer without opening the window; the in-app toast with the same
+    button when notifications are off, refused or failing.
+  - **Timing**: in the schedule's time zone (`me.workingHours.timezone`, else `me.timezone`, else the system's), DST
+    aware (a time that does not exist moves forward, a repeated one counts once). The Rust heartbeat wakes the UI at the
+    next reminder (`WakePlan.reminderAt`, `WakeReason::Reminder`); after a sleep a reminder fires only within 15 min of
+    its time (`REMINDER_GRACE_MINUTES`), never hours later, and each fires once per day. A reminder whose condition does
+    not hold when it comes due is skipped for the day.
+  - Rules: own switch *Working-hours reminders* (on by default) and the 1 h pause; they bypass the 50-minute gap of the
+    friendly messages (they are functional) and start it for the cards after them; never over the "Still there?"
+    question.
+  - Tests: schedule merge, lunch from slot gaps, each reminder's conditions, days off, DST, time zones, sleep grace, no
+    duplicates, the buttons (Rust and TypeScript). `pnpm screenshots:schedule` (`SCHEDULE_SCREENS=<dir>`) renders
+    Settings → My schedule, the four reminders as Windows toasts and the in-app toast, light and dark, in Spanish.
+  - Mock server: `daysOff` and `locale` on `GET me` (config).
+
 ### Security
 
 - App commands are ACL-scoped (security review 2026-11-05, FN-L1): `build.rs` declares them in the app manifest

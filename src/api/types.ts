@@ -36,12 +36,24 @@ export interface WorkingHours {
   slots: WorkingHoursSlot[];
 }
 
+/** One day off of `GET me.daysOff`: local date in the schedule's time zone. */
+export interface DayOff {
+  date: string;
+  kind: 'holiday' | 'vacation';
+  label?: string | null;
+}
+
 export interface Me {
   userId: string | number;
   identifier: string;
   displayName?: string | null;
   scopes: Scope[];
   workingHours?: WorkingHours | null;
+  /**
+   * Holidays and vacations of the user (proposed for TimeTrackBundle, not sent by 1.11): no working-hours reminders on
+   * them. Read defensively by lib/schedule.ts (`beaconDaysOff`).
+   */
+  daysOff?: DayOff[] | null;
   /** Oldest client version the server still supports for this client type (TimeTrack 1.9.1+; absent before). */
   minSupportedVersion?: string | null;
   /** Feature switches (1.10+; absent on 1.9). Unknown keys are ignored; a missing or `false` key means "off". */

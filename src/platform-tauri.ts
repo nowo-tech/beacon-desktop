@@ -77,6 +77,8 @@ export function tauriPlatform(): Platform {
     // The Rust heartbeat keeps the checks on time while the window is hidden (src-tauri/src/heartbeat.rs).
     onWake: (handler) => void listen<{ reason: WakeReason }>('wake', (event) => handler(event.payload.reason)),
     setWakePlan: (plan) => invoke('set_wake_plan', { plan }),
+    // A button of a working-hours reminder notification (src-tauri/src/notify.rs, known ids only).
+    onNotificationAction: (handler) => void listen<string>('notification-action', (event) => handler(event.payload)),
     promptWindow: promptHost,
     // Title bar / native menus follow the app's theme; `null` hands it back to the system (capability core:window:allow-set-theme).
     setWindowTheme: (theme) => getCurrentWindow().setTheme(theme),

@@ -52,6 +52,10 @@ function freshState() {
     requests: [],
     config: {
       workingHours: null,
+      // `GET me.daysOff` as proposed for TimeTrackBundle ([{date, kind: 'holiday' | 'vacation', label?}]); null = absent.
+      daysOff: null,
+      // `GET me.locale` (TimeTrackBundle 1.11); null = absent.
+      locale: null,
       deviceInterval: 5,
       tokenScopes: [...ALL_SCOPES],
       failNext: null,
@@ -291,6 +295,8 @@ export function createMockServer(options = {}) {
           displayName: user.displayName,
           scopes: session.scopes,
           workingHours: state.config.workingHours,
+          ...(state.config.daysOff !== null ? { daysOff: state.config.daysOff } : {}),
+          ...(state.config.locale !== null ? { locale: state.config.locale } : {}),
           ...(state.config.minSupportedVersion ? { minSupportedVersion: state.config.minSupportedVersion } : {}),
           ...(v110()
             ? {

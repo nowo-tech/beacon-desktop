@@ -60,19 +60,28 @@ export interface TrayMenu {
 }
 
 /** Why the host woke the UI (Tauri: the Rust heartbeat, see src-tauri/src/heartbeat.rs; browser: a 30 s interval). */
-export type WakeReason = 'tick' | 'deadline' | 'idle' | 'resumed';
+export type WakeReason = 'tick' | 'deadline' | 'idle' | 'reminder' | 'resumed';
 
 /** What the UI wants to be woken for besides the 30 s tick (Unix ms / seconds). */
 export interface WakePlan {
   deadlineAt: number | null;
   idleAfterSeconds: number | null;
+  /** The next working-hours reminder (lib/schedule.ts). */
+  reminderAt: number | null;
 }
 
-/** A friendly message as a native notification: short localized title, the line, the mascot pose id. */
+/** A notification button: the id sent back when pressed (`schedule-start` …) and its translated label. */
+export interface NotificationAction {
+  id: string;
+  label: string;
+}
+
+/** A friendly message as a native notification: short localized title, the line, the mascot pose id, an optional button. */
 export interface FriendlyNotification {
   title: string;
   body: string;
   pose: string | null;
+  action?: NotificationAction | null;
 }
 
 /** `unsupported`: the host has no desktop notifications (plain browser). */
@@ -132,6 +141,8 @@ export interface Platform {
   requestNotificationPermission(): Promise<NotificationPermission>;
   /** Wake-ups of the regular check, on time even while the window is hidden. */
   onWake(handler: (reason: WakeReason) => void): void;
+  /** A notification button was pressed (its `NotificationAction.id`). */
+  onNotificationAction(handler: (id: string) => void): void;
   setWakePlan(plan: WakePlan): Promise<void>;
   /** The "Still there?" window; `null` when the host has none (the prompt is then a modal in the main window). */
   readonly promptWindow: PromptHost | null;
@@ -194,6 +205,8 @@ export interface BrowserHooks {
   trayAction(action: string): void;
   /** The fake heartbeat fires. */
   wake(reason?: WakeReason): void;
+  /** The button of a fake notification is pressed. */
+  notificationAction(id: string): void;
   /** An answer from the fake prompt window. */
   answerPrompt(answer: PromptAnswer): void;
 }
@@ -204,6 +217,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
   const shortcutHandlers: (() => void)[] = [];
   const trayHandlers: ((action: string) => void)[] = [];
   const wakeHandlers: ((reason: WakeReason) => void)[] = [];
+  const actionHandlers: ((id: string) => void)[] = [];
   const answerHandlers: ((answer: PromptAnswer) => void)[] = [];
   const hooks: BrowserHooks = {
     idleSeconds: 0,
@@ -238,6 +252,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     shortcutPressed: () => shortcutHandlers.forEach((handler) => handler()),
     trayAction: (action) => trayHandlers.forEach((handler) => handler(action)),
     wake: (reason = 'tick') => wakeHandlers.forEach((handler) => handler(reason)),
+    notificationAction: (id) => actionHandlers.forEach((handler) => handler(id)),
     answerPrompt: (answer) => answerHandlers.forEach((handler) => handler(answer)),
   };
   const promptHost: PromptHost = {
@@ -280,6 +295,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
       return hooks.notificationPermission;
     },
     onWake: (handler) => void wakeHandlers.push(handler),
+    onNotificationAction: (handler) => void actionHandlers.push(handler),
     setWakePlan: async (plan) => void (hooks.wakePlan = plan),
     get promptWindow() {
       return hooks.nativePrompt ? promptHost : null;
