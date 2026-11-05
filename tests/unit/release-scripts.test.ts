@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { checkPinExpiry, DEFAULT_MIN_DAYS, parseArgs } from '../../scripts/release/check-pin-expiry.mjs';
 import { checkUpdaterKey, describePubkey, PLACEHOLDER } from '../../scripts/release/check-updater-key.mjs';
 import { buildManifest, escapeXml, msixVersion } from '../../scripts/store/msix-manifest.mjs';
 
@@ -85,5 +86,40 @@ describe('MSIX manifest (Microsoft Store)', () => {
     expect(() => buildManifest({ ...identity, publisherDisplayName: ' ', version: '0.4.0' })).toThrow('MSIX_PUBLISHER_DISPLAY_NAME');
     expect(() => buildManifest({ ...identity, version: '0.4.0', arch: 'x86' })).toThrow('arch');
     expect(escapeXml(`<"'&>`)).toBe('&lt;&quot;&apos;&amp;&gt;');
+  });
+});
+
+describe('pin set expiry tripwire (FY-L2)', () => {
+  const pins = (expires: unknown) => ({ version: 1, expires, hosts: ['beacon.example.test'], pins: [{ sha256: 'x', label: 'y' }] });
+  const now = new Date('2026-11-05T12:00:00Z');
+
+  it('passes the shipped pin set with the release threshold', () => {
+    const shipped = JSON.parse(readFileSync('src-tauri/pins.json', 'utf8'));
+    expect(checkPinExpiry({ pins: shipped, now, minDays: 180 })).toMatchObject({ ok: true });
+  });
+
+  it('fails inside the threshold and after expiry, passes outside it', () => {
+    expect(checkPinExpiry({ pins: pins('2027-02-01'), now })).toMatchObject({ ok: false, daysLeft: 87 });
+    expect(checkPinExpiry({ pins: pins('2027-02-01'), now }).message).toContain('rotate it');
+    expect(checkPinExpiry({ pins: pins('2026-11-01'), now }).ok).toBe(false);
+    expect(checkPinExpiry({ pins: pins('2027-02-05'), now })).toMatchObject({ ok: true, daysLeft: 91 });
+    expect(checkPinExpiry({ pins: pins('2027-02-05'), now, minDays: 180 }).ok).toBe(false);
+    expect(DEFAULT_MIN_DAYS).toBe(90);
+  });
+
+  it('fails on a broken pin file', () => {
+    for (const bad of [null, {}, { ...pins('2028-05-01'), hosts: [] }, { ...pins('2028-05-01'), pins: [] }, { ...pins('2028-05-01'), version: '1' }]) {
+      expect(checkPinExpiry({ pins: bad, now }).ok).toBe(false);
+    }
+    for (const date of ['2028-02-30', '28-05-01', 20280501, undefined]) {
+      expect(checkPinExpiry({ pins: pins(date), now })).toMatchObject({ ok: false, daysLeft: null });
+    }
+  });
+
+  it('reads --min-days and the path', () => {
+    expect(parseArgs([])).toEqual({ minDays: 90, path: null });
+    expect(parseArgs(['--min-days', '180', 'x.json'])).toEqual({ minDays: 180, path: 'x.json' });
+    expect(() => parseArgs(['--min-days', 'soon'])).toThrow('whole number');
+    expect(() => parseArgs(['--min-days', '-1'])).toThrow('whole number');
   });
 });

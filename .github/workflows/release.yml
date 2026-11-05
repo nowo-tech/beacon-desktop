@@ -61,6 +61,8 @@ jobs:
           flag() { if have "${@:3}"; then echo "$1=true" >> "$GITHUB_OUTPUT"; else echo "$1=false" >> "$GITHUB_OUTPUT"; echo "::notice title=Skipped::$2 (missing: ${*:3})"; fi; }
           [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo "::error::TAURI_SIGNING_PRIVATE_KEY is missing: updater artifacts are required since 0.4.0"; exit 1; }
           node scripts/release/check-updater-key.mjs
+          # TLS pin set gate (docs/PINNING.md, FY-L2): a build must keep its pinning for most of its life.
+          node scripts/release/check-pin-expiry.mjs --min-days 180
           echo "updater=true" >> "$GITHUB_OUTPUT"
           flag s3 "S3 upload skipped: bundles stay as workflow artifacts" TIME_TRACK_S3_ENDPOINT TIME_TRACK_S3_BUCKET TIME_TRACK_S3_ACCESS_KEY_ID TIME_TRACK_S3_SECRET_ACCESS_KEY
 
