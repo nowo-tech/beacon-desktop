@@ -1,0 +1,42 @@
+Source Output #14
+	Driver: protocol-native.c
+	Owner Module: 10
+	Client: 31
+	Source: 1
+	Sample Specification: s16le 1ch 44100Hz
+	Channel Map: mono
+	Format: pcm, format.sample_format = "\"s16le\""  format.rate = "44100"  format.channels = "1"  format.channel_map = "\"mono\""
+	Corked: no
+	Mute: no
+	Volume: mono: 65536 / 100% / 0,00 dB
+	        balance 0,00
+	Buffer Latency: 0 usec
+	Source Latency: 1052 usec
+	Resample method: speex-float-1
+	Properties:
+		media.name = "AudioCallbackDriver"
+		application.name = "Firefox"
+		native-protocol.peer = "UNIX socket client"
+		native-protocol.version = "35"
+		application.process.id = "3311"
+		application.process.user = "ana"
+		application.process.host = "desktop"
+		application.process.binary = "firefox"
+		application.language = "C"
+		window.x11.display = ":0"
+		application.process.machine_id = "0123456789abcdef0123456789abcdef"
+		module-stream-restore.id = "source-output-by-application-name:Firefox"
+
+Source Output #15
+	Driver: protocol-native.c
+	Owner Module: 10
+	Client: 40
+	Source: 1
+	Sample Specification: s16le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Corked: no
+	Mute: no
+	Properties:
+		media.name = "Recording"
+		application.name = "Audio Recorder"
+		module-stream-restore.id = "source-output-by-application-name:Audio Recorder"

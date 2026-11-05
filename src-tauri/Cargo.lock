@@ -4897,7 +4897,9 @@ dependencies = [
 name = "time-track-desktop"
 version = "0.1.0"
 dependencies = [
+ "core-foundation-sys",
  "keyring",
+ "libc",
  "notify-rust",
  "serde",
  "serde_json",
@@ -4913,6 +4915,7 @@ dependencies = [
  "tauri-winrt-notification",
  "url",
  "user-idle",
+ "winreg",
 ]
 
 [[package]]

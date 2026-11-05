@@ -4,9 +4,12 @@
 //!
 //! Privacy by design: nothing here observes the user's activity beyond the OS "seconds since last input" counter,
 //! which never leaves the device. The UI reads it every 30 s while a timer runs, only to decide when to ask "Still
-//! there?"; it is not stored, logged or sent (only the user's answer is).
+//! there?"; it is not stored, logged or sent (only the user's answer is). With meeting detection on (opt-in), the
+//! heartbeat also tells the UI whether a known meeting app holds the microphone (`meeting/`): app ids only, never
+//! window titles, URLs or audio, and nothing is stored or sent.
 
 mod heartbeat;
+mod meeting;
 mod notify;
 mod pose_art;
 mod prompt;
@@ -724,18 +727,27 @@ fn set_wake_plan(
     Ok(())
 }
 
-/// Polls the wall clock every second and wakes the main window (`wake` events) on time, hidden or not.
+/// Polls the wall clock every second and wakes the main window (`wake` events) on time, hidden or not. With meeting
+/// detection on, it also sends the main window what holds the microphone (`mic` events, every 15–30 s).
 fn spawn_heartbeat(app: AppHandle) {
     let _ = std::thread::Builder::new()
         .name("heartbeat".into())
-        .spawn(move || loop {
-            std::thread::sleep(Duration::from_millis(heartbeat::POLL_MS));
-            let wake = match app.state::<HeartbeatState>().0.lock() {
-                Ok(mut beat) => beat.poll(heartbeat::now_ms(), read_idle_seconds),
-                Err(_) => None,
-            };
-            if let Some(wake) = wake {
-                let _ = app.emit_to("main", "wake", wake);
+        .spawn(move || {
+            let mut microphone = meeting::system_detector();
+            loop {
+                std::thread::sleep(Duration::from_millis(heartbeat::POLL_MS));
+                let now = heartbeat::now_ms();
+                let (wake, mic) = match app.state::<HeartbeatState>().0.lock() {
+                    Ok(mut beat) => (beat.poll(now, read_idle_seconds), beat.mic_due(now)),
+                    Err(_) => (None, false),
+                };
+                if let Some(wake) = wake {
+                    let _ = app.emit_to("main", "wake", wake);
+                }
+                // Outside the lock: the probe may take a few milliseconds (a `pactl` run on Linux).
+                if mic {
+                    let _ = app.emit_to("main", "mic", meeting::snapshot(microphone.probe(), now));
+                }
             }
         });
 }

@@ -36,8 +36,16 @@ pub struct NoteAction {
     pub label: String,
 }
 
-/// The only button ids the UI may ask for (`src/lib/reminders.ts`).
-pub const ACTION_IDS: [&str; 3] = ["schedule-start", "schedule-stop", "schedule-resume"];
+/// The only button ids the UI may ask for (`src/lib/reminders.ts`, and the meeting questions of `src/lib/meetings.ts`).
+pub const ACTION_IDS: [&str; 7] = [
+    "schedule-start",
+    "schedule-stop",
+    "schedule-resume",
+    "meeting-generic",
+    "meeting-switch",
+    "meeting-back",
+    "meeting-stop",
+];
 
 const TITLE_MAX: usize = 80;
 const LABEL_MAX: usize = 24;
@@ -400,6 +408,11 @@ mod tests {
             })
         );
         assert_eq!(checked_action(&note("open-url", "Go")), None);
+        assert_eq!(
+            checked_action(&note("meeting-back", "Volver")).map(|a| a.id),
+            Some("meeting-back".to_string())
+        );
+        assert_eq!(checked_action(&note("meeting-open-url", "Go")), None);
         assert_eq!(checked_action(&note("schedule-start", "  ")), None);
         let long = checked_action(&note("schedule-resume", &"x".repeat(60))).unwrap();
         assert_eq!(long.label.chars().count(), LABEL_MAX);

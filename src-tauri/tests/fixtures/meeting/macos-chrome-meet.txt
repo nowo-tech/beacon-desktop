@@ -1,0 +1,5 @@
+# Google Meet in Chrome on macOS 15 (the capture runs in a Chrome helper process).
+input-running: yes
+88	com.apple.controlcenter	0
+9901	com.google.Chrome.helper	1
+9910	us.zoom.xos	0

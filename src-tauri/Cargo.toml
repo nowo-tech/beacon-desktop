@@ -37,6 +37,13 @@ notify-rust = "4.18"
 [target.'cfg(windows)'.dependencies]
 # Windows toasts with the pose as the square app logo (notify.rs).
 tauri-winrt-notification = "0.8"
+# Meeting detection: the microphone consent store (meeting/windows.rs); already used by tauri-plugin-autostart.
+winreg = "0.56"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Meeting detection: CoreAudio bundle ids and process names (meeting/macos.rs); both already used by Tauri.
+core-foundation-sys = "0.8"
+libc = "0.2"
 
 [profile.release]
 codegen-units = 1
