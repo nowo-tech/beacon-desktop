@@ -1,0 +1,162 @@
+name: Installer upgrade test
+
+# Manual only (Windows minutes cost 2x): installs an older TimeTrack on a clean GitHub-hosted Windows runner, upgrades
+# it with a newer NSIS installer and checks the result (scripts/windows/upgrade-test.ps1): installer exit code, one
+# single "TimeTrack" Uninstall entry with the new version, no old MSI left, the app starts. Each scenario is its own
+# job, so each one starts from a clean machine.
+#
+# Inputs:
+#   old_run_id   Release run whose "desktop-windows" artifact holds the oldest installers (default: v0.1.0, MSI + NSIS,
+#                published without `bundle.publisher`, so the Windows "manufacturer" was "nowo").
+#   prev_run_id  Release run of the previous direct-download version (default: v0.4.0, NSIS per user, publisher
+#                "nowo.tech"), the starting point of the in-app updater route.
+#   new_run_id   Run whose "desktop-windows" (release) or "new-installer" (this workflow) artifact is the new version.
+#                Empty: build this ref's NSIS installer here, signed with a throwaway updater key (never the release one).
+#   version      Version stamped on the build of this ref (empty: package.json). Ignored with new_run_id.
+#   scenarios    "all" or a comma-separated list of scenario ids (see the plan job).
+# Artifacts of other runs expire after 30 days (release.yml retention): pass a newer run or rebuild the old tag then.
+on:
+  workflow_dispatch:
+    inputs:
+      old_run_id:
+        description: Release run with the oldest installers (v0.1.0)
+        default: '41621683190'
+      prev_run_id:
+        description: Release run with the previous version's installer (v0.4.0)
+        default: '41895956986'
+      new_run_id:
+        description: Run with the new installer (empty = build this ref)
+        default: ''
+      version:
+        description: Version for the build of this ref (empty = package.json)
+        default: '0.5.0'
+      scenarios:
+        description: all, or comma-separated scenario ids
+        default: all
+
+permissions:
+  contents: read
+  actions: read # artifacts of the release runs
+
+concurrency:
+  group: installer-upgrade-test-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        env:
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          # id: old installers (v01 = old_run_id, v04 = prev_run_id) and which of them, how the new one runs, app running.
+          all='[
+            {"id":"nsis01-interactive-running","from":"v01","old":"nsis","mode":"interactive","running":true},
+            {"id":"nsis01-silent","from":"v01","old":"nsis","mode":"silent","running":false},
+            {"id":"nsis01-update-running","from":"v01","old":"nsis","mode":"update","running":true},
+            {"id":"msi01-interactive-running","from":"v01","old":"msi","mode":"interactive","running":true},
+            {"id":"msi01-silent","from":"v01","old":"msi","mode":"silent","running":false},
+            {"id":"both01-interactive","from":"v01","old":"both","mode":"interactive","running":false},
+            {"id":"v04-update-running","from":"v04","old":"nsis","mode":"update","running":true},
+            {"id":"v04-interactive-running","from":"v04","old":"nsis","mode":"interactive","running":true}
+          ]'
+          if [ "$SCENARIOS" = all ]; then
+            matrix="$(jq -c '{include: .}' <<<"$all")"
+          else
+            matrix="$(jq -c --arg s "$SCENARIOS" '($s | split(",") | map(gsub("^ +| +$"; ""))) as $want | {include: map(select(.id as $id | $want | index($id)))}' <<<"$all")"
+          fi
+          [ "$(jq '.include | length' <<<"$matrix")" -gt 0 ] || { echo "::error::no scenario matches '$SCENARIOS'"; exit 1; }
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          jq . <<<"$matrix"
+
+  build:
+    if: inputs.new_run_id == ''
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - run: pnpm install --frozen-lockfile
+      # A throwaway updater key: the build produces the .sig like a release, but nothing here can sign a real update.
+      - name: Build the NSIS installer (throwaway updater key)
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          pnpm tauri signer generate --ci -p throwaway -w "$RUNNER_TEMP/throwaway.key"
+          export TAURI_SIGNING_PRIVATE_KEY="$(cat "$RUNNER_TEMP/throwaway.key")"
+          export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=throwaway
+          export TAURI_UPDATER_PUBKEY="$(cat "$RUNNER_TEMP/throwaway.key.pub")"
+          node -e '
+            const c = { plugins: { updater: { pubkey: process.env.TAURI_UPDATER_PUBKEY } } };
+            if (process.env.VERSION) c.version = process.env.VERSION;
+            console.log(JSON.stringify(c));' > "$RUNNER_TEMP/tauri.test.json"
+          cat "$RUNNER_TEMP/tauri.test.json"
+          pnpm tauri build --bundles nsis --config "$RUNNER_TEMP/tauri.test.json"
+          mkdir -p out
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe src-tauri/target/release/bundle/nsis/*-setup.exe.sig out/
+          ls -la out
+      - uses: actions/upload-artifact@v7
+        with:
+          name: new-installer
+          path: out/
+          retention-days: 7
+
+  upgrade:
+    name: ${{ matrix.id }}
+    needs: [plan, build]
+    if: always() && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/windows
+      - name: Old installers
+        uses: actions/download-artifact@v7
+        with:
+          name: desktop-windows
+          path: old
+          run-id: ${{ matrix.from == 'v04' && inputs.prev_run_id || inputs.old_run_id }}
+          github-token: ${{ github.token }}
+      - name: New installer (this run's build)
+        if: inputs.new_run_id == ''
+        uses: actions/download-artifact@v7
+        with:
+          name: new-installer
+          path: new
+      - name: New installer (release run)
+        if: inputs.new_run_id != ''
+        uses: actions/download-artifact@v7
+        with:
+          name: desktop-windows
+          path: new
+          run-id: ${{ inputs.new_run_id }}
+          github-token: ${{ github.token }}
+      - name: Upgrade and check
+        shell: powershell
+        run: |
+          $running = '${{ matrix.running }}' -eq 'true'
+          & .\scripts\windows\upgrade-test.ps1 -Old ${{ matrix.old }} -OldDir old -NewDir new -Mode ${{ matrix.mode }} -AppRunning:$running -OutDir out
+          exit $LASTEXITCODE
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: upgrade-${{ matrix.id }}
+          path: out/
+          retention-days: 14
