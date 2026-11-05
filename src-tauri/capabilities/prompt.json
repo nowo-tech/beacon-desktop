@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "prompt",
+  "description": "\"Still there?\" window: receives its content as events and may call only prompt_view, prompt_answer and prompt_show_main (no keychain, updater, tray, network, opener, notification, window or autostart permission).",
+  "windows": ["prompt"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "allow-prompt-view", "allow-prompt-answer", "allow-prompt-show-main"]
+}

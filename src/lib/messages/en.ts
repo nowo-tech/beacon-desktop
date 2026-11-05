@@ -1,0 +1,250 @@
+import { f, hm, type Keywords, type MeetingCatalog, type NudgeCatalog, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
+
+/** English. */
+export const pools: Pools = {
+  idle: [
+    f('Knock knock… anybody home?', 'peek'),
+    f('Psst… are you still with me?', 'peek-2'),
+    f('Did you sneak off for a snack?', 'lunch'),
+    f('The keyboard misses you. Still around?', 'sleepy'),
+    f('Earth to you! Do you read me?', 'wave'),
+    f('Still there, or am I talking to an empty chair?', 'think'),
+    f("I've counted every pixel twice. Are you back?", 'peek-3'),
+    f('Is this a coffee break or a long goodbye?', 'coffee'),
+    f('Ping! Any pong out there?', 'wave'),
+    f('Did a meeting swallow you whole?', 'teamwork'),
+    f('Just checking: still on the clock?', 'think'),
+    f("Hey, you there? I promise I won't judge.", 'heart'),
+    f('Was that a power nap? Still with us?', 'sleepy'),
+    f('It got very quiet in here… everything OK?', 'peek-4'),
+    f('Tap tap. Is anyone at the controls?', 'wave'),
+    f("I'm keeping your seat warm. Coming back?", 'sleepy'),
+  ],
+  cheer: [
+    f('{hours} hours in and still going strong. Look at you!', 'celebrate'),
+    f('Focus mode: legendary. Keep it up!', 'focus'),
+    f("You're on a roll. The robot is taking notes.", 'working'),
+    f('Small steps, big progress. Nice going!', 'progress'),
+    f("If focus were a sport, you'd be on the podium.", 'achievement'),
+    f('This is some serious deep work. Proud of you!', 'focus'),
+    f("Hours fly when you're this good. Keep cruising.", 'music'),
+    f('Productivity level: robot-approved.', 'presentation'),
+    f("You've got this. One task at a time.", 'keep-going'),
+    f('Nice streak! The clock is impressed, and so am I.', 'cheer-up'),
+    f("Still at it? You're unstoppable (in a good way).", 'deadline'),
+    w('Quick stretch? Your back will send a thank-you note.', 'stretch'),
+    w('Water break! Even robots need coolant.', 'water'),
+    w('Look away from the screen for 20 seconds. Your eyes will thank you.', 'eyes'),
+    w('A two-minute walk now can make the next hour better.', 'stretch-legs'),
+    w('Shoulders down, deep breath in… and out. Lovely.', 'mindfulness'),
+  ],
+  earlyBird: [
+    f('Up with the sun! The early bird gets the commits.', 'sunrise'),
+    f("Good morning, early riser. The coffee hasn't even woken up yet.", 'early'),
+    f('Starting before the rooster? Respect.', 'early'),
+    f('Quiet morning, clear head. Great time to get things done.', 'sunrise'),
+    f('Early start! Remember to finish early too.', 'early'),
+    f('You beat the robot to work today. Impressive.', 'celebrate'),
+    f('Morning! The inbox is still asleep. Enjoy the calm.', 'sleepy'),
+    f('Rise and shine, and maybe a second coffee.', 'coffee'),
+  ],
+  coffee: [
+    w("Coffee o'clock? The robot recommends it.", 'coffee'),
+    w('Time for a cuppa. Your next idea is in there somewhere.', 'coffee'),
+    w('Quick refuel? Coffee, tea or a glass of water, all good.', 'water'),
+    w('Short break, big recharge. Go grab something warm.', 'coffee'),
+    w('The coffee machine called. It misses you.', 'coffee'),
+    w('Five minutes away from the screen is not lost time.', 'stretch-legs'),
+    w('Snack break? Fruit counts as a power-up.', 'lunch'),
+    w('Pause, sip, smile. Then back to it.', 'coffee'),
+  ],
+  lunch: [
+    w('Lunch time! Food fuels focus.', 'lunch'),
+    w('Your stomach just filed a ticket. Priority: high.', 'lunch'),
+    w('Time to eat something good, away from the keyboard.', 'lunch'),
+    w('Even robots recharge at midday. Your turn!', 'lunch'),
+    w('Lunch break: zero meetings, maximum flavour.', 'lunch'),
+    w('Step out, eat well, come back stronger.', 'wave'),
+    w('Sandwich at the desk again? Treat yourself to a proper break.', 'lunch'),
+    w('A good lunch today is a better afternoon later.', 'heart'),
+  ],
+  lateWork: [
+    w("It's getting late. Wrap up when you can and get some rest.", 'moon'),
+    w("The stars are out. Maybe it's time to call it a day?", 'late-working'),
+    w("Night owl mode on. Sleep is a feature, not a bug.", 'rest'),
+    w('Good work today. Tomorrow-you will be happy if you rest now.', 'finished'),
+    w('Late shift? Drink some water and save the hard stuff for the morning.', 'water'),
+    w('The robot is yawning. You might be too.', 'sleepy'),
+    w('Whatever is left will still be here tomorrow. Promise.', 'late-working'),
+    w('Dim the screen, stretch a bit, and plan a soft landing.', 'stretch'),
+  ],
+  friday: [
+    f('Friday afternoon! The finish line is in sight.', 'flag'),
+    f("It's almost the weekend. One last push!", 'holiday'),
+    f('Friday vibes: tidy up, write notes for Monday, smile.', 'music'),
+    f('Weekend loading… 90% complete.', 'friday'),
+    f("Great week! Let's land it smoothly.", 'finished'),
+    f('Friday rule: no big deploys, lots of high fives.', 'thumbs'),
+    f('Almost there. The robot is already wearing sunglasses.', 'shades'),
+    f('Wrap it up nicely and enjoy your weekend.', 'holiday'),
+  ],
+  weekend: [
+    f("Working on the weekend? Hope it's something you love.", 'weekend-start'),
+    f('Weekend shift! The robot brought snacks.', 'lunch'),
+    f("Psst, it's the weekend. Did the calendar get the memo?", 'weekend-start'),
+    f('Weekend plus a running timer? Bold move.', 'shades'),
+    f('Weekend hero, reporting for duty!', 'weekend-start'),
+    f('The robot is technically off today, but here for you.', 'wave'),
+    f("Quick weekend fix? Let's make it a quick one.", 'thumbs'),
+    f("Clocking in on the weekend? Let's keep it short and sweet.", 'coffee'),
+  ],
+  weekendRest: [
+    w("That's a good chunk of weekend work. The sofa is calling.", 'stretch-legs'),
+    w("Sun's out. Will you be too, soon?", 'shades'),
+    w("You've earned the rest of the day. Go enjoy it.", 'shades'),
+    w('A bit of weekend work is fine. A lot of weekend rest is better.', 'rest'),
+    w('Time to save, close the laptop and do something fun.', 'shades'),
+    w('Park, couch or kitchen: the rest of the weekend is yours.', 'stretch-legs'),
+    w('The beach called. Or the park. Or a nap. Your pick.', 'shades'),
+    w('Great job today. Now go recharge, weekend style.', 'shades'),
+  ],
+  milestone: [
+    f('{hours} hours of solid work. That deserves a medal!', 'achievement'),
+    f('Milestone unlocked: {hours} hours. Take a bow.', 'achievement'),
+    f('{hours} hours and still sharp. Gold standard.', 'achievement'),
+    f('Look at that progress! {hours} hours well spent.', 'progress'),
+    f('Another big chunk done. Checkmarks everywhere.', 'task-complete'),
+    f('{hours} hours in. The pom-poms are out for you!', 'cheer-up'),
+  ],
+  overtime: [
+    w('Lots of time on the clock. Battery low: time for a proper break.', 'overtime'),
+    w('That\'s a very long stretch. Step away for a few minutes, please.', 'overtime'),
+    w('Even robots recharge. Maybe it\'s your turn?', 'rest'),
+    w('Long day! Stretch, drink some water, and check if you can wrap up.', 'stretch'),
+    w('The hourglass says it\'s been a while. A break would do wonders.', 'overtime'),
+    w('You\'ve given a lot today. Rest is part of the work.', 'rest'),
+  ],
+  meetingIdle: [
+    f('Long meeting? Take your time.', 'teamwork'),
+    f('Deep in the call? I\'ll keep the clock company.', 'teamwork'),
+    f('Meeting still going? No rush, just checking.', 'teamwork'),
+    f('Lots of listening, not much typing. All good in there?', 'teamwork'),
+    f('Is the call still on, or did it end a while ago?', 'think'),
+    f('Still with your colleagues? Nod twice if yes.', 'teamwork'),
+  ],
+  meetingAfter: [
+    w('Long meeting done. A coffee and a stretch are well earned.', 'coffee'),
+    w('That was a long call. Stand up, roll your shoulders, breathe.', 'stretch'),
+    w('Meeting marathon over! Water, then back to it.', 'water'),
+    w('After all that talking: a sip of something and a short walk?', 'stretch-legs'),
+    w('Your voice did a lot of work. Give it a drink.', 'water'),
+    w('Long meeting, short break. Five minutes away from the screen?', 'coffee'),
+  ],
+  dailyDone: [
+    f('Daily done, let\'s go!', 'thumbs'),
+    f('Daily wrapped. Time to make it happen.', 'keep-going'),
+    f('Stand-up over, sleeves up!', 'flag'),
+    f('Daily done. The plan is set, now the fun part.', 'task-complete'),
+    f('That\'s the daily! Off you go.', 'wave'),
+    f('Daily done in record time? The robot approves.', 'thumbs'),
+  ],
+};
+
+export const windows: Windows = {
+  earlyBefore: hm(7, 30),
+  earlyUntil: hm(11),
+  coffeeAm: [hm(10), hm(11)],
+  coffeePm: [hm(15), hm(16)],
+  lunch: [hm(12), hm(13, 30)],
+  lateFrom: hm(20),
+  lateUntil: hm(5),
+  fridayFrom: hm(15),
+};
+
+/** Words in a task's name, labels or type that mark it as a meeting-like task (matched without accents). */
+export const keywords: Keywords = {
+  daily: ['daily', 'dailies', 'standup', 'stand-up', 'stand up', 'scrum'],
+  meeting: ['meeting', 'meetings', 'sync', '1:1', 'one-on-one', 'call', 'catch-up', 'catchup', 'huddle', 'interview'],
+  technical: ['sprint review', 'design review', 'refinement', 'grooming', 'planning', 'retro', 'retrospective', 'demo', 'technical', 'tech talk'],
+  training: ['training', 'workshop', 'course', 'webinar'],
+};
+
+/** Titles of the desktop notifications (short; the line is the body). */
+export const titles: Titles = {
+  cheer: 'Keep it up',
+  milestone: 'Milestone!',
+  overtime: 'Time for a break',
+  earlyBird: 'Early start',
+  coffee: 'Coffee break?',
+  lunch: 'Lunch time',
+  lateWork: 'Working late',
+  friday: 'Happy Friday',
+  weekend: 'Weekend mode',
+  weekendRest: 'Enjoy your weekend',
+  meetingAfter: 'After the meeting',
+  dailyDone: 'Daily done',
+};
+
+/** Working-hours reminders (start, lunch, end of the day) and the day-off line. */
+export const reminders: ReminderCatalog = {
+  lines: {
+    start: [
+      f('Shall we start?', 'sunrise'),
+      f('Morning! Ready when you are.', 'early'),
+      f('Time to get going. Shall I start the clock?', 'early'),
+      f('Your workday starts now. Off we go?', 'sunrise'),
+    ],
+    lunchStart: [
+      f('Lunch time. Shall I stop the timer?', 'lunch'),
+      f('Your lunch break is here. Pause the clock?', 'lunch'),
+      f('Food first, keyboard later. Stop the timer?', 'lunch'),
+      f('Break time! Shall I stop tracking while you eat?', 'lunch'),
+    ],
+    lunchEnd: [
+      f('Back to {task}?', 'lunch'),
+      f('Lunch is over. Resume {task}?', 'keep-going'),
+      f('Fed and ready? Pick up {task} again?', 'keep-going'),
+      f('Break done. Shall I restart {task}?', 'lunch'),
+    ],
+    end: [
+      f('Shall we call it a day?', 'finished'),
+      f('That\'s the end of your workday. Stop the timer?', 'finished'),
+      f('Home time! Shall I stop the clock?', 'finished'),
+      f('Workday done. Wrap up and stop the timer?', 'finished'),
+    ],
+    dayOff: [
+      f('Working on your holiday? Keep it short!', 'shades'),
+      f('Isn\'t today a day off? Don\'t forget to rest.', 'holiday'),
+      f('Holiday mode is on… and so is the timer. A quick one?', 'shades'),
+      f('On a day off? I\'ll keep you company, briefly.', 'holiday'),
+    ],
+  },
+  titles: { start: 'Workday starts', lunchStart: 'Lunch break', lunchEnd: 'Back from lunch', end: 'End of the day', dayOff: 'Day off' },
+  actions: { start: 'Start', stop: 'Stop', resume: 'Resume' },
+  lastTask: 'Last task: {task}.',
+  today: 'Today: {total}.',
+};
+
+/** "Working without a timer?" (input for a while during working hours, no timer running). */
+export const nudge: NudgeCatalog = {
+  lines: [
+    f('You\'ve been busy for a while and no timer is running. Shall we track it?', 'think'),
+    f('Busy hands, quiet timer. Want to start one?', 'peek'),
+    f('Looks like you\'re working, but the clock isn\'t. Shall I start it?', 'working'),
+    f('Hey, the timer is off. Pick up where you left off?', 'wave'),
+  ],
+  title: 'Working without a timer?',
+  lastTask: 'Last task: {task}.',
+  actions: { resume: 'Start {task}', choose: 'Choose task' },
+};
+
+/** Meeting detection: the question while a call goes on, and the one when it ends. */
+export const meetings: MeetingCatalog = {
+  titles: { ask: 'Meeting?', ended: 'Meeting over' },
+  ask: 'Looks like you\'re in a meeting ({app}). Which meeting is it?',
+  askSwitch: 'Looks like you\'re in a meeting ({app}) and the clock is still on {task}. Switch to the meeting?',
+  ended: 'Meeting over ({minutes} min). Back to {task}?',
+  endedStop: 'Meeting over ({minutes} min). Stop the timer?',
+  browser: 'browser call',
+  actions: { choose: 'Choose task', generic: 'Generic meeting', switch: 'Switch to the meeting', notMeeting: 'Not a meeting', mute: 'Don\'t ask for this app', back: 'Back', stop: 'Stop' },
+};

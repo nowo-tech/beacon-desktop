@@ -50,11 +50,41 @@ The catalogue is `src/ui/mascot.ts` (`MOMENTS`, `ERROR_POSES`).
 
 Not on purpose: the running timer card, the task rows, Settings (apart from About) and the privacy screen.
 
+## Friendly-message poses (0.5.0)
+
+Every line of the friendly messages (`src/lib/messages/`) names a pose id from `POSE_IDS`. The art is the owner's
+(generated for TimeTrack in the style of the robot above, delivered 2026-11-05): `pose-<id>.webp` + `pose-<id>@2x.webp`
+here, imported from a transparent (or white) `pose-<id>.png`, for example 1024 × 1024, with
+`scripts/mascot/import-poses.sh <dir>`:
+
+1. an opaque white background becomes transparent (flood fill from the corners, 8 % fuzz);
+2. stray fragments are dropped: connected components of the solid pixels more than 64 px (at 1024 px) from the
+   character, with their glow; props close to it (steam, sparkles, a leaf, the antenna arcs) stay;
+3. trimmed, 96 / 192 px high, WebP quality 80.
+
+The script also rewrites `src/ui/pose-art.json`, the list of ids that have their own art (40 today). beach, sofa and
+park have no art yet and show their fallback (`POSE_FALLBACK` in `src/ui/mascot.ts`).
+
+| Use | Poses |
+|---|---|
+| "Still there?" | peek, peek-2, peek-3, peek-4, think, wave, sleepy, heart; teamwork in meetings |
+| Cheers | celebrate, cheer-up, thumbs, flag, music, focus, working, keep-going, progress, achievement (milestones), presentation, task-complete, finished, deadline |
+| Wellbeing | stretch, stretch-legs, water, eyes, mindfulness, rest, overtime ("take a real break") |
+| Moments | early, sunrise, coffee, lunch, moon, late-working, friday, holiday, weekend-start, shades |
+| Empty states of the list | empty-pinned (thumbtack), empty-recent (stopwatch), empty-tasks (blank clipboard), each with a `-dark` variant |
+
+The empty-state art (owner, 2026-11-05) was imported with `IMPORT_POSES_KEEP_DISTANCE=200` so the antenna arcs, which
+float further from the head than in the other poses, are kept. The `-dark` variants have a light outer stroke for the
+dark theme: `empty-recent-dark` is the owner's outlined alternate, `empty-pinned-dark` and `empty-tasks-dark` add a
+white stroke to the same art (ImageMagick `-morphology Dilate Disk:10` on the alpha, white, under the picture). They
+carry meaning next to a short line, so they have translated alt text.
+
 ## Rules
 
 - Decorative by default: `alt=""` and `aria-hidden="true"`; the heading next to the picture carries the meaning. Only
   the first-run hero has alt text (translated, `mascotAlt`).
-- Themes: the same art on light and dark paper (Beacon has no dark variants either). The dark theme dims it slightly
+- Themes: the same art on light and dark paper (Beacon has no dark variants either), except the empty states, whose
+  `-dark` variants are shown by CSS in the dark theme. The dark theme dims it slightly
   (`--mascot-filter`); crops have feathered edges so no glow ends in a hard rectangle.
 - Motion: only the device-code arcs pulse, and not under `prefers-reduced-motion: reduce`.
 - Size: tiny (3 rem) in cards and empty states, small (4 rem) on full screens, 7.5 rem for the first-run hero and error

@@ -1,11 +1,26 @@
-//! TimeTrack desktop shell: tray, global shortcut, OS keychain, local idle time and the Beacon updater.
+//! TimeTrack desktop shell: tray, global shortcut, OS keychain, local idle time, the Beacon updater, the wall-clock
+//! heartbeat (`heartbeat.rs`), native friendly-message notifications (`notify.rs`) and the "Still there?" window
+//! (`prompt.rs`). Closing the window keeps the app (and the timer, the idle check and the messages) running in the tray.
 //!
-//! Privacy by design: nothing here observes the user's activity beyond the OS "seconds since last input" counter,
-//! which never leaves the device. The UI reads it every 30 s while a timer runs, only to decide when to ask "Still
-//! there?"; it is not stored, logged or sent (only the user's answer is).
+//! Privacy by design: nothing here observes the user's activity beyond the OS "seconds since last input" counter and
+//! the screen lock / sleep events (`session.rs`), which never leave the device. The UI reads the counter every 30 s
+//! while a timer runs (to decide when to ask "Still there?") and, with "Working without a timer?" on, during working
+//! hours; it is not stored, logged or sent (only the user's answers and the entries they confirm are). With meeting
+//! detection on (opt-in), the heartbeat also tells the UI whether a known meeting app holds the microphone
+//! (`meeting/`): app ids only, never window titles, URLs or audio, and nothing is stored or sent.
+
+mod browser;
+mod heartbeat;
+mod meeting;
+mod notify;
+mod pose_art;
+mod prompt;
+mod session;
+mod tray_clock;
 
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -19,6 +34,12 @@ const KEYCHAIN_USER: &str = "session-token";
 const TRAY_ID: &str = "main";
 /// Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME; the UI can change it (Settings).
 const DEFAULT_SHORTCUT: &str = "CommandOrControl+Alt+Shift+T";
+/// Shortcut slots of `set_global_shortcut`: show the window and search, or "Continue the last task" (registered by the
+/// UI at start; default `CommandOrControl+Alt+T` on Windows / macOS and `CommandOrControl+Alt+Shift+R` on Linux, where
+/// Ctrl+Alt+T opens a terminal; the previews' `CommandOrControl+Alt+Space` is Finder search on macOS and the UI migrates
+/// it; Settings can change it).
+const SLOT_OPEN: &str = "open";
+const SLOT_RESUME: &str = "resume";
 
 /// Tray state kept between UI updates: the status line item and the two icon variants.
 struct TrayState {
@@ -26,6 +47,10 @@ struct TrayState {
     running: Option<Image<'static>>,
     stopped: Option<Image<'static>>,
     shortcut: Mutex<Option<String>>,
+    /// "Continue the last task" shortcut (works with the window hidden).
+    resume_shortcut: Mutex<Option<String>>,
+    /// Elapsed time of the running timer, refreshed by the heartbeat thread (`tray_clock.rs`).
+    clock: Mutex<tray_clock::TrayClock>,
 }
 
 /// Tray tooltip / title / status line, sent by the UI (translated) every ~30 s and on every timer change.
@@ -35,6 +60,9 @@ struct TrayStatus {
     tooltip: String,
     status: String,
     running: bool,
+    /// While a timer runs: the templates the heartbeat keeps up to date (absent from older UIs).
+    #[serde(default)]
+    clock: Option<tray_clock::ClockSpec>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,10 +80,17 @@ struct TrayMenuSpec {
     switch_to: Vec<TrayMenuItem>,
     search: String,
     open: String,
+    /// "Full view" (`layout-full`) or "Compact view" (`layout-compact`): the other view; absent while signed out.
+    #[serde(default)]
+    layout: Option<TrayMenuItem>,
     open_beacon: Option<String>,
     my_time: Option<String>,
     /// "Check for updates" (absent in the Microsoft Store build, where the Store updates the app).
     check_updates: Option<String>,
+    /// "Pause friendly messages for 1 h" (`pause-friendly`) or "Friendly messages paused until …" (`resume-friendly`);
+    /// absent with both message switches off.
+    #[serde(default)]
+    pause_friendly: Option<TrayMenuItem>,
     settings: String,
     quit: String,
 }
@@ -64,7 +99,17 @@ struct TrayMenuSpec {
 fn tray_action_allowed(id: &str) -> bool {
     matches!(
         id,
-        "stop" | "resume" | "search" | "open-beacon" | "my-time" | "check-updates" | "settings"
+        "stop"
+            | "resume"
+            | "search"
+            | "open-beacon"
+            | "my-time"
+            | "check-updates"
+            | "settings"
+            | "pause-friendly"
+            | "resume-friendly"
+            | "layout-full"
+            | "layout-compact"
     ) || (id.starts_with("switch:") && id.len() > 7 && id.len() <= 200)
 }
 
@@ -111,13 +156,28 @@ fn icon_variant(base: &Image<'_>, running: bool) -> Image<'static> {
     Image::new_owned(rgba, width, height)
 }
 
+/// Defence in depth on top of the capabilities (build.rs declares every app command, each window gets only its own):
+/// the privileged commands also refuse any caller but the main window.
+pub(crate) fn only_from(window: &tauri::Window, label: &str) -> Result<(), String> {
+    caller_allowed(window.label(), label)
+}
+
+pub(crate) fn caller_allowed(caller: &str, label: &str) -> Result<(), String> {
+    if caller == label {
+        Ok(())
+    } else {
+        Err("not allowed from this window".into())
+    }
+}
+
 fn keychain() -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER).map_err(|e| e.to_string())
 }
 
 /// Session token from the OS keychain (Keychain / Credential Manager / Secret Service). `None` when absent.
 #[tauri::command]
-fn secret_get() -> Result<Option<String>, String> {
+fn secret_get(window: tauri::Window) -> Result<Option<String>, String> {
+    only_from(&window, "main")?;
     match keychain()?.get_password() {
         Ok(token) => Ok(Some(token)),
         Err(keyring::Error::NoEntry) => Ok(None),
@@ -126,12 +186,14 @@ fn secret_get() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn secret_set(token: String) -> Result<(), String> {
+fn secret_set(window: tauri::Window, token: String) -> Result<(), String> {
+    only_from(&window, "main")?;
     keychain()?.set_password(&token).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn secret_delete() -> Result<(), String> {
+fn secret_delete(window: tauri::Window) -> Result<(), String> {
+    only_from(&window, "main")?;
     match keychain()?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(e.to_string()),
@@ -141,7 +203,13 @@ fn secret_delete() -> Result<(), String> {
 /// Seconds since the last keyboard / mouse input, read locally from the OS. Never sent anywhere.
 /// Returns 0 when the platform cannot tell (e.g. some Wayland sessions): idle detection then never triggers.
 #[tauri::command]
-fn idle_seconds() -> u64 {
+fn idle_seconds(window: tauri::Window) -> Result<u64, String> {
+    only_from(&window, "main")?;
+    Ok(read_idle_seconds())
+}
+
+/// The OS idle counter (also read by the heartbeat thread).
+fn read_idle_seconds() -> u64 {
     user_idle::UserIdle::get_time()
         .map(|idle| idle.as_seconds())
         .unwrap_or(0)
@@ -149,12 +217,28 @@ fn idle_seconds() -> u64 {
 
 /// Updates the tray tooltip, title (macOS, Linux), status line and icon variant.
 #[tauri::command]
-fn set_tray_status(app: AppHandle, status: TrayStatus) -> Result<(), String> {
+fn set_tray_status(
+    app: AppHandle,
+    window: tauri::Window,
+    status: TrayStatus,
+) -> Result<(), String> {
+    only_from(&window, "main")?;
+    // A running clock: its texts now, then every minute from the heartbeat (the UI's title / tooltip are the same).
+    let clocked = match app.try_state::<TrayState>() {
+        Some(state) => state
+            .clock
+            .lock()
+            .map_err(|e| e.to_string())?
+            .set(status.clock.clone(), heartbeat::now_ms()),
+        None => None,
+    };
+    let (title, tooltip) = match &clocked {
+        Some(text) => (Some(text.title.as_str()), text.tooltip.as_str()),
+        None => (status.title.as_deref(), status.tooltip.as_str()),
+    };
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        tray.set_tooltip(Some(&status.tooltip))
-            .map_err(|e| e.to_string())?;
-        tray.set_title(status.title.as_deref())
-            .map_err(|e| e.to_string())?;
+        tray.set_tooltip(Some(tooltip)).map_err(|e| e.to_string())?;
+        tray.set_title(title).map_err(|e| e.to_string())?;
         if let Some(state) = app.try_state::<TrayState>() {
             let icon = if status.running {
                 &state.running
@@ -176,10 +260,11 @@ fn set_tray_status(app: AppHandle, status: TrayStatus) -> Result<(), String> {
 }
 
 /// Rebuilds the tray menu with the UI's translated labels and quick tasks:
-/// status · Stop / Resume · Switch to ▸ · Search task… · — · Open TimeTrack · Open Beacon · My time · — · Check for updates…
-/// · Settings… · Quit.
+/// status · Stop / Resume · Switch to ▸ · Search task… · — · Open TimeTrack · Full / Compact view · Open Beacon · My time · — · Pause friendly
+/// messages 1 h · Check for updates… · Settings… · Quit.
 #[tauri::command]
-fn set_tray_menu(app: AppHandle, menu: TrayMenuSpec) -> Result<(), String> {
+fn set_tray_menu(app: AppHandle, window: tauri::Window, menu: TrayMenuSpec) -> Result<(), String> {
+    only_from(&window, "main")?;
     let err = |e: tauri::Error| e.to_string();
     let state = app.state::<TrayState>();
     let mut status_slot = state.status.lock().map_err(|e| e.to_string())?;
@@ -221,6 +306,13 @@ fn set_tray_menu(app: AppHandle, menu: TrayMenuSpec) -> Result<(), String> {
     built
         .append(&MenuItem::with_id(&app, "open", &menu.open, true, None::<&str>).map_err(err)?)
         .map_err(err)?;
+    if let Some(item) = menu.layout.filter(|item| tray_action_allowed(&item.id)) {
+        built
+            .append(
+                &MenuItem::with_id(&app, item.id, &item.label, true, None::<&str>).map_err(err)?,
+            )
+            .map_err(err)?;
+    }
     if let Some(label) = menu.open_beacon {
         built
             .append(
@@ -236,6 +328,16 @@ fn set_tray_menu(app: AppHandle, menu: TrayMenuSpec) -> Result<(), String> {
     built
         .append(&PredefinedMenuItem::separator(&app).map_err(err)?)
         .map_err(err)?;
+    if let Some(item) = menu
+        .pause_friendly
+        .filter(|item| tray_action_allowed(&item.id))
+    {
+        built
+            .append(
+                &MenuItem::with_id(&app, item.id, &item.label, true, None::<&str>).map_err(err)?,
+            )
+            .map_err(err)?;
+    }
     if let Some(label) = menu.check_updates {
         built
             .append(
@@ -260,16 +362,43 @@ fn set_tray_menu(app: AppHandle, menu: TrayMenuSpec) -> Result<(), String> {
     Ok(())
 }
 
-/// Replaces the global shortcut. On failure (in use by another app, invalid) the previous one is registered again and
-/// the error goes back to the UI, which shows it in Settings.
+/// Replaces a global shortcut: `open` (the default slot: show the window and search) or `resume` ("Continue the last
+/// task", window hidden or not). On failure (in use by another app, invalid, the other slot's) the previous one is
+/// registered again and the error goes back to the UI, which shows it in Settings.
 #[tauri::command]
-fn set_global_shortcut(app: AppHandle, accelerator: String) -> Result<(), String> {
+fn set_global_shortcut(
+    app: AppHandle,
+    window: tauri::Window,
+    accelerator: String,
+    slot: Option<String>,
+) -> Result<(), String> {
+    only_from(&window, "main")?;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
     let shortcuts = app.global_shortcut();
     let state = app.state::<TrayState>();
-    let mut current = state.shortcut.lock().map_err(|e| e.to_string())?;
+    let resume = shortcut_slot(slot.as_deref())?;
+    let (mut current, other) = if resume {
+        (
+            state.resume_shortcut.lock().map_err(|e| e.to_string())?,
+            state.shortcut.lock().map_err(|e| e.to_string())?.clone(),
+        )
+    } else {
+        (
+            state.shortcut.lock().map_err(|e| e.to_string())?,
+            state
+                .resume_shortcut
+                .lock()
+                .map_err(|e| e.to_string())?
+                .clone(),
+        )
+    };
     if current.as_deref() == Some(accelerator.as_str()) {
         return Ok(());
+    }
+    if same_shortcut(other.as_deref(), &accelerator) {
+        return Err(format!(
+            "{accelerator} is already used by the other shortcut"
+        ));
     }
     if let Some(previous) = current.as_deref() {
         let _ = shortcuts.unregister(previous);
@@ -285,6 +414,27 @@ fn set_global_shortcut(app: AppHandle, accelerator: String) -> Result<(), String
             }
             Err(e.to_string())
         }
+    }
+}
+
+/// `open` (or absent, older UIs) → false, `resume` → true; anything else is refused.
+fn shortcut_slot(slot: Option<&str>) -> Result<bool, String> {
+    match slot {
+        None | Some(SLOT_OPEN) => Ok(false),
+        Some(SLOT_RESUME) => Ok(true),
+        Some(_) => Err("unknown shortcut".into()),
+    }
+}
+
+/// Whether two accelerators are the same keys (`Ctrl+Alt+Space` = `control+alt+space`).
+fn same_shortcut(registered: Option<&str>, accelerator: &str) -> bool {
+    use tauri_plugin_global_shortcut::Shortcut;
+    match (
+        registered.and_then(|value| value.parse::<Shortcut>().ok()),
+        accelerator.parse::<Shortcut>().ok(),
+    ) {
+        (Some(a), Some(b)) => a.id() == b.id(),
+        _ => false,
     }
 }
 
@@ -443,7 +593,15 @@ fn parse_update(body: &str, header_min: Option<String>, installable: bool) -> Up
 /// Beacon's updater route (`time_track_client_updater`). 204 = up to date, 401 = sign in again (not an error),
 /// 200 = `{version, notes, pub_date, url, signature, min_supported_version?}` (Tauri v2 dynamic-server format).
 #[tauri::command]
-async fn check_update(app: AppHandle, server: String, token: String) -> UpdateCheck {
+async fn check_update(
+    app: AppHandle,
+    window: tauri::Window,
+    server: String,
+    token: String,
+) -> UpdateCheck {
+    if let Err(message) = only_from(&window, "main") {
+        return UpdateCheck::Error { message };
+    }
     if store_channel() {
         return UpdateCheck::Disabled;
     }
@@ -533,7 +691,13 @@ impl ProgressThrottle {
 /// Downloads, verifies (minisign public key of the build, signed version) and installs the update, then restarts.
 /// The Bearer token is set at runtime through the updater builder headers and removed for the artifact download.
 #[tauri::command]
-async fn install_update(app: AppHandle, server: String, token: String) -> Result<(), String> {
+async fn install_update(
+    app: AppHandle,
+    window: tauri::Window,
+    server: String,
+    token: String,
+) -> Result<(), String> {
+    only_from(&window, "main")?;
     if store_channel() {
         return Err("Updates come from the Microsoft Store.".into());
     }
@@ -579,12 +743,119 @@ async fn install_update(app: AppHandle, server: String, token: String) -> Result
     app.restart()
 }
 
-fn show_main(app: &AppHandle) {
+pub(crate) fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+/// When the main window last lost the focus. A click on the tray icon takes the focus from the window first (Windows),
+/// so "the window was focused a moment ago" counts as focused.
+#[derive(Default)]
+struct MainFocus {
+    blurred_at: Mutex<Option<Instant>>,
+}
+
+const RECENT_FOCUS: Duration = Duration::from_millis(600);
+
+/// Left click on the tray icon: hide a window the person is looking at, otherwise bring it forward.
+fn tray_click_hides(
+    visible: bool,
+    minimized: bool,
+    focused: bool,
+    blurred_ago: Option<Duration>,
+) -> bool {
+    visible && !minimized && (focused || blurred_ago.is_some_and(|ago| ago < RECENT_FOCUS))
+}
+
+fn toggle_main(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let blurred_ago = app
+        .try_state::<MainFocus>()
+        .and_then(|state| state.blurred_at.lock().ok().and_then(|at| *at))
+        .map(|at| at.elapsed());
+    let hide = tray_click_hides(
+        window.is_visible().unwrap_or(false),
+        window.is_minimized().unwrap_or(false),
+        window.is_focused().unwrap_or(false),
+        blurred_ago,
+    );
+    if hide {
+        let _ = window.hide();
+    } else {
+        show_main(app);
+    }
+}
+
+/// Heartbeat state shared by the thread and `set_wake_plan`.
+struct HeartbeatState(Mutex<heartbeat::Heartbeat>);
+
+/// What the UI wants to be woken for besides the 30 s tick: the end of the countdown, the idle threshold.
+#[tauri::command]
+fn set_wake_plan(
+    app: AppHandle,
+    window: tauri::Window,
+    plan: heartbeat::WakePlan,
+) -> Result<(), String> {
+    only_from(&window, "main")?;
+    app.state::<HeartbeatState>()
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .set_plan(plan);
+    Ok(())
+}
+
+/// Polls the wall clock every second and wakes the main window (`wake` events) on time, hidden or not. It also keeps
+/// the tray's elapsed time current (once a minute, when its text changes) and, with meeting detection on, sends the
+/// main window what holds the microphone (`mic` events, every 15–30 s).
+fn spawn_heartbeat(app: AppHandle) {
+    let _ = std::thread::Builder::new()
+        .name("heartbeat".into())
+        .spawn(move || {
+            let mut microphone = meeting::system_detector();
+            loop {
+                std::thread::sleep(Duration::from_millis(heartbeat::POLL_MS));
+                let now = heartbeat::now_ms();
+                let (wake, mic) = match app.state::<HeartbeatState>().0.lock() {
+                    Ok(mut beat) => (beat.poll(now, read_idle_seconds), beat.mic_due(now)),
+                    Err(_) => (None, false),
+                };
+                if let Some(wake) = wake {
+                    let _ = app.emit_to("main", "wake", wake);
+                }
+                let text = app.try_state::<TrayState>().and_then(|state| {
+                    state
+                        .clock
+                        .lock()
+                        .ok()
+                        .and_then(|mut clock| clock.poll(now))
+                });
+                if let (Some(text), Some(tray)) = (text, app.tray_by_id(TRAY_ID)) {
+                    let _ = tray.set_tooltip(Some(&text.tooltip));
+                    let _ = tray.set_title(Some(&text.title));
+                }
+                // Outside the lock: the probe may take a few milliseconds (a `pactl` run on Linux).
+                if mic {
+                    let _ = app.emit_to("main", "mic", meeting::snapshot(microphone.probe(), now));
+                }
+            }
+        });
+}
+
+/// A friendly message as a native notification (see notify.rs). An error makes the UI show it inside the app.
+#[tauri::command]
+fn notify_friendly(
+    app: AppHandle,
+    window: tauri::Window,
+    note: notify::FriendlyNote,
+) -> Result<(), String> {
+    only_from(&window, "main")?;
+    notify::show(&app, &note)
 }
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
@@ -604,7 +875,10 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 "open" => show_main(app),
                 "quit" => app.exit(0),
                 _ if tray_action_allowed(id) => {
-                    if matches!(id, "search" | "settings" | "check-updates") {
+                    if matches!(
+                        id,
+                        "search" | "settings" | "check-updates" | "layout-full" | "layout-compact"
+                    ) {
                         show_main(app);
                     }
                     let _ = app.emit("tray-action", id.to_string());
@@ -619,7 +893,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 ..
             } = event
             {
-                show_main(tray.app_handle());
+                toggle_main(tray.app_handle());
             }
         });
     let (running, stopped) = match &base {
@@ -638,7 +912,60 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         running,
         stopped,
         shortcut: Mutex::new(None),
+        resume_shortcut: Mutex::new(None),
+        clock: Mutex::new(tray_clock::TrayClock::new()),
     });
+    Ok(())
+}
+
+/// Whether a navigation stays inside the app (its own pages; the Vite dev server in debug builds).
+pub(crate) fn internal_navigation(url: &url::Url) -> bool {
+    match url.scheme() {
+        "tauri" | "about" => true,
+        "http" | "https" => {
+            url.host_str() == Some("tauri.localhost")
+                || (cfg!(debug_assertions)
+                    && url.host_str() == Some("localhost")
+                    && url.port() == Some(1420))
+        }
+        _ => false,
+    }
+}
+
+/// The main window (tauri.conf.json, `create: false`), built here so that no link ever opens inside the app or in a
+/// browser the person did not choose: a navigation away from the app or a new window (`target=_blank`,
+/// `window.open`) is refused and its https URL is handed to the UI (`open-external`), which opens it through
+/// `open_external` with the "Open Beacon in" setting.
+fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
+    let Some(config) = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned()
+    else {
+        return Ok(());
+    };
+    let to_ui = app.clone();
+    let to_ui_new = app.clone();
+    tauri::WebviewWindowBuilder::from_config(app, &config)?
+        .on_navigation(move |url| {
+            if internal_navigation(url) {
+                return true;
+            }
+            if url.scheme() == "https" {
+                let _ = to_ui.emit_to("main", "open-external", url.as_str());
+            }
+            false
+        })
+        .on_new_window(move |url, _features| {
+            if url.scheme() == "https" {
+                let _ = to_ui_new.emit_to("main", "open-external", url.as_str());
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
+        .build()?;
     Ok(())
 }
 
@@ -656,6 +983,8 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         // Registered but never enabled by default: the user opts in from Settings.
@@ -665,8 +994,23 @@ pub fn run() {
         ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
+                .with_handler(|app, shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    let resume = app.try_state::<TrayState>().and_then(|state| {
+                        state.resume_shortcut.lock().ok().and_then(|s| s.clone())
+                    });
+                    let pressed = shortcut.id();
+                    let is_resume = resume
+                        .and_then(|value| {
+                            value.parse::<tauri_plugin_global_shortcut::Shortcut>().ok()
+                        })
+                        .is_some_and(|registered| registered.id() == pressed);
+                    if is_resume {
+                        // "Continue the last task": the window stays as it is (hidden in the tray, or behind).
+                        let _ = app.emit_to("main", "shortcut-resume", ());
+                    } else {
                         show_main(app);
                         let _ = app.emit("shortcut", ());
                     }
@@ -674,7 +1018,16 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            app.manage(HeartbeatState(Mutex::new(heartbeat::Heartbeat::new())));
+            app.manage(MainFocus::default());
+            app.manage(prompt::PromptState::default());
+            // "Open Beacon in" lives on this side (browser.json in the app's config folder), see browser.rs.
+            browser::manage(app.handle());
+            create_main_window(app.handle())?;
             build_tray(app)?;
+            spawn_heartbeat(app.handle().clone());
+            // Screen lock / sleep events for "Pause on lock or sleep" (the UI decides whether to use them).
+            session::start(app.handle());
             // Started at login (opt-in autostart passes --hidden): stay in the tray.
             if std::env::args().any(|arg| arg == "--hidden") {
                 if let Some(window) = app.get_webview_window("main") {
@@ -691,12 +1044,26 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            // Closing the window keeps the tray timer running; "Quit" is in the tray menu.
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            // Closing (or minimising) the main window keeps the app in the tray: the timer, the idle check and the
+            // friendly messages go on (heartbeat thread). "Quit" is in the tray menu.
+            WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
                 api.prevent_close();
                 let _ = window.hide();
             }
+            // The "Still there?" window needs an answer: closing it is refused (the main window closes it).
+            WindowEvent::CloseRequested { api, .. } if window.label() == prompt::LABEL => {
+                api.prevent_close();
+                let _ = window.set_focus();
+            }
+            WindowEvent::Focused(focused) if window.label() == "main" => {
+                if let Some(state) = window.app_handle().try_state::<MainFocus>() {
+                    if let Ok(mut at) = state.blurred_at.lock() {
+                        *at = (!focused).then(Instant::now);
+                    }
+                }
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             secret_get,
@@ -707,7 +1074,20 @@ pub fn run() {
             set_tray_menu,
             set_global_shortcut,
             check_update,
-            install_update
+            install_update,
+            set_wake_plan,
+            notify_friendly,
+            prompt::prompt_open,
+            prompt::prompt_view,
+            prompt::prompt_answer,
+            prompt::prompt_focus,
+            prompt::prompt_close,
+            prompt::prompt_show_main,
+            browser::open_external,
+            browser::list_browsers,
+            browser::get_browser,
+            browser::set_browser,
+            browser::pick_browser
         ])
         .run(tauri::generate_context!())
         .expect("error while running TimeTrack");
@@ -716,6 +1096,101 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod app_commands {
+        include!("../app-commands.rs");
+    }
+    use app_commands::{APP_COMMANDS, MAIN_COMMANDS, PROMPT_COMMANDS};
+
+    fn granted(capability: &str) -> Vec<String> {
+        let json: serde_json::Value = serde_json::from_str(capability).unwrap();
+        json["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p.as_str().map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn every_app_command_is_declared_and_granted_to_exactly_one_window() {
+        let main = granted(include_str!("../capabilities/default.json"));
+        let prompt = granted(include_str!("../capabilities/prompt.json"));
+        let allow = |command: &str| format!("allow-{}", command.replace('_', "-"));
+        for command in MAIN_COMMANDS {
+            assert!(main.contains(&allow(command)), "{command} for main");
+            assert!(
+                !prompt.contains(&allow(command)),
+                "{command} not for prompt"
+            );
+        }
+        for command in PROMPT_COMMANDS {
+            assert!(prompt.contains(&allow(command)), "{command} for prompt");
+            assert!(!main.contains(&allow(command)), "{command} not for main");
+        }
+        // The prompt window gets nothing else but listening to its content.
+        assert_eq!(prompt.len(), PROMPT_COMMANDS.len() + 2);
+        let mut both: Vec<&str> = MAIN_COMMANDS
+            .iter()
+            .chain(PROMPT_COMMANDS)
+            .copied()
+            .collect();
+        both.sort();
+        let mut declared = APP_COMMANDS.to_vec();
+        declared.sort();
+        assert_eq!(both, declared);
+        // The same list as `generate_handler!`.
+        let source = include_str!("lib.rs");
+        let start = source.find("generate_handler![").unwrap();
+        let end = start + source[start..].find(']').unwrap();
+        let mut registered: Vec<&str> = source[start + 18..end]
+            .split(',')
+            .map(|name| name.trim().rsplit("::").next().unwrap())
+            .filter(|name| !name.is_empty())
+            .collect();
+        registered.sort();
+        assert_eq!(registered, declared);
+    }
+
+    #[test]
+    fn only_app_pages_load_in_the_window() {
+        let parse = |u: &str| url::Url::parse(u).unwrap();
+        assert!(internal_navigation(&parse("tauri://localhost/index.html")));
+        assert!(internal_navigation(&parse(
+            "http://tauri.localhost/index.html"
+        )));
+        assert!(internal_navigation(&parse("about:blank")));
+        assert_eq!(
+            internal_navigation(&parse("http://localhost:1420/")),
+            cfg!(debug_assertions)
+        );
+        for external in [
+            "https://beacon.example.com/",
+            "https://www.google.com/chrome/",
+            "http://localhost:8000/",
+            "file:///etc/passwd",
+            "data:text/html,x",
+        ] {
+            assert!(!internal_navigation(&parse(external)), "{external}");
+        }
+    }
+
+    #[test]
+    fn main_window_is_built_by_the_app() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let main = &config["app"]["windows"][0];
+        assert_eq!(main["label"], "main");
+        assert_eq!(main["create"], false);
+    }
+
+    #[test]
+    fn privileged_commands_refuse_other_windows() {
+        assert!(caller_allowed("main", "main").is_ok());
+        assert!(caller_allowed("prompt", "main").is_err());
+        assert!(caller_allowed("main", prompt::LABEL).is_err());
+        assert!(caller_allowed(prompt::LABEL, prompt::LABEL).is_ok());
+    }
 
     #[test]
     fn endpoint_keeps_tauri_placeholders() {
@@ -738,6 +1213,10 @@ mod tests {
             "my-time",
             "check-updates",
             "settings",
+            "pause-friendly",
+            "resume-friendly",
+            "layout-full",
+            "layout-compact",
             "switch:T-1",
         ] {
             assert!(tray_action_allowed(id), "{id}");
@@ -786,6 +1265,77 @@ mod tests {
         )
         .expect("store spec");
         assert!(store.check_updates.is_none());
+    }
+
+    #[test]
+    fn tray_menu_spec_accepts_the_pause_item_and_older_uis_without_it() {
+        let spec: TrayMenuSpec = serde_json::from_str(
+            r#"{"primary":null,"switchLabel":"s","switchTo":[],"search":"s","open":"o","openBeacon":null,"myTime":null,"checkUpdates":null,"pauseFriendly":{"id":"pause-friendly","label":"Pause friendly messages for 1 h"},"settings":"s","quit":"q"}"#,
+        )
+        .expect("spec");
+        assert_eq!(
+            spec.pause_friendly.map(|item| item.id).as_deref(),
+            Some("pause-friendly")
+        );
+        let old: TrayMenuSpec = serde_json::from_str(
+            r#"{"primary":null,"switchLabel":"s","switchTo":[],"search":"s","open":"o","openBeacon":null,"myTime":null,"checkUpdates":null,"settings":"s","quit":"q"}"#,
+        )
+        .expect("old spec");
+        assert!(old.pause_friendly.is_none());
+        assert!(old.layout.is_none());
+        let layout: TrayMenuSpec = serde_json::from_str(
+            r#"{"primary":null,"switchLabel":"s","switchTo":[],"search":"s","open":"o","layout":{"id":"layout-full","label":"Full view"},"openBeacon":null,"myTime":null,"checkUpdates":null,"settings":"s","quit":"q"}"#,
+        )
+        .expect("layout spec");
+        assert_eq!(
+            layout.layout.map(|item| item.id).as_deref(),
+            Some("layout-full")
+        );
+    }
+
+    #[test]
+    fn shortcut_slots_and_duplicates() {
+        assert_eq!(shortcut_slot(None), Ok(false));
+        assert_eq!(shortcut_slot(Some("open")), Ok(false));
+        assert_eq!(shortcut_slot(Some("resume")), Ok(true));
+        assert!(shortcut_slot(Some("quit")).is_err());
+        assert!(same_shortcut(
+            Some("CommandOrControl+Alt+Space"),
+            "CommandOrControl+Alt+Space"
+        ));
+        assert!(same_shortcut(Some("Control+Alt+Space"), "ctrl+alt+space"));
+        assert!(!same_shortcut(
+            Some("CommandOrControl+Alt+Shift+T"),
+            "CommandOrControl+Alt+Space"
+        ));
+        assert!(!same_shortcut(None, "CommandOrControl+Alt+Space"));
+        assert!(!same_shortcut(Some("not a shortcut"), "Alt+Space"));
+    }
+
+    #[test]
+    fn tray_status_accepts_a_clock_and_older_uis_without_it() {
+        let status: TrayStatus = serde_json::from_str(
+            r#"{"title":"0:05 A","tooltip":"A","status":"s","running":true,"clock":{"startedAt":1,"title":"{time} A","tooltip":"A {time}","todayBaseSeconds":0}}"#,
+        )
+        .unwrap();
+        assert_eq!(status.clock.map(|clock| clock.started_at), Some(1));
+        let old: TrayStatus =
+            serde_json::from_str(r#"{"title":null,"tooltip":"t","status":"s","running":false}"#)
+                .unwrap();
+        assert!(old.clock.is_none() && !old.running && old.title.is_none());
+    }
+
+    #[test]
+    fn tray_click_toggles_the_window() {
+        let ms = Duration::from_millis;
+        // Looking at it (focused, or it lost the focus to the tray click a moment ago): hide.
+        assert!(tray_click_hides(true, false, true, None));
+        assert!(tray_click_hides(true, false, false, Some(ms(120))));
+        // Hidden, minimised, or behind other windows for a while: bring it forward.
+        assert!(!tray_click_hides(false, false, false, None));
+        assert!(!tray_click_hides(true, true, false, Some(ms(10))));
+        assert!(!tray_click_hides(true, false, false, Some(ms(5_000))));
+        assert!(!tray_click_hides(true, false, false, None));
     }
 
     #[test]

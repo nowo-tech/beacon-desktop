@@ -190,6 +190,22 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 .still-there h2 { margin: 0; font-size: 1rem; }
 .still-there p { margin: 0; }
 .still-there-body > * { min-width: 0; }
+/* Friendly messages (0.5.0): toasts bottom right, above the list, below the modal; never focused. */
+.toasts { position: fixed; right: 1rem; bottom: 1rem; z-index: 20; display: grid; gap: 0.5rem; width: min(22rem, calc(100vw - 2rem)); pointer-events: none; }
+.toast { pointer-events: auto; display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.375rem 0.5rem 0.625rem; background: var(--surface); color: var(--ink); border: 1px solid var(--moss); border-radius: var(--radius-card); box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 0.18); animation: toast-in 0.3s ease-out; }
+.toast-art { flex: none; height: 4.5rem; width: auto; max-width: 5.5rem; object-fit: contain; filter: var(--mascot-filter); }
+.toast-text { flex: 1; min-width: 0; margin: 0; font-weight: 500; line-height: 1.35; }
+.toast-close { flex: none; align-self: flex-start; }
+.idle-quip { font-weight: 500; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(0.5rem); } to { opacity: 1; transform: none; } }
+/* "Still there?" modal: the rest of the window is inert behind a dimmed backdrop until it is answered. */
+.idle-modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 1rem; background: rgb(12 18 16 / 0.5); }
+.idle-modal[hidden] { display: none; }
+.idle-modal > .card { width: 100%; max-width: 30rem; max-height: calc(100vh - 2rem); overflow-y: auto; margin: 0; box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 0.3); }
+.idle-modal .mascot.tiny { height: 4.5rem; }
+.idle-countdown { display: grid; gap: 0.25rem; }
+.countdown-track { height: 0.375rem; border-radius: 999px; background: var(--sand); overflow: hidden; }
+.countdown-fill { display: block; height: 100%; background: var(--moss); transform-origin: left center; transition: transform 1s linear; }
 /* Update card (0.4.0): the same calm moss / mist card as "Still there?"; release notes as plain text (no HTML). */
 .update-card .row-actions { flex-wrap: wrap; align-items: center; }
 .update-notes { white-space: pre-line; max-height: 10rem; overflow-y: auto; padding: 0.5rem; background: var(--surface); border: 1px solid var(--sand); border-radius: var(--radius-control); font-size: 0.8125rem; }
@@ -243,3 +259,145 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .mascot-wait .arcs { opacity: 1; }
 }
+
+/* Native shell (0.5.0): room below the list while a toast is up; the "Still there?" window; the notification notes. */
+#app.with-toasts { padding-bottom: var(--toast-space, 7.5rem); }
+.native-notice { display: grid; gap: 0.375rem; }
+.native-notice h2 { margin: 0; font-size: 1rem; }
+.native-status { color: var(--ink); }
+.prompt-window body { min-height: 100vh; }
+.prompt-window #app { max-width: none; padding: 0; }
+.prompt-region { min-height: 100vh; display: grid; place-items: center; padding: 1rem; box-sizing: border-box; }
+.prompt-region > .card { width: 100%; max-width: 30rem; margin: 0; box-shadow: none; }
+.prompt-region .mascot.tiny { height: 4.5rem; }
+.prompt-open-app { justify-self: start; font-size: 0.875rem; }
+
+/* Working-hours reminders (0.5.0): the toast's button; Settings → My schedule (one collapsible card per day). */
+.toast-body { flex: 1; min-width: 0; display: grid; gap: 0.375rem; justify-items: start; }
+.toast-action { min-height: 1.75rem; padding: 0.25rem 0.75rem; }
+input[type='time'], input[type='date'] { font: inherit; padding: 0.25rem 0.375rem; border: 1px solid var(--control-border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); color-scheme: inherit; }
+.source-badge { display: inline-block; font-size: 0.6875rem; font-weight: 600; line-height: 1.4; padding: 0 0.375rem; border-radius: 999px; border: 1px solid var(--sand); color: var(--ink-soft); background: var(--surface-muted); white-space: nowrap; }
+.source-badge[data-source='local'] { border-color: var(--moss); color: var(--moss-deep); background: var(--mist); }
+.schedule-legend { font-size: 0.8125rem; color: var(--ink-soft); margin: 0.25rem 0 0.5rem; }
+.schedule-days { display: grid; gap: 0.375rem; }
+.schedule-day { border: 1px solid var(--sand); border-radius: var(--radius-control); background: var(--surface); padding: 0 0.625rem; }
+.schedule-day[data-local='true'] { border-left: 3px solid var(--moss); }
+.schedule-day[open] { padding-bottom: 0.625rem; }
+.schedule-day summary { display: flex; align-items: center; gap: 0.5rem; padding: 0.4375rem 0; cursor: pointer; }
+.schedule-day-name { font-weight: 600; min-width: 5.5rem; }
+.schedule-day-summary { flex: 1; min-width: 0; color: var(--ink-soft); font-size: 0.875rem; font-variant-numeric: tabular-nums; }
+.schedule-day .switch { margin: 0.25rem 0 0.5rem; }
+.schedule-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 0.75rem; }
+.schedule-field { margin: 0; font-weight: 400; font-size: 0.8125rem; display: grid; gap: 0.25rem; }
+.schedule-field-label { display: flex; align-items: center; gap: 0.375rem; flex-wrap: wrap; color: var(--ink-soft); }
+.schedule-field input { width: 100%; }
+.schedule-field input[data-source='local'] { border-color: var(--moss); box-shadow: inset 3px 0 0 var(--moss); }
+.days-off h3 { font-size: 0.9375rem; margin: 0.75rem 0 0.25rem; }
+.days-off-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.5rem; padding: 0.25rem 0; border-bottom: 1px solid var(--sand); }
+.day-off-date { font-variant-numeric: tabular-nums; min-width: 7rem; }
+.day-off-label { flex: 1; min-width: 0; color: var(--ink-soft); }
+
+/*
+ * Window layouts (0.5.0, lib/layout.ts). Compact (default): the single 33rem column above, centred, from the minimum
+ * window width up to the breakpoint. Full (≥ 900 px wide, signed in): sections sidebar · main pane · detail pane, each
+ * scrolling on its own under a fixed header; the running timer stays at the top of the main pane.
+ */
+.pane[hidden], .search[hidden], .list-section[hidden] { display: none !important; }
+.pane:focus { outline: none; }
+#app[data-layout='full'] { max-width: none; margin: 0; padding: 0; height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+#app[data-layout='full'] > .bar { margin: 0; padding: 0 1rem 0 1.25rem; background: var(--surface); }
+#app[data-layout='full'] .frame { display: grid; grid-template-columns: 13.5rem minmax(0, 1fr); min-height: 0; }
+#app[data-layout='full'].with-detail .frame { grid-template-columns: 13.5rem minmax(0, 1fr) minmax(17rem, 24rem); }
+#app[data-layout='full'] .pane { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+#app[data-layout='full'] .sidebar { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem 0.625rem; border-right: 1px solid var(--sand); background: var(--surface-muted); }
+#app[data-layout='full'] .main-pane { padding: 0.75rem 1.5rem 1.5rem; }
+#app[data-layout='full'] .main-pane > * { max-width: 48rem; margin-inline: auto; }
+#app[data-layout='full'] .detail { padding: 0.875rem 1.25rem 1.5rem; border-left: 1px solid var(--sand); background: var(--surface-muted); }
+#app[data-layout='full'] #timer { position: sticky; top: 0; z-index: 5; box-shadow: 0 -0.75rem 0 0 var(--paper); }
+#app[data-layout='full'].with-toasts { padding-bottom: 0; }
+#app[data-layout='full'].with-toasts .main-pane, #app[data-layout='full'].with-toasts .detail { padding-bottom: var(--toast-space, 7.5rem); }
+#app[data-layout='full'] .tasks li { padding-inline: 0.375rem; border-radius: var(--radius-control); }
+.tasks li.selected { background: var(--mist); box-shadow: inset 3px 0 0 var(--moss); }
+.nav-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.125rem; }
+.nav-item { width: 100%; justify-content: flex-start; background: transparent; color: var(--ink); padding: 0.5rem 0.625rem; font-weight: 500; text-align: left; }
+.nav-item:hover { background: var(--mist); color: var(--moss-deep); }
+.nav-item[aria-current='page'] { background: var(--mist); color: var(--moss-deep); box-shadow: inset 3px 0 0 var(--moss); font-weight: 600; }
+.nav-hint { margin: auto 0 0; padding: 0 0.625rem; }
+.detail-title { font-size: 1.125rem; margin: 0.25rem 0; overflow-wrap: anywhere; }
+.detail .chip { font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
+.detail .chip.running { color: var(--moss); }
+.detail p { margin: 0.25rem 0; }
+.detail-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.75rem; }
+.spans { list-style: none; margin: 0; padding: 0; }
+.spans li { display: flex; gap: 0.5rem; align-items: baseline; padding: 0.3125rem 0; border-bottom: 1px solid var(--sand); font-variant-numeric: tabular-nums; }
+.span-time { color: var(--ink-soft); white-space: nowrap; }
+.span-task { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.span-duration { margin-left: auto; font-family: var(--mono); font-weight: 600; }
+.spans li.running .span-duration { color: var(--moss); }
+.week-days { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
+.week-days li { display: grid; grid-template-columns: 2.75rem minmax(0, 1fr) 3rem; gap: 0.5rem; align-items: center; font-size: 0.8125rem; }
+.week-day { color: var(--ink-soft); text-transform: capitalize; }
+.week-days li.today .week-day { color: var(--ink); font-weight: 600; }
+.week-bar { height: 0.5rem; background: var(--sand); border-radius: 999px; overflow: hidden; }
+.week-fill { display: block; height: 100%; background: var(--moss); border-radius: inherit; }
+.week-value { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.week-total { display: flex; justify-content: space-between; margin: 0.5rem 0 0; padding-top: 0.375rem; border-top: 1px solid var(--sand); }
+#time-section .my-time { display: inline-block; margin-top: 0.75rem; }
+/* Empty states of the main list (0.5.0): one fixed-height slot, same picture size and place in all three, so the list
+   does not jump when a state changes. The art is 96 / 192 px WebP (1x / 2x), shown at 72 px. */
+.empty-slot { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.5rem; min-height: 11.5rem; padding: 0.75rem 0.5rem; text-align: center; color: var(--ink-soft); }
+.empty-slot .empty-art { display: block; width: 72px; height: 72px; flex: none; }
+.empty-slot .empty-art img { width: 72px; height: 72px; object-fit: contain; }
+.empty-art .theme-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .empty-art .theme-light { display: none; }
+  :root:not([data-theme='light']) .empty-art .theme-dark { display: block; }
+}
+:root[data-theme='dark'] .empty-art .theme-light { display: none; }
+:root[data-theme='dark'] .empty-art .theme-dark { display: block; }
+.empty-slot .empty-line { margin: 0; max-width: 18rem; font-size: 0.875rem; }
+.empty-slot button { display: inline-flex; align-items: center; gap: 0.375rem; }
+/* "Pin a task": the pin buttons glow for a moment (no motion when reduced motion is asked for). */
+.pin-hint .pin { outline: 2px solid var(--moss); outline-offset: 2px; transition: outline-color 0.3s; }
+
+/* "Copy link" next to the open actions, and the link context menu (Open / Copy link). */
+.my-time-actions { display: inline-flex; align-items: center; gap: 0.25rem; }
+.icon-button.copy-link { width: 1.75rem; height: 1.75rem; }
+.link-menu { position: fixed; z-index: 30; display: grid; min-width: 12rem; padding: 0.25rem; background: var(--surface); border: 1px solid var(--control-border); border-radius: var(--radius-control); box-shadow: 0 6px 18px rgb(0 0 0 / 0.18); }
+.link-menu .menu-item { display: flex; align-items: center; gap: 0.5rem; justify-content: flex-start; width: 100%; padding: 0.375rem 0.5rem; background: transparent; color: var(--ink); border: 0; text-align: left; }
+.link-menu .menu-item:hover, .link-menu .menu-item:focus-visible { background: var(--mist); }
+#browser-settings select { width: 100%; }
+#browser-path { word-break: break-all; font-family: var(--mono); font-size: 0.75rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pin-hint .pin { transition: none; }
+}
+/* Quick wins (0.5.x): "Continue last" with its shortcut, the "Reassign" task picker, the nudge toast's two buttons. */
+#timer .continue-last { grid-column: 1 / span 2; display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.625rem; margin-top: 0.375rem; }
+#timer .continue-last #resume { margin-top: 0; }
+.reassign { display: grid; gap: 0.375rem; margin-top: 0.25rem; }
+.reassign-heading { margin: 0; font-weight: 600; }
+.reassign > button { justify-self: start; }
+.reassign-search { display: grid; gap: 0.25rem; }
+.reassign-search label { margin: 0; }
+.reassign-search-row { display: flex; gap: 0.375rem; }
+.reassign-search-row input { flex: 1; min-width: 0; }
+.reassign #reassign-status { margin: 0; min-height: 1em; }
+.reassign-options { display: grid; gap: 0.125rem; margin: 0; padding: 0.25rem; border: 1px solid var(--sand); border-radius: var(--radius-control); max-height: 11rem; overflow-y: auto; background: var(--surface-muted); }
+.reassign-option { display: flex; align-items: center; gap: 0.5rem; padding: 0.3125rem 0.375rem; border-radius: var(--radius-control); cursor: pointer; overflow-wrap: anywhere; }
+.reassign-option:hover, .reassign-option:has(input:checked) { background: var(--mist); }
+.reassign-option input { accent-color: var(--moss); flex: none; }
+/* Meeting detection (0.5.x): the question's answers and its short task picker; Settings → Meetings. */
+.toast-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.75rem; margin-top: 0.375rem; }
+.toast-link { font-size: 0.8125rem; padding: 0.125rem 0; }
+.meeting-toast .toast-art { align-self: flex-start; }
+.meeting-picker { display: grid; gap: 0.375rem; width: 100%; justify-self: stretch; min-width: 0; }
+.meeting-picker .help { margin: 0; font-size: 0.8125rem; }
+.meeting-picker input[type='search'] { font: inherit; font-size: 0.875rem; width: 100%; min-width: 0; box-sizing: border-box; padding: 0.25rem 0.5rem; border: 1px solid var(--control-border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); }
+.meeting-tasks { display: grid; gap: 0.125rem; max-height: 10rem; overflow-y: auto; }
+.meeting-tasks li { display: flex; align-items: center; gap: 0.375rem; min-width: 0; }
+.meeting-task { display: block; text-align: left; font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+.meeting-picker #meeting-picker-cancel { justify-self: start; }
+.meeting-badge { border-color: var(--moss); color: var(--moss-deep); background: var(--mist); }
+.meeting-options { display: grid; gap: 0.375rem; }
+.meeting-muted-list li { padding: 0.125rem 0; }

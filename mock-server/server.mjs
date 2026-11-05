@@ -52,6 +52,10 @@ function freshState() {
     requests: [],
     config: {
       workingHours: null,
+      // `GET me.daysOff` as proposed for TimeTrackBundle ([{date, kind: 'holiday' | 'vacation', label?}]); null = absent.
+      daysOff: null,
+      // `GET me.locale` (TimeTrackBundle 1.11); null = absent.
+      locale: null,
       deviceInterval: 5,
       tokenScopes: [...ALL_SCOPES],
       failNext: null,
@@ -291,6 +295,8 @@ export function createMockServer(options = {}) {
           displayName: user.displayName,
           scopes: session.scopes,
           workingHours: state.config.workingHours,
+          ...(state.config.daysOff !== null ? { daysOff: state.config.daysOff } : {}),
+          ...(state.config.locale !== null ? { locale: state.config.locale } : {}),
           ...(state.config.minSupportedVersion ? { minSupportedVersion: state.config.minSupportedVersion } : {}),
           ...(v110()
             ? {
@@ -553,6 +559,29 @@ export function createMockServer(options = {}) {
         return send(res, 204);
       case 'POST device/approve':
         return approveDevice(body.userCode, body.approve !== false) ? send(res, 204) : error(res, 404, 'not_found', 'Unknown code.');
+      // Finished entries of the demo user ({entries: [{taskId, startedAt, endedAt}]}), for the week / today views.
+      case 'POST entries/seed': {
+        const list = state.entries.get(USERS[0].id) ?? [];
+        for (const item of body.entries ?? []) {
+          const task = TASKS.find((t) => t.id === item.taskId) ?? { id: item.taskId, title: item.taskId, boardId: null };
+          const from = new Date(item.startedAt);
+          const to = new Date(item.endedAt);
+          list.push({
+            id: randomUUID(),
+            taskId: task.id,
+            taskTitle: task.title,
+            boardId: task.boardId,
+            startedAt: from.toISOString(),
+            endedAt: to.toISOString(),
+            durationSeconds: Math.round((to.getTime() - from.getTime()) / 1000),
+            source: 'web',
+            metadata: null,
+          });
+        }
+        list.sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+        state.entries.set(USERS[0].id, list);
+        return send(res, 204);
+      }
       case 'POST timer/backdate': {
         for (const timer of state.timers.values()) {
           timer.startedAt = new Date(new Date(timer.startedAt).getTime() - Number(body.seconds ?? 0) * 1000).toISOString();

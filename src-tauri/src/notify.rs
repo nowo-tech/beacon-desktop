@@ -1,0 +1,549 @@
+//! Friendly messages as native OS notifications: a short localized title, the line as body and the mascot pose.
+//!
+//! - **Windows**: a toast under the app's AppUserModelID, the pose as the square app logo (bottom right, in the
+//!   Action Center like any other app). NSIS installs register `tech.nowo.timetrack` on the Start-menu shortcut; the
+//!   MSIX (Store) package's AUMID is `<package family name>!TimeTrack`, derived from the install folder.
+//! - **macOS**: Notification Center, the pose as the content image (the app icon is the sender's).
+//! - **Linux**: the Desktop Notifications service (GNOME, KDE, …), the pose through the `image-path` hint.
+//!
+//! A click on the notification brings the main window forward. A working-hours reminder may carry one button
+//! (Start / Stop / Resume) and "Working without a timer?" two (Start last / Choose task), ids in `ACTION_IDS`:
+//! pressing one sends the main window a `notification-action` event with the id, and the UI starts or stops the
+//! timer ("Choose task" also brings the window forward); any other id from the UI is dropped. The pictures are compiled in (`pose_art.rs`) and
+//! written once to the app's cache folder, since every OS API wants a file.
+
+use std::path::{Path, PathBuf};
+
+use serde::Deserialize;
+use tauri::{AppHandle, Emitter, Manager};
+
+use crate::pose_art::POSE_ART;
+
+/// What the UI sends (`notify_friendly`). Texts come already translated; lengths are capped before display.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FriendlyNote {
+    pub title: String,
+    pub body: String,
+    pub pose: Option<String>,
+    /// One button (working-hours reminders); absent for the other messages.
+    #[serde(default)]
+    pub action: Option<NoteAction>,
+    /// More buttons ("Working without a timer?": Start last, Choose task); absent from older UIs.
+    #[serde(default)]
+    pub actions: Vec<NoteAction>,
+}
+
+/// A notification button: what it sends back (`id`) and its translated label.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct NoteAction {
+    pub id: String,
+    pub label: String,
+}
+
+/// The only button ids the UI may ask for (`src/lib/reminders.ts`, `src/lib/nudge.ts`, and the meeting questions of
+/// `src/lib/meetings.ts`).
+pub const ACTION_IDS: [&str; 9] = [
+    "schedule-start",
+    "schedule-stop",
+    "schedule-resume",
+    "nudge-resume",
+    "nudge-choose",
+    "meeting-generic",
+    "meeting-switch",
+    "meeting-back",
+    "meeting-stop",
+];
+/// Buttons that need the window (the task picker).
+const SHOWS_WINDOW: [&str; 1] = ["nudge-choose"];
+/// At most this many buttons on one notification.
+pub const MAX_ACTIONS: usize = 2;
+
+const TITLE_MAX: usize = 80;
+const LABEL_MAX: usize = 24;
+
+fn checked(action: &NoteAction) -> Option<NoteAction> {
+    let label = cap(&action.label, LABEL_MAX);
+    (ACTION_IDS.contains(&action.id.as_str()) && !label.is_empty()).then(|| NoteAction {
+        id: action.id.clone(),
+        label,
+    })
+}
+
+/// The button of `note` when its id is a known one and its label not empty (capped), else none.
+#[cfg(test)]
+pub fn checked_action(note: &FriendlyNote) -> Option<NoteAction> {
+    checked(note.action.as_ref()?)
+}
+
+/// Every button of `note` (`action`, then `actions`) that passes `checked_action`'s rules, without repeats, at most
+/// `MAX_ACTIONS`.
+pub fn checked_actions(note: &FriendlyNote) -> Vec<NoteAction> {
+    let mut result: Vec<NoteAction> = Vec::new();
+    for action in note.action.iter().chain(note.actions.iter()) {
+        if let Some(action) = checked(action) {
+            if result.len() < MAX_ACTIONS && !result.iter().any(|known| known.id == action.id) {
+                result.push(action);
+            }
+        }
+    }
+    result
+}
+
+/// Tells the main window that a notification button was pressed.
+fn dispatch(app: &AppHandle, id: &str) {
+    if SHOWS_WINDOW.contains(&id) {
+        crate::show_main(app);
+    }
+    let _ = app.emit_to("main", "notification-action", id.to_string());
+}
+const BODY_MAX: usize = 300;
+
+fn cap(text: &str, max: usize) -> String {
+    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+    let trimmed = clean.trim();
+    if trimmed.chars().count() <= max {
+        return trimmed.to_string();
+    }
+    let mut out: String = trimmed.chars().take(max - 1).collect();
+    out.push('…');
+    out
+}
+
+/// The compiled-in picture of a pose id, or `None` for an unknown id (never a path from the UI).
+pub fn pose_png(id: &str) -> Option<&'static [u8]> {
+    POSE_ART
+        .iter()
+        .find(|(name, _)| *name == id)
+        .map(|(_, bytes)| *bytes)
+}
+
+/// `<cache>/notification-art/pose-<id>.png`, written when missing or of another size (an update changed the art).
+fn pose_file(cache: &Path, id: &str) -> Option<PathBuf> {
+    let bytes = pose_png(id)?;
+    let dir = cache.join("notification-art");
+    let path = dir.join(format!("pose-{id}.png"));
+    let current = std::fs::metadata(&path).map(|m| m.len()).ok();
+    if current != Some(bytes.len() as u64) {
+        std::fs::create_dir_all(&dir).ok()?;
+        std::fs::write(&path, bytes).ok()?;
+    }
+    Some(path)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+/// Package family name of an MSIX install, from its folder `…\WindowsApps\<Name>_<Version>_<Arch>_<Resource>_<PublisherId>\`.
+pub fn package_family_name(exe: &Path) -> Option<String> {
+    let mut components = exe
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string());
+    components.find(|c| c.eq_ignore_ascii_case("WindowsApps"))?;
+    let full = components.next()?;
+    let parts: Vec<&str> = full.split('_').collect();
+    if parts.len() != 5 || parts[0].is_empty() || parts[4].is_empty() {
+        return None;
+    }
+    Some(format!("{}_{}", parts[0], parts[4]))
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+/// The `Application Id` of the MSIX manifest (scripts/store/msix-manifest.mjs).
+pub const MSIX_APP_ID: &str = "TimeTrack";
+
+#[cfg_attr(not(windows), allow(dead_code))]
+/// AppUserModelID of the toasts: the package's for an MSIX install, else the bundle identifier the NSIS installer
+/// puts on the Start-menu shortcut. `None` for a development build (`target\debug`, `target\release`): Windows then
+/// shows the toast under PowerShell, as the notification plugin does.
+pub fn windows_aumid(exe: &Path, identifier: &str) -> Option<String> {
+    if let Some(family) = package_family_name(exe) {
+        return Some(format!("{family}!{MSIX_APP_ID}"));
+    }
+    let dir = exe.parent()?.to_string_lossy().replace('/', "\\");
+    let dev = dir.ends_with("\\target\\debug") || dir.ends_with("\\target\\release");
+    (!dev).then(|| identifier.to_string())
+}
+
+/// Where the pictures are written. An MSIX install writes them to its package's own `LocalCache` (a real path the
+/// toast host can read, unlike the virtualised `%LOCALAPPDATA%` of a packaged app); anything else to the app cache.
+fn art_dir(app: &AppHandle) -> Option<PathBuf> {
+    #[cfg(windows)]
+    if let (Ok(exe), Some(local)) = (
+        tauri::utils::platform::current_exe(),
+        std::env::var_os("LOCALAPPDATA"),
+    ) {
+        if let Some(family) = package_family_name(&exe) {
+            return Some(msix_cache(Path::new(&local), &family));
+        }
+    }
+    app.path().app_cache_dir().ok()
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn msix_cache(local_app_data: &Path, family: &str) -> PathBuf {
+    local_app_data
+        .join("Packages")
+        .join(family)
+        .join("LocalCache")
+}
+
+/// Plain text for a Linux notification body: servers that advertise `body-markup` (GNOME, KDE, …) would otherwise
+/// render `<b>`, `<a>` or `<img>` from it.
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
+pub fn escape_markup(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+#[cfg_attr(windows, allow(dead_code))]
+/// The button pressed, from what the notification server reported (XDG sends its id, macOS' NSUserNotification its
+/// label), or `None`.
+pub fn pressed<'a>(
+    response: &notify_rust::NotificationResponse,
+    actions: &'a [NoteAction],
+) -> Option<&'a NoteAction> {
+    match response {
+        notify_rust::NotificationResponse::Action(value) => actions
+            .iter()
+            .find(|action| *value == action.id || *value == action.label),
+        _ => None,
+    }
+}
+
+#[cfg_attr(windows, allow(dead_code))]
+/// Whether what the notification server reported is a click on the notification itself.
+pub fn is_click(response: &notify_rust::NotificationResponse) -> bool {
+    matches!(response, notify_rust::NotificationResponse::Default)
+        || matches!(response, notify_rust::NotificationResponse::Action(action) if action == "default")
+}
+
+/// Shows the notification; errors (no notification service, toasts turned off) go back to the UI, which then shows
+/// the message inside the app and says so in Settings.
+pub fn show(app: &AppHandle, note: &FriendlyNote) -> Result<(), String> {
+    let title = cap(&note.title, TITLE_MAX);
+    let body = cap(&note.body, BODY_MAX);
+    if body.is_empty() {
+        return Err("empty notification".into());
+    }
+    let image = match (&note.pose, art_dir(app)) {
+        (Some(id), Some(cache)) => pose_file(&cache, id),
+        _ => None,
+    };
+    platform::show(app, &title, &body, image.as_deref(), checked_actions(note))
+}
+
+#[cfg(windows)]
+mod platform {
+    use super::*;
+    use tauri_winrt_notification::{IconCrop, Toast};
+
+    pub fn show(
+        app: &AppHandle,
+        title: &str,
+        body: &str,
+        image: Option<&Path>,
+        actions: Vec<NoteAction>,
+    ) -> Result<(), String> {
+        let exe = tauri::utils::platform::current_exe().map_err(|e| e.to_string())?;
+        let aumid = windows_aumid(&exe, &app.config().identifier)
+            .unwrap_or_else(|| Toast::POWERSHELL_APP_ID.to_string());
+        let mut toast = Toast::new(&aumid).title(title).text1(body);
+        if let Some(path) = image {
+            toast = toast.icon(path, IconCrop::Square, "");
+        }
+        for action in &actions {
+            toast = toast.add_button(&action.label, &action.id);
+        }
+        let handle = app.clone();
+        let ids: Vec<String> = actions.into_iter().map(|action| action.id).collect();
+        toast
+            .on_activated(move |argument| {
+                match argument
+                    .as_ref()
+                    .and_then(|pressed| ids.iter().find(|id| *id == pressed))
+                {
+                    Some(id) => dispatch(&handle, id),
+                    None => crate::show_main(&handle),
+                }
+                Ok(())
+            })
+            .show()
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(not(windows))]
+mod platform {
+    use super::*;
+
+    pub fn show(
+        app: &AppHandle,
+        title: &str,
+        body: &str,
+        image: Option<&Path>,
+        actions: Vec<NoteAction>,
+    ) -> Result<(), String> {
+        #[cfg(not(target_os = "macos"))]
+        let body = &escape_markup(body);
+        let mut notification = notify_rust::Notification::new();
+        notification
+            .summary(title)
+            .body(body)
+            .appname(app.config().product_name.as_deref().unwrap_or("TimeTrack"))
+            .auto_icon();
+        if let Some(path) = image {
+            notification.image_path(&path.to_string_lossy());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            static APPLICATION: std::sync::Once = std::sync::Once::new();
+            let identifier = app.config().identifier.clone();
+            APPLICATION.call_once(|| {
+                let _ = notify_rust::set_application(if tauri::is_dev() {
+                    "com.apple.Terminal"
+                } else {
+                    &identifier
+                });
+            });
+        }
+        // The Desktop Notifications Specification reports a click on the notification itself as the action
+        // `default`, and only for a notification that offers it.
+        #[cfg(not(target_os = "macos"))]
+        notification.action("default", "");
+        for action in &actions {
+            notification.action(&action.id, &action.label);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let handle = notification.show().map_err(|e| e.to_string())?;
+        let app = app.clone();
+        // Waiting keeps the connection open (GNOME closes a notification whose sender went away) and reports the
+        // click; on macOS this is also where the notification is sent.
+        std::thread::Builder::new()
+            .name("notification".into())
+            .spawn(move || {
+                #[cfg(target_os = "macos")]
+                let handle = match notification.show() {
+                    Ok(handle) => handle,
+                    Err(_) => return,
+                };
+                let _ = handle.wait_for_response(|response: &notify_rust::NotificationResponse| {
+                    if let Some(action) = pressed(response, &actions) {
+                        dispatch(&app, &action.id);
+                    } else if is_click(response) {
+                        crate::show_main(&app);
+                    }
+                });
+            })
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_listed_pose_has_a_square_png_and_nothing_else_does() {
+        // The empty-state pictures of the list (`empty-*`) are not notification art.
+        let listed: Vec<String> =
+            serde_json::from_str::<Vec<String>>(include_str!("../../src/ui/pose-art.json"))
+                .unwrap()
+                .into_iter()
+                .filter(|id| !id.starts_with("empty-"))
+                .collect();
+        assert_eq!(listed.len(), POSE_ART.len());
+        for id in &listed {
+            let png = pose_png(id).unwrap_or_else(|| panic!("{id}"));
+            assert_eq!(&png[1..4], b"PNG", "{id}");
+            // IHDR width and height (big endian at 16..24): 96 × 96.
+            assert_eq!(&png[16..24], &[0, 0, 0, 96, 0, 0, 0, 96], "{id}");
+        }
+        for id in [
+            "",
+            "../etc/passwd",
+            "beach",
+            "PEEK",
+            "peek.png",
+            "empty-tasks",
+        ] {
+            assert!(pose_png(id).is_none(), "{id}");
+        }
+    }
+
+    #[test]
+    fn pose_files_are_written_once_into_the_cache() {
+        let cache = std::env::temp_dir().join(format!("ttd-notify-{}", std::process::id()));
+        let path = pose_file(&cache, "coffee").expect("written");
+        assert!(path.ends_with("notification-art/pose-coffee.png"));
+        assert_eq!(std::fs::read(&path).unwrap(), pose_png("coffee").unwrap());
+        // A stale file (other art) is replaced.
+        std::fs::write(&path, b"old").unwrap();
+        pose_file(&cache, "coffee").unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap().len(),
+            pose_png("coffee").unwrap().len()
+        );
+        assert!(pose_file(&cache, "nope").is_none());
+        std::fs::remove_dir_all(&cache).unwrap();
+    }
+
+    #[test]
+    fn texts_are_capped_and_cleaned() {
+        assert_eq!(cap("  Coffee time \n", 80), "Coffee time");
+        let long = "x".repeat(400);
+        let capped = cap(&long, BODY_MAX);
+        assert_eq!(capped.chars().count(), BODY_MAX);
+        assert!(capped.ends_with('…'));
+        assert_eq!(cap("a\u{7}b", 10), "ab");
+    }
+
+    #[test]
+    fn msix_installs_use_the_package_aumid_and_nsis_the_identifier() {
+        let msix = Path::new(
+            r"C:\Program Files\WindowsApps\NowoTech.TimeTrack_0.5.0.0_x64__8wekyb3d8bbwe\TimeTrack.exe",
+        );
+        // Built on Linux, Windows paths have no separators for `Path`: the same logic on the `/` form.
+        let msix_unix = Path::new(
+            "/Program Files/WindowsApps/NowoTech.TimeTrack_0.5.0.0_x64__8wekyb3d8bbwe/TimeTrack.exe",
+        );
+        let parsed = package_family_name(msix_unix);
+        assert_eq!(parsed.as_deref(), Some("NowoTech.TimeTrack_8wekyb3d8bbwe"));
+        assert_eq!(
+            windows_aumid(msix_unix, "tech.nowo.timetrack").as_deref(),
+            Some("NowoTech.TimeTrack_8wekyb3d8bbwe!TimeTrack")
+        );
+        if cfg!(windows) {
+            assert_eq!(package_family_name(msix), parsed);
+        }
+        let nsis = Path::new("/Users/ana/AppData/Local/TimeTrack/time-track-desktop.exe");
+        assert_eq!(
+            windows_aumid(nsis, "tech.nowo.timetrack").as_deref(),
+            Some("tech.nowo.timetrack")
+        );
+        let dev =
+            Path::new("/src/time-track-desktop/src-tauri/target/debug/time-track-desktop.exe");
+        assert_eq!(windows_aumid(dev, "tech.nowo.timetrack"), None);
+        assert_eq!(
+            package_family_name(Path::new("/x/WindowsApps/not-a-package/a.exe")),
+            None
+        );
+        assert_eq!(package_family_name(Path::new("/x/WindowsApps")), None);
+        assert!(
+            msix_cache(Path::new("/L"), "NowoTech.TimeTrack_8wekyb3d8bbwe")
+                .ends_with("Packages/NowoTech.TimeTrack_8wekyb3d8bbwe/LocalCache")
+        );
+    }
+
+    #[test]
+    fn only_known_buttons_with_a_label_are_offered() {
+        let note = |id: &str, label: &str| FriendlyNote {
+            title: "t".into(),
+            body: "b".into(),
+            pose: None,
+            action: Some(NoteAction {
+                id: id.into(),
+                label: label.into(),
+            }),
+            actions: Vec::new(),
+        };
+        assert_eq!(
+            checked_action(&note("schedule-stop", " Parar\n")),
+            Some(NoteAction {
+                id: "schedule-stop".into(),
+                label: "Parar".into()
+            })
+        );
+        assert_eq!(checked_action(&note("open-url", "Go")), None);
+        assert_eq!(
+            checked_action(&note("meeting-back", "Volver")).map(|a| a.id),
+            Some("meeting-back".to_string())
+        );
+        assert_eq!(checked_action(&note("meeting-open-url", "Go")), None);
+        assert_eq!(checked_action(&note("schedule-start", "  ")), None);
+        let long = checked_action(&note("schedule-resume", &"x".repeat(60))).unwrap();
+        assert_eq!(long.label.chars().count(), LABEL_MAX);
+        let plain: FriendlyNote =
+            serde_json::from_str(r#"{"title":"t","body":"b","pose":null}"#).unwrap();
+        assert_eq!(checked_action(&plain), None);
+        let with: FriendlyNote = serde_json::from_str(
+            r#"{"title":"t","body":"b","pose":"lunch","action":{"id":"schedule-stop","label":"Stop"}}"#,
+        )
+        .unwrap();
+        assert_eq!(with.action.unwrap().id, "schedule-stop");
+    }
+
+    #[test]
+    fn a_button_is_recognised_by_its_id_or_its_label() {
+        use notify_rust::{CloseReason, NotificationResponse};
+        let stop = NoteAction {
+            id: "schedule-stop".into(),
+            label: "Parar".into(),
+        };
+        let choose = NoteAction {
+            id: "nudge-choose".into(),
+            label: "Elegir tarea".into(),
+        };
+        let both = [stop.clone(), choose.clone()];
+        assert_eq!(
+            pressed(&NotificationResponse::Action("schedule-stop".into()), &both),
+            Some(&stop)
+        );
+        assert_eq!(
+            pressed(&NotificationResponse::Action("Parar".into()), &both),
+            Some(&stop)
+        );
+        assert_eq!(
+            pressed(&NotificationResponse::Action("Elegir tarea".into()), &both),
+            Some(&choose)
+        );
+        assert_eq!(
+            pressed(&NotificationResponse::Action("default".into()), &both),
+            None
+        );
+        assert_eq!(pressed(&NotificationResponse::Default, &both), None);
+        assert_eq!(
+            pressed(&NotificationResponse::Closed(CloseReason::Dismissed), &both),
+            None
+        );
+        assert_eq!(
+            pressed(&NotificationResponse::Action("schedule-stop".into()), &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn two_buttons_at_most_known_and_without_repeats() {
+        let note: FriendlyNote = serde_json::from_str(
+            r#"{"title":"t","body":"b","pose":"working","actions":[{"id":"nudge-resume","label":"Seguir con A"},{"id":"open-url","label":"x"},{"id":"nudge-resume","label":"again"},{"id":"nudge-choose","label":"Elegir tarea"},{"id":"schedule-stop","label":"Parar"}]}"#,
+        )
+        .unwrap();
+        let ids: Vec<String> = checked_actions(&note).into_iter().map(|a| a.id).collect();
+        assert_eq!(ids, vec!["nudge-resume", "nudge-choose"]);
+        let single: FriendlyNote = serde_json::from_str(
+            r#"{"title":"t","body":"b","pose":null,"action":{"id":"schedule-start","label":"Empezar"}}"#,
+        )
+        .unwrap();
+        assert_eq!(checked_actions(&single).len(), 1);
+        assert!(SHOWS_WINDOW.iter().all(|id| ACTION_IDS.contains(id)));
+    }
+
+    #[test]
+    fn linux_bodies_are_plain_text() {
+        assert_eq!(
+            escape_markup("Tom & Jerry <b>bold</b> <img src=x>"),
+            "Tom &amp; Jerry &lt;b&gt;bold&lt;/b&gt; &lt;img src=x&gt;"
+        );
+        assert_eq!(escape_markup("¿Un café?"), "¿Un café?");
+    }
+
+    #[test]
+    fn only_a_click_on_the_notification_counts() {
+        use notify_rust::{CloseReason, NotificationResponse};
+        assert!(is_click(&NotificationResponse::Default));
+        assert!(is_click(&NotificationResponse::Action("default".into())));
+        assert!(!is_click(&NotificationResponse::Action("other".into())));
+        assert!(!is_click(&NotificationResponse::Closed(
+            CloseReason::Dismissed
+        )));
+    }
+}

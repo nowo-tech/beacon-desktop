@@ -1,0 +1,250 @@
+import { f, hm, type Keywords, type MeetingCatalog, type NudgeCatalog, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
+
+/** Español (España): se come a las 14:00 y el café de la tarde va después. */
+export const pools: Pools = {
+  idle: [
+    f('Toc, toc… ¿hay alguien ahí?', 'peek'),
+    f('Pssst… ¿sigues por aquí?', 'peek-2'),
+    f('¿Te has escapado a por un café?', 'coffee'),
+    f('El teclado te echa de menos. ¿Sigues ahí?', 'sleepy'),
+    f('¿Me recibes? Cambio.', 'wave'),
+    f('¿Sigues ahí o estoy hablando con la silla?', 'think'),
+    f('Ya me he contado los píxeles dos veces. ¿Has vuelto?', 'peek-3'),
+    f('¿Pausa para el café o despedida a la francesa?', 'coffee'),
+    f('¡Ping! ¿Me devuelves el pong?', 'wave'),
+    f('¿Te ha abducido una reunión?', 'teamwork'),
+    f('Solo por confirmar: ¿seguimos fichando?', 'think'),
+    f('Ey, ¿estás? Prometo no juzgar.', 'heart'),
+    f('¿Era una siestecita? ¿Seguimos?', 'sleepy'),
+    f('Esto está muy tranquilo… ¿todo bien?', 'peek-4'),
+    f('Tic, tac… ¿alguien a los mandos?', 'wave'),
+    f('Te guardo el sitio. ¿Vuelves?', 'sleepy'),
+  ],
+  cheer: [
+    f('¡{hours} horas dándolo todo! Así se hace.', 'celebrate'),
+    f('Modo concentración: nivel leyenda. ¡Sigue así!', 'focus'),
+    f('Vas que te sales. El robot está tomando apuntes.', 'working'),
+    f('Pasito a pasito se llega lejos. ¡Bien hecho!', 'progress'),
+    f('Si concentrarse fuera deporte olímpico, ya tendrías medalla.', 'achievement'),
+    f('Qué manera de currar. ¡Estoy orgulloso!', 'focus'),
+    f('Las horas vuelan cuando estás inspirado. ¡A tope!', 'music'),
+    f('Productividad con el sello de calidad del robot.', 'presentation'),
+    f('Tú puedes. Una tarea detrás de otra.', 'keep-going'),
+    f('¡Menuda racha! El reloj alucina, y yo también.', 'cheer-up'),
+    f('¿Sigues al pie del cañón? Eres imparable (de la buena manera).', 'deadline'),
+    w('¿Un estiramiento rápido? Tu espalda te mandará flores.', 'stretch'),
+    w('¡Pausa para beber agua! Hasta los robots necesitan refrigerante.', 'water'),
+    w('Mira lejos de la pantalla 20 segundos. Tus ojos te lo agradecerán.', 'eyes'),
+    w('Un paseíto de dos minutos y la próxima hora irá mejor.', 'stretch-legs'),
+    w('Hombros abajo, respira hondo… y suelta. Así mejor.', 'mindfulness'),
+  ],
+  earlyBird: [
+    f('¡Madrugando! A quien madruga, el código le ayuda.', 'sunrise'),
+    f('Buenos días, madrugador. Ni el café se ha despertado aún.', 'early'),
+    f('¿Antes que el gallo? Chapó.', 'early'),
+    f('Mañana tranquila, cabeza despejada. Buen momento para avanzar.', 'sunrise'),
+    f('¡Empiezas pronto! Acuérdate de terminar pronto también.', 'early'),
+    f('Hoy has llegado antes que el robot. Impresionante.', 'celebrate'),
+    f('¡Buenos días! El correo aún duerme. Disfruta de la calma.', 'sleepy'),
+    f('Arriba, que el día es tuyo. Y quizá un segundo café.', 'coffee'),
+  ],
+  coffee: [
+    w('¿Hora del cafelito? El robot lo recomienda.', 'coffee'),
+    w('¿Te tomas algo? La próxima idea está ahí dentro.', 'coffee'),
+    w('¿Repostamos? Café, té o un vaso de agua, todo vale.', 'water'),
+    w('Pausa corta, recarga grande. Ve a por algo calentito.', 'coffee'),
+    w('Ha llamado la cafetera. Te echa de menos.', 'coffee'),
+    w('Cinco minutos lejos de la pantalla no son tiempo perdido.', 'stretch-legs'),
+    w('¿Almuercito? Una pieza de fruta cuenta como power-up.', 'lunch'),
+    w('Pausa, sorbo, sonrisa. Y seguimos.', 'coffee'),
+  ],
+  lunch: [
+    w('¡Hora de comer! Con el estómago lleno se piensa mejor.', 'lunch'),
+    w('Tu estómago ha abierto una incidencia. Prioridad: alta.', 'lunch'),
+    w('A comer algo rico, lejos del teclado.', 'lunch'),
+    w('Hasta los robots recargan a mediodía. ¡Te toca!', 'lunch'),
+    w('Pausa para comer: cero reuniones, máximo sabor.', 'lunch'),
+    w('Sal, come bien y vuelve con energía.', 'wave'),
+    w('¿Otra vez el táper delante del ordenador? Date un respiro de verdad.', 'lunch'),
+    w('Una buena comida hoy es una tarde mejor luego.', 'heart'),
+  ],
+  lateWork: [
+    w('Se está haciendo tarde. Cierra cuando puedas y descansa.', 'moon'),
+    w('Ya han salido las estrellas. ¿Lo dejamos por hoy?', 'late-working'),
+    w('Modo búho activado. Dormir es una funcionalidad, no un bug.', 'rest'),
+    w('Buen trabajo hoy. Tu yo de mañana agradecerá que descanses.', 'finished'),
+    w('¿Turno de noche? Bebe agua y deja lo difícil para mañana.', 'water'),
+    w('El robot está bostezando. Puede que tú también.', 'sleepy'),
+    w('Lo que quede seguirá aquí mañana. Palabra de robot.', 'late-working'),
+    w('Baja el brillo, estira un poco y aterriza suavemente.', 'stretch'),
+  ],
+  friday: [
+    f('¡Viernes por la tarde! Ya se ve la meta.', 'flag'),
+    f('Ya casi es finde. ¡Un último empujón!', 'holiday'),
+    f('Modo viernes: ordena, deja notas para el lunes y sonríe.', 'music'),
+    f('Cargando fin de semana… 90 %.', 'friday'),
+    f('¡Semanón! Vamos a aterrizarla con suavidad.', 'finished'),
+    f('Regla del viernes: nada de despliegues gordos, muchos choca esos cinco.', 'thumbs'),
+    f('Ya casi. El robot ya se ha puesto las gafas de sol.', 'shades'),
+    f('Ciérralo todo con cariño y disfruta del finde.', 'holiday'),
+  ],
+  weekend: [
+    f('¿Currando en finde? Espero que sea algo que te guste.', 'weekend-start'),
+    f('¡Turno de finde! El robot ha traído el picoteo.', 'lunch'),
+    f('Psst, es fin de semana. ¿Se ha enterado el calendario?', 'weekend-start'),
+    f('¿Finde y con el cronómetro en marcha? Qué valiente.', 'shades'),
+    f('¡Héroe del finde, a sus órdenes!', 'weekend-start'),
+    f('El robot técnicamente libra hoy, pero aquí está para ti.', 'wave'),
+    f('¿Un arreglo rápido de finde? Que sea rapidito.', 'thumbs'),
+    f('¿Fichando en finde? Cortito y al pie.', 'coffee'),
+  ],
+  weekendRest: [
+    w('Llevas un buen rato currando en finde. El sofá te llama.', 'stretch-legs'),
+    w('Ha salido el sol. ¿Sales tú también pronto?', 'shades'),
+    w('Te has ganado el resto del día. ¡A disfrutarlo!', 'shades'),
+    w('Un poco de curro en finde vale. Mucho descanso, mejor.', 'rest'),
+    w('Guarda, cierra el portátil y haz algo divertido.', 'shades'),
+    w('Parque, sofá o terraza: el resto del finde es tuyo.', 'stretch-legs'),
+    w('Te llama la playa. O el parque. O la siesta. Tú eliges.', 'shades'),
+    w('Buen trabajo hoy. Ahora a recargar pilas en modo finde.', 'shades'),
+  ],
+  milestone: [
+    f('{hours} horas de trabajo del bueno. ¡Esto merece medalla!', 'achievement'),
+    f('Logro desbloqueado: {hours} horas. ¡Reverencia!', 'achievement'),
+    f('{hours} horas y sigues a tope. Nivel oro.', 'achievement'),
+    f('¡Qué progreso! {hours} horas bien aprovechadas.', 'progress'),
+    f('Otro buen bloque terminado. Todo con su check.', 'task-complete'),
+    f('{hours} horas ya. ¡El robot saca los pompones!', 'cheer-up'),
+  ],
+  overtime: [
+    w('Mucho rato en el reloj. Batería baja: toca una pausa de verdad.', 'overtime'),
+    w('Llevas un tirón muy largo. Desconecta unos minutos, porfa.', 'overtime'),
+    w('Hasta los robots recargan. ¿Te toca a ti?', 'rest'),
+    w('¡Día largo! Estira, bebe agua y mira si puedes ir cerrando.', 'stretch'),
+    w('El reloj de arena dice que ya va un rato. Una pausa te sentará genial.', 'overtime'),
+    w('Hoy has dado mucho. Descansar también es parte del trabajo.', 'rest'),
+  ],
+  meetingIdle: [
+    f('¿Reunión larga? Tómate tu tiempo.', 'teamwork'),
+    f('¿Sigue la llamada? Yo le hago compañía al reloj.', 'teamwork'),
+    f('¿La reunión continúa? Sin prisa, solo pregunto.', 'teamwork'),
+    f('Mucho escuchar y poco teclear. ¿Todo bien por ahí?', 'teamwork'),
+    f('¿La llamada sigue o terminó hace un rato?', 'think'),
+    f('¿Sigues con tus compis? Asiente dos veces si es que sí.', 'teamwork'),
+  ],
+  meetingAfter: [
+    w('Reunión larga terminada. Un café y un estiramiento, bien merecidos.', 'coffee'),
+    w('Menuda llamada. Levántate, mueve los hombros y respira.', 'stretch'),
+    w('¡Maratón de reuniones superado! Agua y a seguir.', 'water'),
+    w('Después de tanto hablar: ¿un sorbo de algo y un paseíto?', 'stretch-legs'),
+    w('Tu voz ha currado mucho. Dale algo de beber.', 'water'),
+    w('Reunión larga, pausa corta. ¿Cinco minutos lejos de la pantalla?', 'coffee'),
+  ],
+  dailyDone: [
+    f('Daily hecha, ¡vamos allá!', 'thumbs'),
+    f('Daily terminada. Ahora, a por ello.', 'keep-going'),
+    f('Se acabó el stand-up, ¡manos a la obra!', 'flag'),
+    f('Daily lista. El plan está claro, ahora lo divertido.', 'task-complete'),
+    f('¡Daily completada! A darle caña.', 'wave'),
+    f('¿Daily en tiempo récord? El robot lo aprueba.', 'thumbs'),
+  ],
+};
+
+export const windows: Windows = {
+  earlyBefore: hm(7, 30),
+  earlyUntil: hm(11),
+  coffeeAm: [hm(10, 30), hm(11, 30)],
+  coffeePm: [hm(17), hm(18)],
+  lunch: [hm(14), hm(15, 30)],
+  lateFrom: hm(21),
+  lateUntil: hm(5),
+  fridayFrom: hm(15),
+};
+
+/** Words in a task's name, labels or type that mark it as a meeting-like task (matched without accents). */
+export const keywords: Keywords = {
+  daily: ['daily', 'dailies', 'diaria', 'reunión diaria', 'standup', 'stand-up'],
+  meeting: ['reunión', 'reuniones', 'llamada', 'videollamada', 'sync', '1:1', 'entrevista', 'call'],
+  technical: ['sprint review', 'revisión de sprint', 'técnica', 'técnico', 'refinamiento', 'planificación', 'retrospectiva', 'retro', 'demo', 'refinement', 'planning'],
+  training: ['formación', 'curso', 'taller', 'capacitación', 'webinar'],
+};
+
+/** Titles of the desktop notifications (short; the line is the body). */
+export const titles: Titles = {
+  cheer: '¡Sigue así!',
+  milestone: '¡Hito!',
+  overtime: 'Toca descansar',
+  earlyBird: 'Madrugador',
+  coffee: '¿Un café?',
+  lunch: 'Hora de comer',
+  lateWork: 'Se hace tarde',
+  friday: '¡Feliz viernes!',
+  weekend: 'Modo finde',
+  weekendRest: 'Disfruta del finde',
+  meetingAfter: 'Tras la reunión',
+  dailyDone: 'Daily hecha',
+};
+
+/** Working-hours reminders (start, lunch, end of the day) and the day-off line. */
+export const reminders: ReminderCatalog = {
+  lines: {
+    start: [
+      f('¿Empezamos?', 'sunrise'),
+      f('¡Buenos días! Cuando quieras, arrancamos.', 'early'),
+      f('Es tu hora de entrada. ¿Le damos al reloj?', 'early'),
+      f('Empieza la jornada. ¿Nos ponemos?', 'sunrise'),
+    ],
+    lunchStart: [
+      f('Hora de comer, ¿paro el temporizador?', 'lunch'),
+      f('Llegó la pausa de la comida. ¿Detengo el reloj?', 'lunch'),
+      f('Primero el plato, luego el teclado. ¿Paro el contador?', 'lunch'),
+      f('¡A comer! ¿Dejo de contar mientras tanto?', 'lunch'),
+    ],
+    lunchEnd: [
+      f('¿Retomamos {task}?', 'lunch'),
+      f('Se acabó la comida. ¿Seguimos con {task}?', 'keep-going'),
+      f('Con las pilas cargadas: ¿volvemos a {task}?', 'keep-going'),
+      f('Fin de la pausa. ¿Reanudo {task}?', 'lunch'),
+    ],
+    end: [
+      f('¿Cerramos por hoy?', 'finished'),
+      f('Es tu hora de salida. ¿Paro el temporizador?', 'finished'),
+      f('Jornada cumplida. ¿Lo dejamos aquí?', 'finished'),
+      f('Hora de desconectar. ¿Detengo el reloj?', 'finished'),
+    ],
+    dayOff: [
+      f('¿Trabajando en vacaciones? Que sea poquito.', 'shades'),
+      f('¿Hoy no era tu día libre? No te olvides de descansar.', 'holiday'),
+      f('Modo vacaciones activado… y el temporizador también. ¿Algo rápido?', 'shades'),
+      f('¿En tu día libre por aquí? Te acompaño, pero un ratito.', 'holiday'),
+    ],
+  },
+  titles: { start: 'Hora de entrada', lunchStart: 'Pausa para comer', lunchEnd: 'Vuelta de la comida', end: 'Hora de salida', dayOff: 'Día libre' },
+  actions: { start: 'Empezar', stop: 'Parar', resume: 'Retomar' },
+  lastTask: 'Última tarea: {task}.',
+  today: 'Hoy llevas {total}.',
+};
+
+/** "Working without a timer?" (input for a while during working hours, no timer running). */
+export const nudge: NudgeCatalog = {
+  lines: [
+    f('Llevas un rato a tope y no hay temporizador en marcha. ¿Lo registramos?', 'think'),
+    f('Mucho teclado y el reloj parado. ¿Ponemos uno en marcha?', 'peek'),
+    f('Parece que estás trabajando, pero el reloj no. ¿Lo pongo en marcha?', 'working'),
+    f('Oye, el temporizador está parado. ¿Seguimos donde lo dejaste?', 'wave'),
+  ],
+  title: '¿Trabajando sin temporizador?',
+  lastTask: 'Última tarea: {task}.',
+  actions: { resume: 'Seguir con {task}', choose: 'Elegir tarea' },
+};
+
+/** Meeting detection: the question while a call goes on, and the one when it ends. */
+export const meetings: MeetingCatalog = {
+  titles: { ask: '¿Reunión?', ended: 'Reunión terminada' },
+  ask: 'Parece que estás en una reunión ({app}). ¿Qué reunión es?',
+  askSwitch: 'Parece que estás en una reunión ({app}) y el reloj sigue en {task}. ¿Cambiamos a la reunión?',
+  ended: 'Reunión terminada ({minutes} min). ¿Volver a {task}?',
+  endedStop: 'Reunión terminada ({minutes} min). ¿Paro el temporizador?',
+  browser: 'llamada en el navegador',
+  actions: { choose: 'Elegir tarea', generic: 'Reunión genérica', switch: 'Cambiar a la reunión', notMeeting: 'No es una reunión', mute: 'No preguntar con esta app', back: 'Volver', stop: 'Parar' },
+};

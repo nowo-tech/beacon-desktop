@@ -1,5 +1,7 @@
 import type { MessageKey } from '../lib/i18n';
+import type { PoseId } from '../lib/messages/types';
 import { h } from './dom';
+import imported from './pose-art.json';
 
 /**
  * Mascot moments (0.5.0). One pose per situation, the way symfony-beacon uses its robot: friendly empty, waiting, error
@@ -82,17 +84,68 @@ export const ERROR_POSES: Record<string, Pose> = {
 
 /** Image with 1x / 2x sources from `public/mascot/`. An empty `alt` marks it decorative (also hidden from the a11y tree). */
 export function art(pose: Pose, alt: string, className: string): HTMLImageElement {
+  return picture(pose, alt, className, pose);
+}
+
+function picture(file: string, alt: string, className: string, pose: string): HTMLImageElement {
   return h('img', {
     class: className,
     attrs: {
-      src: `mascot/${pose}.webp`,
-      srcset: `mascot/${pose}.webp 1x, mascot/${pose}@2x.webp 2x`,
+      src: `mascot/${file}.webp`,
+      srcset: `mascot/${file}.webp 1x, mascot/${file}@2x.webp 2x`,
       alt,
       'aria-hidden': alt === '' ? 'true' : undefined,
       decoding: 'async',
       'data-pose': pose,
     },
   });
+}
+
+/**
+ * Friendly-message poses (`POSE_IDS`) with their own art in `public/mascot/pose-<id>.webp`: written by
+ * `scripts/mascot/import-poses.sh`, so new art needs no code change.
+ */
+export const POSE_ART: ReadonlySet<string> = new Set(imported as string[]);
+
+/** Closest existing pose for the friendly-message poses whose own art is not imported yet. */
+export const POSE_FALLBACK: Partial<Record<PoseId, Pose | `pose-${PoseId}`>> = {
+  beach: 'mascot',
+  sofa: 'mascot-small',
+  park: 'mascot',
+  // Empty states (src/lib/emptyStates.ts) until their own art (`pose-empty-*`) is imported.
+  'empty-pinned': 'pose-peek-3',
+  'empty-recent': 'pose-focus',
+  'empty-tasks': 'pose-teamwork',
+};
+
+/** Shown for a pose with neither art nor a fallback (a new id before its art arrives). */
+const LAST_RESORT: Pose = 'mascot-small';
+
+/** File (without extension) drawn for a friendly-message pose: its own art, else the fallback. */
+export function poseFile(id: PoseId, available: ReadonlySet<string> = POSE_ART): string {
+  return available.has(id) ? `pose-${id}` : (POSE_FALLBACK[id] ?? LAST_RESORT);
+}
+
+/** Decorative picture of a friendly message (`data-pose` = the message's pose id). */
+export function poseArt(id: PoseId, className: string): HTMLImageElement {
+  return picture(poseFile(id), '', className, id);
+}
+
+/**
+ * Picture of an empty state of the list, with its alt text (`data-pose` = the empty-state pose id): the light-theme
+ * art and, when imported, the `-dark` variant with a light outer stroke (else the same art). CSS shows the one of the
+ * active theme (`.theme-light` / `.theme-dark`, following Settings → Theme and the system); the hidden one is out of
+ * the accessibility tree.
+ */
+export function emptyArt(id: PoseId, alt: string, className: string, available: ReadonlySet<string> = POSE_ART): HTMLElement {
+  const darkId = `${id}-dark` as PoseId;
+  const dark = available.has(darkId) ? `pose-${darkId}` : poseFile(id, available);
+  return h(
+    'span',
+    { class: `${className} empty-art-pair`, attrs: { 'data-pose': id } },
+    picture(poseFile(id, available), alt, 'theme-light', id),
+    picture(dark, alt, 'theme-dark', darkId),
+  );
 }
 
 /** The picture of a moment, with its translated alt text (or decorative). */

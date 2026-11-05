@@ -22,3 +22,8 @@ export function safeVerificationUri(uri: string | null | undefined, server: stri
 export function appsPage(server: string): string {
   return `${server.replace(/\/+$/, '')}/dashboard/tasks/time/apps`;
 }
+
+/** Beacon's task board ("Open the tasks in Beacon" when the list is empty). */
+export function tasksPage(server: string): string {
+  return `${server.replace(/\/+$/, '')}/dashboard/tasks`;
+}

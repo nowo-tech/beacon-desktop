@@ -1,0 +1,4 @@
+# After the call: the input device is idle, Zoom still open.
+input-running: no
+88	com.apple.controlcenter	0
+9910	us.zoom.xos	0

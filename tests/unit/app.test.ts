@@ -33,7 +33,8 @@ async function signedIn(options: Parameters<typeof mount>[0] = {}, server = env.
   const ui = mount(options);
   await ui.app.init();
   const done = ui.app.connect(server);
-  await tick();
+  // The code screen appears after preflight and the device-code request: wait for it (slow CI runners).
+  for (let waited = 0; ui.$('#user-code') === null && waited < 3000; waited += 40) await tick();
   const code = ui.$('#user-code').textContent ?? '';
   await env.control('device/approve', { userCode: code });
   await done;
@@ -107,6 +108,8 @@ describe('desktop app', () => {
       tooltip: 'TimeTrack — Tracking “Write onboarding guide” · 0:00 · Today 0:00',
       status: '● 0:00 · Write onboarding guide',
       running: true,
+      // The host keeps the elapsed time current every minute by itself (tray_clock.rs).
+      clock: expect.objectContaining({ title: '{time} Write onboarding gu…', tooltip: 'TimeTrack — Tracking “Write onboarding guide” · {time} · Today {today}', todayBaseSeconds: 0 }),
     });
     expect(ui.platform.hooks.trayMenu?.primary).toEqual({ id: 'stop', label: 'Stop timer' });
     expect(ui.platform.hooks.trayMenu?.openBeacon).toBeNull();
@@ -182,7 +185,10 @@ describe('desktop app', () => {
     expect(ui.$('#idle-title').textContent).toBe('Still there?');
     expect(ui.$('#idle-text').textContent).toBe('No activity for 10 min on Write onboarding guide.');
     expect(ui.$('#live').textContent).toContain('Still there?');
-    expect(document.activeElement?.closest('#idle')).toBeNull();
+    // A modal: it takes focus (the first answer) and the rest of the window is inert until it is answered.
+    expect(document.activeElement?.closest('#idle')).not.toBeNull();
+    expect(ui.$('#idle').getAttribute('aria-modal')).toBe('true');
+    expect(ui.$('#timer').hasAttribute('inert')).toBe(true);
     // The person is back but has not answered: the prompt stays and nothing is stopped.
     now = new Date(realNow - 60_000);
     ui.platform.hooks.idleSeconds = 1;
@@ -240,7 +246,7 @@ describe('desktop app', () => {
     await ui.app.tick();
     expect(ui.app.state.idleCheck.phase).toBe('gap');
     expect(ui.$('#gap-text').textContent).toContain('Write onboarding guide');
-    expect(ui.$<HTMLSelectElement>('#gap-task').options.length).toBeGreaterThan(0);
+    expect(ui.$('#idle-reassign').textContent).toBe('Reassign to another task…');
     ui.click('#gap-keep');
     for (let i = 0; i < 20 && ui.app.state.idleCheck.phase !== 'resume'; i++) await tick();
     await tick();
@@ -270,8 +276,10 @@ describe('desktop app', () => {
     now = new Date(realNow - 60_000);
     await ui.app.tick();
     expect(ui.app.state.idleCheck.phase).toBe('gap');
-    ui.$<HTMLSelectElement>('#gap-task').value = 'T-102';
-    ui.click('#gap-reassign');
+    // Reassign: the picker (pinned / recent / search), then the task.
+    ui.click('#idle-reassign');
+    ui.root.querySelector<HTMLInputElement>('input[name="reassign-task"][value="T-102"]')!.checked = true;
+    ui.click('#reassign-save');
     for (let i = 0; i < 20 && ui.app.state.idleCheck.phase !== 'resume'; i++) await tick();
     await tick();
     const entries = Object.values(((await env.control('state')) as { entries: Record<string, { taskId: string }[]> }).entries).flat();
@@ -321,7 +329,8 @@ describe('desktop app', () => {
     const minutes = ui.$<HTMLSelectElement>('#idle-minutes');
     minutes.value = '15';
     minutes.dispatchEvent(new Event('change'));
-    expect(ui.app.idleSettings()).toEqual({ thresholdMinutes: 15, answerTimeoutMinutes: 5 });
+    // The countdown is IDLE_COUNTDOWN_MINUTES, never longer than the organisation's answer timeout.
+    expect(ui.app.idleSettings()).toEqual({ thresholdMinutes: 15, answerTimeoutMinutes: 2 });
     ui.click('#back');
     await ui.app.tick();
     expect(ui.app.state.idleCheck.phase).toBe('asking');
@@ -349,7 +358,7 @@ describe('desktop app', () => {
     ui.app.show('settings');
     expect(ui.$('#idle-org').textContent).toContain('after 20 minutes');
     expect([...ui.$<HTMLSelectElement>('#idle-minutes').options].map((o) => o.value)).toEqual(['20', '30', '45', '60']);
-    expect(ui.app.idleSettings()).toEqual({ thresholdMinutes: 20, answerTimeoutMinutes: 3 });
+    expect(ui.app.idleSettings()).toEqual({ thresholdMinutes: 20, answerTimeoutMinutes: 2 });
     const select = ui.$<HTMLSelectElement>('#idle-minutes');
     select.value = '20';
     select.dispatchEvent(new Event('change'));
@@ -660,7 +669,7 @@ describe('desktop app', () => {
       expect(ui.$<HTMLAnchorElement>('#open-beacon').href).toBe(`${HTTPS}/dashboard`);
       expect(ui.$('#open-beacon').getAttribute('aria-label')).toBe('Open Beacon');
       expect(ui.$<HTMLAnchorElement>('#open-my-time').href).toBe(`${HTTPS}/dashboard/tasks/time`);
-      expect([...nav.children].map((el) => el.id)).toEqual(['open-beacon', 'open-settings']);
+      expect([...nav.children].map((el) => el.id)).toEqual(['open-beacon', 'layout-toggle', 'open-settings']);
       const links = [...ui.root.querySelectorAll<HTMLAnchorElement>('#tasks a.beacon-link')];
       expect(links.map((a) => a.closest('li')?.getAttribute('data-task'))).toEqual(['T-101']);
       expect(links[0].getAttribute('aria-label')).toBe('Open “Write onboarding guide” in Beacon');

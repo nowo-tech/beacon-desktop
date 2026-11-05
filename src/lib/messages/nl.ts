@@ -1,0 +1,250 @@
+import { f, hm, type Keywords, type MeetingCatalog, type NudgeCatalog, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
+
+/** Nederlands (je): vroege lunch, koffie om tien en om drie. */
+export const pools: Pools = {
+  idle: [
+    f('Klop klop… is er iemand thuis?', 'peek'),
+    f('Psst… ben je er nog?', 'peek-2'),
+    f('Stiekem koffie halen?', 'coffee'),
+    f('Het toetsenbord mist je. Nog daar?', 'sleepy'),
+    f('Hallo, hoor je me? Over.', 'wave'),
+    f('Ben je er nog, of praat ik tegen een lege stoel?', 'think'),
+    f('Ik heb de pixels al twee keer geteld. Ben je terug?', 'peek-3'),
+    f('Koffiepauze of stilletjes vertrokken?', 'coffee'),
+    f('Ping! Komt er nog een pong?', 'wave'),
+    f('Heeft een vergadering je opgeslokt?', 'teamwork'),
+    f('Even checken: loopt de klok nog voor jou?', 'think'),
+    f('Hé, ben je daar? Ik oordeel niet, beloofd.', 'heart'),
+    f('Was dat een powernap? Nog aan boord?', 'sleepy'),
+    f('Het is hier wel erg stil… alles goed?', 'peek-4'),
+    f('Tik tik. Zit er nog iemand aan het stuur?', 'wave'),
+    f('Ik houd je plekje warm. Kom je terug?', 'sleepy'),
+  ],
+  cheer: [
+    f('Al {hours} uur lekker bezig. Top!', 'celebrate'),
+    f('Focusmodus: legendarisch. Ga zo door!', 'focus'),
+    f('Je bent goed op dreef. De robot maakt aantekeningen.', 'working'),
+    f('Stapje voor stapje kom je ver. Goed bezig!', 'progress'),
+    f('Als focussen een olympische sport was, stond jij op het podium.', 'achievement'),
+    f('Wat een geconcentreerd werk. Ik ben trots op je!', 'focus'),
+    f('De tijd vliegt als het zo lekker loopt. Doorgaan!', 'music'),
+    f('Productiviteit met het robotkeurmerk.', 'presentation'),
+    f('Jij kunt dit. Eén taak tegelijk.', 'keep-going'),
+    f('Wat een reeks! De klok staat versteld, en ik ook.', 'cheer-up'),
+    f('Nog steeds bezig? Je bent niet te stoppen (op een goede manier).', 'deadline'),
+    w('Even rekken? Je rug stuurt je een bedankkaartje.', 'stretch'),
+    w('Waterpauze! Zelfs robots hebben koelvloeistof nodig.', 'water'),
+    w('Kijk 20 seconden in de verte. Je ogen zeggen dank je.', 'eyes'),
+    w('Twee minuutjes lopen en het volgende uur gaat beter.', 'stretch-legs'),
+    w('Schouders omlaag, diep inademen… en uit. Zo.', 'mindfulness'),
+  ],
+  earlyBird: [
+    f('Op met de zon! De ochtendstond heeft goud in de mond.', 'sunrise'),
+    f('Goedemorgen, vroege vogel! Zelfs de koffie is nog niet wakker.', 'early'),
+    f('Eerder op dan de haan? Respect.', 'early'),
+    f('Rustige ochtend, helder hoofd. Perfect om door te pakken.', 'sunrise'),
+    f('Vroeg begonnen! Vergeet niet om ook vroeg te stoppen.', 'early'),
+    f('Je was vandaag eerder dan de robot. Indrukwekkend.', 'celebrate'),
+    f('Goedemorgen! De inbox slaapt nog. Geniet van de rust.', 'sleepy'),
+    f('Kom op, de dag is van jou. Misschien met een tweede kop koffie.', 'coffee'),
+  ],
+  coffee: [
+    w('Tijd voor koffie? De robot raadt het aan.', 'coffee'),
+    w('Kopje thee? Je volgende idee zit er vast in.', 'coffee'),
+    w('Even bijtanken? Koffie, thee of een glas water, alles is goed.', 'water'),
+    w('Korte pauze, volle batterij. Haal iets warms.', 'coffee'),
+    w('Het koffieapparaat belde. Het mist je.', 'coffee'),
+    w('Vijf minuten weg van het scherm is geen verloren tijd.', 'stretch-legs'),
+    w('Tussendoortje? Fruit telt als power-up.', 'lunch'),
+    w('Pauze, slokje, glimlach. En weer verder.', 'coffee'),
+  ],
+  lunch: [
+    w('Lunchtijd! Met een volle maag denk je beter.', 'lunch'),
+    w('Je maag heeft een ticket aangemaakt. Prioriteit: hoog.', 'lunch'),
+    w('Tijd om iets lekkers te eten, weg van het toetsenbord.', 'lunch'),
+    w('Zelfs robots laden tussen de middag op. Jouw beurt!', 'lunch'),
+    w('Lunchpauze: nul vergaderingen, maximale smaak.', 'lunch'),
+    w('Even naar buiten, goed eten en met nieuwe energie terug.', 'wave'),
+    w('Weer een boterham achter je bureau? Gun jezelf een echte pauze.', 'lunch'),
+    w('Een goede lunch vandaag is een betere middag straks.', 'heart'),
+  ],
+  lateWork: [
+    w('Het wordt laat. Rond af wanneer je kunt en rust lekker uit.', 'moon'),
+    w('De sterren staan aan de hemel. Zullen we het voor vandaag laten?', 'late-working'),
+    w('Nachtuil-modus aan. Slaap is een feature, geen bug.', 'rest'),
+    w('Goed gewerkt vandaag. Jij van morgen is blij als je nu rust.', 'finished'),
+    w('Late dienst? Drink wat water en bewaar het lastige werk voor morgen.', 'water'),
+    w('De robot zit te gapen. Jij misschien ook?', 'sleepy'),
+    w('Wat overblijft, is er morgen ook nog. Beloofd.', 'late-working'),
+    w('Scherm wat dimmer, even rekken en zacht landen.', 'stretch'),
+  ],
+  friday: [
+    f('Vrijdagmiddag! De finish is in zicht.', 'flag'),
+    f('Bijna weekend. Nog één laatste sprintje!', 'holiday'),
+    f('Vrijdagmodus: opruimen, notities voor maandag, glimlachen.', 'music'),
+    f('Weekend wordt geladen… 90%.', 'friday'),
+    f('Mooie week! Laten we hem rustig landen.', 'finished'),
+    f('Vrijdagregel: geen grote releases, wel veel high fives.', 'thumbs'),
+    f('Bijna klaar. De robot heeft zijn zonnebril al op.', 'shades'),
+    f('Rond het netjes af en geniet van je weekend.', 'holiday'),
+  ],
+  weekend: [
+    f('Werken in het weekend? Hopelijk aan iets waar je blij van wordt.', 'weekend-start'),
+    f('Weekenddienst! De robot heeft snacks meegenomen.', 'lunch'),
+    f('Psst, het is weekend. Weet de agenda dat ook?', 'weekend-start'),
+    f('Weekend en de klok loopt? Gedurfd.', 'shades'),
+    f('Weekendheld, meldt zich voor dienst!', 'weekend-start'),
+    f('De robot is vandaag eigenlijk vrij, maar staat voor je klaar.', 'wave'),
+    f('Snel iets fixen in het weekend? Dan wel echt snel.', 'thumbs'),
+    f('Inklokken in het weekend? Kort en krachtig graag.', 'coffee'),
+  ],
+  weekendRest: [
+    w('Dat is al een flink stuk weekendwerk. De bank roept.', 'stretch-legs'),
+    w('De zon schijnt. Ga jij ook zo naar buiten?', 'shades'),
+    w('De rest van de dag heb je verdiend. Geniet ervan!', 'shades'),
+    w('Een beetje weekendwerk is prima. Veel weekendrust is beter.', 'rest'),
+    w('Opslaan, laptop dicht en iets leuks gaan doen.', 'shades'),
+    w('Park, bank of terras: de rest van het weekend is van jou.', 'stretch-legs'),
+    w('Het strand roept. Of het park. Of een dutje. Jij kiest.', 'shades'),
+    w('Goed gedaan vandaag. Nu opladen, weekendstijl.', 'shades'),
+  ],
+  milestone: [
+    f('{hours} uur echt werk. Dat verdient een medaille!', 'achievement'),
+    f('Mijlpaal bereikt: {hours} uur. Buiging!', 'achievement'),
+    f('{hours} uur en nog steeds scherp. Goudstandaard.', 'achievement'),
+    f('Wat een vooruitgang! {hours} uur goed besteed.', 'progress'),
+    f('Weer een groot stuk af. Overal vinkjes.', 'task-complete'),
+    f('Al {hours} uur. De robot haalt de pompons tevoorschijn!', 'cheer-up'),
+  ],
+  overtime: [
+    w('Al lang op de klok. Batterij bijna leeg: tijd voor een echte pauze.', 'overtime'),
+    w('Dat is een heel lange zit. Neem alsjeblieft een paar minuten afstand.', 'overtime'),
+    w('Zelfs robots laden op. Misschien is het jouw beurt?', 'rest'),
+    w('Lange dag! Rek je uit, drink water en kijk of je kunt afronden.', 'stretch'),
+    w('De zandloper zegt dat het al een tijd is. Een pauze doet wonderen.', 'overtime'),
+    w('Je hebt vandaag veel gegeven. Rust hoort bij het werk.', 'rest'),
+  ],
+  meetingIdle: [
+    f('Lange vergadering? Neem je tijd.', 'teamwork'),
+    f('Loopt de call nog? Ik houd de klok gezelschap.', 'teamwork'),
+    f('Duurt het overleg nog? Geen haast, ik check het even.', 'teamwork'),
+    f('Veel luisteren, weinig typen. Gaat alles goed daar?', 'teamwork'),
+    f('Loopt het gesprek nog, of is het al een tijdje klaar?', 'think'),
+    f('Nog bij je collega\'s? Twee keer knikken is ja.', 'teamwork'),
+  ],
+  meetingAfter: [
+    w('Lange vergadering klaar. Koffie en even rekken heb je verdiend.', 'coffee'),
+    w('Dat was een lange call. Sta op, rol je schouders, adem in.', 'stretch'),
+    w('Vergadermarathon voorbij! Eerst water, dan weer verder.', 'water'),
+    w('Na al dat praten: een slokje en een klein rondje lopen?', 'stretch-legs'),
+    w('Je stem heeft hard gewerkt. Geef hem wat te drinken.', 'water'),
+    w('Lange meeting, korte pauze. Vijf minuten weg van het scherm?', 'coffee'),
+  ],
+  dailyDone: [
+    f('Daily klaar, aan de slag!', 'thumbs'),
+    f('Daily gedaan. Nu gaan we het waarmaken.', 'keep-going'),
+    f('Stand-up voorbij, mouwen omhoog!', 'flag'),
+    f('Daily klaar. Het plan staat, nu het leuke deel.', 'task-complete'),
+    f('Dat was de daily! Daar ga je.', 'wave'),
+    f('Daily in recordtijd? De robot keurt het goed.', 'thumbs'),
+  ],
+};
+
+export const windows: Windows = {
+  earlyBefore: hm(7, 30),
+  earlyUntil: hm(11),
+  coffeeAm: [hm(10), hm(11)],
+  coffeePm: [hm(15), hm(16)],
+  lunch: [hm(12), hm(13)],
+  lateFrom: hm(20),
+  lateUntil: hm(5),
+  fridayFrom: hm(15),
+};
+
+/** Words in a task's name, labels or type that mark it as a meeting-like task (matched without accents). */
+export const keywords: Keywords = {
+  daily: ['daily', 'standup', 'stand-up'],
+  meeting: ['vergadering', 'overleg', 'meeting', 'call', 'gesprek', 'sync', '1:1'],
+  technical: ['sprint review', 'sprintreview', 'refinement', 'planning', 'retro', 'retrospective', 'demo', 'technisch'],
+  training: ['training', 'cursus', 'workshop', 'opleiding'],
+};
+
+/** Titles of the desktop notifications (short; the line is the body). */
+export const titles: Titles = {
+  cheer: 'Goed bezig',
+  milestone: 'Mijlpaal!',
+  overtime: 'Tijd voor pauze',
+  earlyBird: 'Vroege start',
+  coffee: 'Koffiepauze?',
+  lunch: 'Lunchtijd',
+  lateWork: 'Het wordt laat',
+  friday: 'Fijne vrijdag',
+  weekend: 'Weekendmodus',
+  weekendRest: 'Geniet van je weekend',
+  meetingAfter: 'Na de meeting',
+  dailyDone: 'Daily klaar',
+};
+
+/** Working-hours reminders (start, lunch, end of the day) and the day-off line. */
+export const reminders: ReminderCatalog = {
+  lines: {
+    start: [
+      f('Zullen we beginnen?', 'sunrise'),
+      f('Goedemorgen! Klaar wanneer jij het bent.', 'early'),
+      f('Tijd om te starten. Zal ik de klok aanzetten?', 'early'),
+      f('Je werkdag begint. Daar gaan we?', 'sunrise'),
+    ],
+    lunchStart: [
+      f('Lunchtijd. Zal ik de timer stoppen?', 'lunch'),
+      f('Je lunchpauze is er. Klok even stilzetten?', 'lunch'),
+      f('Eerst eten, dan weer verder. Timer stoppen?', 'lunch'),
+      f('Pauze! Zal ik niet meetellen terwijl je eet?', 'lunch'),
+    ],
+    lunchEnd: [
+      f('Verder met {task}?', 'lunch'),
+      f('Lunch voorbij. {task} hervatten?', 'keep-going'),
+      f('Weer opgeladen? Terug naar {task}?', 'keep-going'),
+      f('Pauze is om. Zal ik {task} weer starten?', 'lunch'),
+    ],
+    end: [
+      f('Zullen we er een punt achter zetten?', 'finished'),
+      f('Je werkdag zit erop. Timer stoppen?', 'finished'),
+      f('Tijd om naar huis te gaan! Klok stilzetten?', 'finished'),
+      f('Klaar voor vandaag. Afronden en de timer stoppen?', 'finished'),
+    ],
+    dayOff: [
+      f('Aan het werk tijdens je vakantie? Houd het kort!', 'shades'),
+      f('Was vandaag niet je vrije dag? Vergeet niet uit te rusten.', 'holiday'),
+      f('Vakantiemodus aan… en de timer ook. Iets snels?', 'shades'),
+      f('Op je vrije dag hier? Ik houd je even gezelschap.', 'holiday'),
+    ],
+  },
+  titles: { start: 'Begin van de dag', lunchStart: 'Lunchpauze', lunchEnd: 'Terug van de lunch', end: 'Einde van de dag', dayOff: 'Vrije dag' },
+  actions: { start: 'Starten', stop: 'Stoppen', resume: 'Hervatten' },
+  lastTask: 'Laatste taak: {task}.',
+  today: 'Vandaag: {total}.',
+};
+
+/** "Working without a timer?" (input for a while during working hours, no timer running). */
+export const nudge: NudgeCatalog = {
+  lines: [
+    f('Je bent al een tijdje bezig en er loopt geen timer. Zullen we het bijhouden?', 'think'),
+    f('Drukke handen, stille timer. Eentje starten?', 'peek'),
+    f('Het lijkt erop dat je werkt, maar de klok niet. Zal ik hem starten?', 'working'),
+    f('Hé, de timer staat uit. Verdergaan waar je gebleven was?', 'wave'),
+  ],
+  title: 'Werk je zonder timer?',
+  lastTask: 'Laatste taak: {task}.',
+  actions: { resume: '{task} starten', choose: 'Taak kiezen' },
+};
+
+/** Meeting detection: the question while a call goes on, and the one when it ends. */
+export const meetings: MeetingCatalog = {
+  titles: { ask: 'Vergadering?', ended: 'Vergadering voorbij' },
+  ask: 'Je lijkt in een vergadering te zitten ({app}). Welke vergadering is het?',
+  askSwitch: 'Je lijkt in een vergadering te zitten ({app}) en de klok loopt nog op {task}. Overschakelen naar de vergadering?',
+  ended: 'Vergadering voorbij ({minutes} min). Terug naar {task}?',
+  endedStop: 'Vergadering voorbij ({minutes} min). Klok stoppen?',
+  browser: 'gesprek in de browser',
+  actions: { choose: 'Taak kiezen', generic: 'Algemene vergadering', switch: 'Naar de vergadering', notMeeting: 'Geen vergadering', mute: 'Niet vragen bij deze app', back: 'Terug', stop: 'Stoppen' },
+};

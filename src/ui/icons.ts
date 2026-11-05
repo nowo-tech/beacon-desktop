@@ -27,6 +27,11 @@ const ICONS = {
   alert: [['circle', 12, 12, 9], ['path', 'M12 8v4'], ['path', 'M12 16h.01']],
   back: [['path', 'M5 12h14'], ['path', 'M5 12l6 6'], ['path', 'M5 12l6-6']],
   close: [['path', 'M18 6L6 18'], ['path', 'M6 6l12 12']],
+  list: [['path', 'M9 6h11'], ['path', 'M9 12h11'], ['path', 'M9 18h11'], ['path', 'M5 6v.01'], ['path', 'M5 12v.01'], ['path', 'M5 18v.01']],
+  /** "Full view": three columns. */
+  columns: [['rect', 3, 4, 18, 16], ['path', 'M9 4v16'], ['path', 'M15 4v16']],
+  /** "Compact view": one narrow column. */
+  compact: [['rect', 7, 3, 10, 18], ['path', 'M10 7h4']],
   help: [['circle', 12, 12, 9], ['path', 'M12 17v.01'], ['path', 'M12 13.5a1.5 1.5 0 0 1 1-1.5 2.6 2.6 0 1 0-3-4']],
 } satisfies Record<string, Shape[]>;
 

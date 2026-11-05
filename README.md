@@ -14,12 +14,31 @@ version and SHA-256 of each file. Version 0.1 is **not code-signed** yet, so the
 
 | OS | File | First start |
 |---|---|---|
-| Windows 10/11 | `*-setup.exe` (or `.msi`) | SmartScreen "Windows protected your PC" → **More info** → **Run anyway**. |
+| Windows 10/11 | `*-setup.exe` (per user, no administrator rights; 0.1.0 also had an `.msi`) | SmartScreen "Windows protected your PC" → **More info** → **Run anyway**. |
 | macOS 12+ (Intel and Apple silicon) | `.dmg` | Drag TimeTrack to Applications. First start: right-click (Control-click) the app → **Open** → **Open**. If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/TimeTrack.app` once. On macOS 15+: System Settings → Privacy & Security → **Open Anyway**. |
 | Linux (x86_64) | `.deb` or `.AppImage` | `sudo apt install ./TimeTrack_*.deb`, or `chmod +x TimeTrack_*.AppImage` and run it. The token is kept in the Secret Service (GNOME Keyring / KWallet). |
 
 Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile <file> SHA256`, `shasum -a 256 <file>`,
 `sha256sum <file>`).
+
+### Upgrading on Windows
+
+From 0.4.0 on, the app updates itself (signed, in place, no questions: *Update now* closes the app, installs and
+starts it again). Running a newer `*-setup.exe` by hand also upgrades in place: it closes TimeTrack, tray included
+(it asks first), keeps your sign-in and settings, and leaves a single *TimeTrack* entry in Settings → Apps. If the
+installer offers *Uninstall before installing*, either choice works; the second one is quicker.
+
+Coming from **0.1.0**:
+
+- **Installed with `*-setup.exe`**: run the 0.5.0+ `*-setup.exe` (or let 0.4.0+ update itself). The 0.4.0 installer's
+  *Uninstall before installing* fails on this install with "Unable to uninstall!": click OK, choose **Do not
+  uninstall**, then **Next**; the upgrade is complete and correct.
+- **Installed with the `.msi`** (for all users, in `C:\Program Files\TimeTrack`): the 0.5.0+ installer finds it and
+  offers to remove it (Windows asks for administrator approval). If you decline, or that fails, or you installed
+  0.4.0: open **Settings → Apps → Installed apps**, find the **TimeTrack** whose publisher is **nowo** (version
+  0.1.0) and choose **Uninstall** (needs an administrator account), then start the remaining TimeTrack. Keep the
+  one from publisher **nowo.tech**. Your sign-in is shared, so nothing else to do; if *Start at login* was on, switch
+  it off and on again in Settings.
 
 ### Sign in
 
@@ -30,19 +49,31 @@ Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile 
 
 ## Features
 
-- Tray timer (`H:MM` and task, tooltip with today's total) with a translated menu: Stop / Resume, Switch to (pinned and
-  recent tasks), Search task…, Open Beacon, My time. Global shortcut **Ctrl/Cmd + Alt + Shift + T**, configurable in
+- Tray timer (`H:MM` and task, tooltip with today's total, running / stopped icon) in the Windows notification area
+  (bottom right, like Docker Desktop), the macOS menu bar and the Linux StatusNotifier / AppIndicator, with a translated
+  menu: the running task and its time (refreshed every 30 s), Stop / Resume, Switch to (pinned and recent tasks),
+  Search task…, Open TimeTrack, Full view / Compact view, Open Beacon, My time, *Pause friendly messages for 1 h*, Settings, Quit. A left click
+  shows or hides the window (Windows, macOS; Linux AppIndicators only open the menu). Closing or minimising the
+  window keeps the app running in the tray: the timer, the "Still there?" check and the friendly messages carry on,
+  woken on time by a wall-clock heartbeat in Rust (`src-tauri/src/heartbeat.rs`), not by the webview's timers, which
+  a hidden window may throttle. Global shortcut **Ctrl/Cmd + Alt + Shift + T**, configurable in
   Settings.
 - Pinned and recent tasks (`Alt+1…9`), Resume the last task, Today / This week totals, search with `Ctrl/Cmd + K`, arrow
   keys and Enter.
+- Two views: the **compact view** (the quick tracker, one centred column up to 900 px wide) and the **full view** (from
+  900 px: sections sidebar, task list with the running timer on top, detail pane with the selected task's time today
+  and this week and the week by day; Settings as a page). Switch with the header button, the tray menu or
+  `Ctrl/Cmd + Shift + L`; each view reopens at its own remembered size and position, on screen. `F6` moves between
+  the panes. The window cannot be made smaller than the compact view (380 × 560).
 - Device-flow sign-in (no password typed in the app); `401` asks you to sign in again.
 - Task search, start / stop / switch. Offline queue: actions taken offline (and "Still there?" answers) are kept on this
   computer, survive a restart and are replayed in order with their real times (`startedAt` / `endedAt`, TimeTrackBundle
   1.10). When the server moves a time (overlap with the previous entry, backdating limit, clock in the future), the app
   says so in plain words. A 1.9 server records an offline start when the connection returns, and the app says that too.
 - **"Still there?"** (Beacon spec 199 block 0): while a timer runs, after N minutes without keyboard or mouse input the
-  app asks, calmly and without blocking: *Yes, I'm here* · *I was in a meeting or call* (optional note, or count the time
-  on another task on 1.10 servers) · *Discard those minutes* · *Pause the timer*. With no answer within M minutes the timer
+  app asks, calmly and without blocking: *Keep* · *Discard* (stop the timer at the idle start) · *Reassign to another
+  task…*, then *I was in a meeting or call* (optional note, or count the time on another task on 1.10 servers) and
+  *Drop those minutes and keep going*. With no answer within M minutes the timer
   stops at the last input; on return the app asks what to do with the gap, then offers *Resume*. Screen lock and sleep
   count as idle. N and M come from the organisation (`GET me` → `features.idle_check`, `limits.idle_check`; on by
   default there, and the person may only make N longer). On a 1.9 server it is the person's opt-in (default 10 / 5 min).
@@ -78,6 +109,132 @@ task list; which pose goes where, and where the art comes from: [public/mascot/R
 
 <img src="docs/images/desktop-saved-light.png" alt="Saved notice with the mascot after stopping a timer, light theme" width="200"> <img src="docs/images/desktop-no-results-dark.png" alt="No search results with the reading robot, dark theme" width="200"> <img src="docs/images/desktop-offline-light.png" alt="Working offline card, light theme" width="200">
 
+### Friendly messages
+
+A smile now and then, never in the way. While a timer runs, small desktop notifications (outside the app, even with
+the window in the tray; a toast inside the window when the OS does not show them) cheer you on after 2, 4, 6… hours (a medal at 2 h and 4 h, a gentle "take a real break" from 6 h, with no figure in
+it), greet an early
+start, suggest a coffee, lunch, a stretch or some water, say it is getting late, and have something to say on Friday
+afternoon and at the weekend. They know about meetings: during a daily, a call or a planning (from Beacon's labels or
+the task name) "Still there?" becomes "Still in the meeting?" with a longer countdown, a long meeting is followed by a
+coffee / stretch toast, and a finished daily gets a "let's go!". At most one toast every 50 minutes, each moment at
+most once a day, never a repeated line among the last six. Written natively in English, Spanish, German, French,
+Italian, Dutch and Portuguese (the Beacon user's language when the server sends `me.locale`, else the app's), with
+local times per language. Settings → **Friendly messages**: *Fun messages* and *Wellbeing reminders*, both on by
+default. Pools: `src/lib/messages/`; rules: `src/lib/friendly.ts`.
+
+### Working-hours reminders
+
+Settings → **My schedule** holds your week: start, end and lunch break per weekday, or a day off. It is filled in from
+the working hours your organisation publishes in Beacon (`GET me.workingHours`; the gap between two slots of a day is
+the lunch break) and you can change any value on this computer only; local values are marked *This computer*, and
+*Reset to Beacon's schedule* goes back. Holidays and vacations come from Beacon (`GET me.daysOff`, once
+TimeTrackBundle publishes them) and from days off you add there.
+
+With *Working-hours reminders* on (default), a desktop notification with a button arrives at your start time ("Shall we
+start? Last task: …" → *Start* resumes it), at lunch ("Lunch time. Shall I stop the timer?" → *Stop*; then "Back to
+…?" → *Resume*) and at the end of the day ("Shall we call it a day?" with today's total → *Stop*). None on days off,
+none that make no sense (no "start" with a timer running, no "stop" without one), each once a day, in the schedule's
+time zone, and after a sleep only within 15 minutes of its time. They follow the 1 h pause but not the 50-minute
+gap of the friendly messages. Rules: `src/lib/schedule.ts`; texts: `reminders` in `src/lib/messages/`.
+
+"Still there?" itself opens in **its own small window, always on top and centred on the monitor you are using**, also
+while the main window is in the tray (`src-tauri/src/prompt.rs`, `src/ui/prompt.ts`), with a countdown (2 minutes, 10
+during meetings): with no answer the timer stops at the start of the idle time, and the window offers **Resume …
+now** on the same task. There is only ever one; it closes once answered, Esc does not dismiss it, and on Windows it
+flashes in the taskbar when focus-stealing prevention keeps it from taking the focus. A small *Open TimeTrack* link in
+it brings the main window forward. It shows the running task's title above every other window, so it is also visible
+to anyone watching a shared screen. Where it cannot open (a plain browser), it is a modal inside the main window.
+
+#### Desktop notifications
+
+| | Where | Picture | Click |
+|---|---|---|---|
+| Windows 10 / 11 | Bottom right, then the Action Center, under the app's AppUserModelID (`tech.nowo.timetrack` for the NSIS install, `<package family>!TimeTrack` for the Microsoft Store / MSIX package) | The pose as the square app logo of the toast | Brings TimeTrack forward (while the toast is on screen) |
+| macOS | Notification Center (top right) | The pose as the content image, the app icon as the sender | Brings TimeTrack forward |
+| Linux | The desktop's notification service (GNOME, KDE, …) | The pose through the `image-path` hint | Brings TimeTrack forward (servers that support the `default` action) |
+
+The first time one is due, the app asks the OS for permission (macOS asks you; the others allow it) and explains once,
+inside the window, where the messages went (*Keep them inside the app* is one click away). A refusal or a missing
+notification service is remembered: the messages stay in the window and Settings → Friendly messages says why, with
+*Try again*. The pictures are 96 × 96 PNGs built from the poses (`scripts/mascot/notification-art.sh` →
+`src-tauri/notification-art/`, listed in `src-tauri/src/pose_art.rs`), compiled into the binary and written to the app
+cache on first use. `pnpm screenshots:native` (`NATIVE_SCREENS=<dir>`) renders mock-ups of the three notifications,
+the prompt window and the Windows tray menu for review.
+
+Each line has its own mascot pose (`POSE_IDS`). New art goes in as transparent PNGs (or on white) named
+`pose-<id>.png`:
+
+```bash
+scripts/mascot/import-poses.sh <dir>   # → public/mascot/pose-<id>.webp + @2x (96 / 192 px high), src/ui/pose-art.json
+pnpm screenshots:friendly              # every situation in Spanish, light and dark (FRIENDLY_SCREENS=<dir>)
+```
+
+The script makes a white background transparent, drops stray fragments at the edges, trims and converts with cwebp and
+ImageMagick (in a throwaway Docker container when they are not installed). A pose without art shows its fallback
+(`POSE_FALLBACK` in `src/ui/mascot.ts`); no code change is needed.
+
+### Open Beacon in, Copy link
+
+Settings → **Open Beacon in**: *System default browser* (default), a browser found on this computer (Windows registry,
+macOS LaunchServices, Linux `.desktop` files incl. Flatpak / Snap) or *Custom…*. Every link the app opens uses it, also
+links a page would open by itself. If the chosen browser is uninstalled, links open in the system default and the app
+says so. Next to My time, a running task's link and *Open the page again* there is a **Copy link** button, and a right
+click (long press) on any Beacon link offers *Open in the browser* / *Copy link*; if no browser can be opened the link
+is copied instead. When the list is empty the mascot says what to do next: *Pin a task*, *Start a timer* or *Open the
+tasks in Beacon*.
+
+### Continue, three answers on return, lock pause and "working without a timer?"
+
+- **Continue last**: one click on the stopped timer card, or the global shortcut **Ctrl/Cmd + Alt + T**
+  (**Ctrl + Alt + Shift + R** on Linux, where Ctrl+Alt+T opens a terminal; configurable in Settings, works with the
+  window hidden in the tray), starts the last task again as a new entry. The
+  tray shows the running time on its own (macOS menu-bar title, tooltip on every system), refreshed every minute by the
+  Rust heartbeat (`src-tauri/src/tray_clock.rs`).
+- **Three answers on return from idle** (the "Still there?" prompt, its own window or the in-app modal): **Keep** ·
+  **Discard** (the timer stops at the start of the idle time) · **Reassign**, which opens a task picker (pinned,
+  recent, search, and a quick *Meeting* choice when a meeting-type task exists) and splits the idle span into its own
+  entry on that task while the timer goes on (`discard-idle` `reassign` on 1.10 servers, backdated stop / start
+  otherwise; not offered on 1.9). The countdown, the automatic stop and *Resume* are unchanged.
+- **Pause on screen lock or sleep** (on by default): the OS lock / sleep events (`src-tauri/src/session.rs`: Windows
+  WTS session notifications and power broadcasts, macOS distributed notifications, Linux logind) make that time idle;
+  on unlock / wake the same three answers.
+- **"Working without a timer?"** (on by default): during your working hours, after N minutes of input (10 by default)
+  with no timer, a friendly notification with *Start <last task>* and *Choose task*, at most once every 45 minutes,
+  in the seven message languages.
+
+### Meeting detection (opt-in)
+
+Settings → **Meetings** → *Notice when I'm in a call and ask what to record it as* (off by default, dated consent).
+When Teams, Zoom, Webex, Slack, Discord, Skype, GoTo, Jitsi Meet or a browser (Google Meet, Jitsi or any web call) has
+held the microphone for 2 minutes (1, 2, 5 or 10, configurable), the app asks, as a desktop notification with the
+teamwork pose and in the window: "Looks like you're in a meeting (Teams). Which meeting is it?" — *Choose task*
+(meeting-like tasks first, then pinned and recent, or a search), *Generic meeting* (your generic meeting task, chosen
+once and changeable in Settings), *Not a meeting* or *Don't ask for this app*. With a non-meeting timer running it
+offers *Switch to the meeting* instead; with a meeting-like task already running (`taskKind`) it does not ask. When
+the microphone has been free for a minute: "Meeting over (32 min). Back to <previous task>?" with *Back* and *Stop*.
+During the call the "Still there?" prompt uses its softer meeting wording and longer countdown. Questions follow the
+1 h pause ("do not disturb"), wait while "Still there?" is open, come at most every 10 minutes, and, with no timer
+running, only within your working day (Settings → My schedule, days off).
+
+What is read, per OS (`src-tauri/src/meeting/`, every 20 s from the heartbeat, only while the switch is on):
+
+| OS | Microphone in use | Which app |
+|---|---|---|
+| Windows 10 / 11 | `HKCU\…\CapabilityAccessManager\ConsentStore\microphone`: an app with `LastUsedTimeStop = 0` | Its package family name (`MSTeams_8wekyb3d8bbwe`) or executable path (`NonPackaged`) |
+| macOS 14+ | CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere` on the default input | The audio process objects (`kAudioHardwarePropertyProcessObjectList`) with *running input*, by bundle id |
+| macOS 13 and older | The same | Known meeting apps among the running processes (a guess, `source: fallback`) |
+| Linux | `pactl list source-outputs` (PulseAudio, PipeWire-Pulse), not corked; `pw-dump` without `pactl` | `application.process.binary` |
+
+The identity is reduced at once to a fixed app id (`teams`, `zoom`, …, `browser`) or dropped: paths and unknown apps
+never reach the UI. No window titles, URLs, chats or audio are read; nothing about it is stored beyond the call's
+state (app id, start, end, the answer) in local storage, and nothing is sent (only the timer you choose). Settings
+shows what the last check found. `pnpm screenshots:meetings` (`MEETING_SCREENS=<dir>`) renders the questions and the
+settings in Spanish, light and dark.
+
+Everything stays on this computer except the entries you confirm — see [PRIVACY.md](PRIVACY.md). What comes next, and
+what TimeTrack deliberately will not do: [docs/ROADMAP.md](docs/ROADMAP.md).
+
 ### Updates
 
 <img src="docs/images/desktop-update-card-light.png" alt="Update card with What's new, light theme" width="200"> <img src="docs/images/desktop-update-card-dark.png" alt="Update card with What's new, dark theme" width="200"> <img src="docs/images/desktop-update-progress-light.png" alt="Update download progress" width="200">
@@ -88,6 +245,39 @@ Microsoft Store build (`TIMETRACK_CHANNEL=store`): the Store updates the app, so
 required" screen send you to the Store listing instead.
 
 <img src="docs/images/desktop-store-about.png" alt="Settings, About: Updates come from the Microsoft Store" width="200"> <img src="docs/images/desktop-store-update-required.png" alt="Update required in the Store build: Open Microsoft Store" width="200">
+
+## Tauri capabilities
+
+- **Every app command is ACL-scoped.** `src-tauri/build.rs` declares them in the app manifest
+  (`tauri_build::AppManifest::commands`, list in `src-tauri/app-commands.rs`), so Tauri only lets a window call the
+  commands its capability grants (`allow-<command>`); without a manifest any local window could call any command.
+  A Rust test checks the list against `generate_handler!` and that each command is granted to exactly one window.
+- `src-tauri/capabilities/default.json`, window `main`: core defaults, HTTP to your server, `clipboard-manager:allow-write-text` (*Copy link*), `notification:default`, autostart enable / disable / is-enabled, process restart, set theme, and the app commands
+  `secret_get` / `secret_set` / `secret_delete`, `idle_seconds`, `set_tray_status`, `set_tray_menu`,
+  `set_global_shortcut`, `check_update`, `install_update`, `set_wake_plan`, `notify_friendly`, `prompt_open`,
+  `prompt_focus`, `prompt_close`, `open_external`, `list_browsers`, `get_browser`, `set_browser`, `pick_browser` (every
+  link, in the system default or the chosen browser, launched with an argv array from Rust; no opener permission for
+  the webview). The browser choice is kept by Rust (`browser.json`): `open_external` takes only the URL, `set_browser`
+  only the default or a detected browser's id, and a custom browser comes only from the native file dialog Rust opens
+  itself (`pick_browser`, so no `dialog:allow-open` for the webview); shells, interpreters and launchers are refused. The desktop notifications of the friendly messages go through the app's own
+  `notify_friendly` command (Rust, `notify-rust` / `tauri-winrt-notification`), not a new plugin permission.
+  The working-hours reminders add no command: their *Start* / *Stop* / *Resume* button travels in `notify_friendly`
+  (ids allow-listed in Rust, `notify::ACTION_IDS`) and a press comes back as a `notification-action` event emitted
+  to the `main` window only; the next reminder instant rides on `set_wake_plan` (`reminderAt`).
+  Meeting detection adds no command and no permission either: the UI turns it on with `set_wake_plan`
+  (`micEverySeconds`), the heartbeat sends `mic` events (known app ids only) to the `main` window, and its
+  notification buttons (`meeting-generic`, `meeting-switch`, `meeting-back`, `meeting-stop`) join `notify::ACTION_IDS`.
+- `src-tauri/capabilities/prompt.json`, window `prompt` (the "Still there?" window): `core:event:allow-listen` /
+  `allow-unlisten` (its content) and `prompt_view`, `prompt_answer`, `prompt_show_main` ("Open TimeTrack"). No
+  keychain, updater, tray, network, opener, notification, window or autostart permission.
+- Defence in depth: every command also checks the calling window's label (`main` for the keychain, updater, tray,
+  shortcut, heartbeat, notifications and opening / focusing / closing the prompt; `prompt` for reading its view,
+  answering and "Open TimeTrack"). Answers are allow-listed (`{ action, note?, taskId? }`), pose ids are looked up in
+  the compiled-in list (never a path from the webview) and notification texts are capped. On Linux, notification
+  bodies are escaped to plain text (`<`, `>`, `&`), since servers with `body-markup` would render markup from a task
+  title.
+- `tauri.conf.json`: the main window has `backgroundThrottling: "disabled"` (macOS 14+, where WebKit supports it); the
+  heartbeat keeps the checks on time on every OS anyway.
 
 ## Development
 
@@ -135,6 +325,6 @@ ayatana-appindicator, librsvg, xdo, patchelf), rustup and the AWS CLI; Windows h
 WebView2, rustup, Git for Windows (`bash`) and PowerShell 7. The workflow only runs on `v*.*.*` tags, never on pull
 requests.
 
-Docs: [CHANGELOG](CHANGELOG.md) · [PRIVACY](PRIVACY.md) · [SECURITY](SECURITY.md) · [CONTRIBUTING](CONTRIBUTING.md)
+Docs: [CHANGELOG](CHANGELOG.md) · [PRIVACY](PRIVACY.md) · [ROADMAP](docs/ROADMAP.md) · [SECURITY](SECURITY.md) · [CONTRIBUTING](CONTRIBUTING.md)
 
 License: [MIT](LICENSE).
