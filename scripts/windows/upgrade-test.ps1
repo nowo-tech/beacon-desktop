@@ -125,8 +125,9 @@ function Invoke-Installer([string] $File, [string] $Arguments, [string] $Label, 
   if ($Arguments) { $start.ArgumentList = $Arguments }
   $p = Start-Process @start
   $handle = $p.Handle # keeps ExitCode readable after the process ends
-  if ($Interactive) { Invoke-UiDriver -Process $p }
-  if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
+  $wait = $TimeoutSeconds
+  if ($Interactive) { Invoke-UiDriver -Process $p; $wait = 15 }
+  if (-not $p.WaitForExit($wait * 1000)) {
     Fail "$Label did not finish within $TimeoutSeconds s (open dialog?): killing it"
     Dump-Windows
     & taskkill.exe /F /T /PID $p.Id | Out-Null
@@ -151,14 +152,36 @@ function Start-App([string] $Exe) {
 
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+# UI Automation's Invoke() on a Win32 button is a SendMessage: it blocks while the click handler runs, and NSIS's
+# handlers run the old uninstaller (ExecWait) or open message boxes, which then nobody could answer. Buttons are
+# clicked with a posted WM_COMMAND (BN_CLICKED) to their parent instead; radio buttons with BM_CLICK (no modal).
+Add-Type -Namespace TT -Name Win32 -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+[DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+[DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern int GetDlgCtrlID(IntPtr hWnd);
+'@
+
+function Click-Button($Element) {
+  $hwnd = [IntPtr] $Element.Current.NativeWindowHandle
+  $parent = [TT.Win32]::GetParent($hwnd)
+  $id = [TT.Win32]::GetDlgCtrlID($hwnd)
+  [TT.Win32]::PostMessage($parent, 0x0111, [IntPtr] ($id -band 0xFFFF), $hwnd) | Out-Null # WM_COMMAND, BN_CLICKED = 0
+}
+
+function Click-Radio($Element) {
+  [TT.Win32]::SendMessage([IntPtr] $Element.Current.NativeWindowHandle, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null # BM_CLICK
+}
 $UIA = [System.Windows.Automation.AutomationElement]
 $TreeScope = [System.Windows.Automation.TreeScope]
 $AnyCond = [System.Windows.Automation.Condition]::TrueCondition
 $DialogClasses = @('#32770', 'MsiDialogCloseClass', 'MsiDialogNoCloseClass')
 
+# Dialogs of the installers only (the runner image can show others, e.g. a paging-file notice).
 function Get-DialogWindows {
   $UIA::RootElement.FindAll($TreeScope::Children, $AnyCond) | Where-Object {
-    $DialogClasses -contains $_.Current.ClassName
+    $proc = (Get-Process -Id $_.Current.ProcessId -ErrorAction SilentlyContinue).ProcessName
+    ($DialogClasses -contains $_.Current.ClassName) -and ($proc -match '(?i)setup|uninstall|^un_|^au_|msiexec|timetrack|time-track')
   }
 }
 
@@ -176,9 +199,10 @@ function Dump-Windows {
   }
 }
 
-function Find-Control($Window, [string] $Type, [string] $Pattern) {
+# By name: UI Automation reports the controls of the 32-bit NSIS windows as "Pane", not Button / RadioButton.
+function Find-Control($Window, [string] $Pattern) {
   $Window.FindAll($TreeScope::Descendants, $AnyCond) | Where-Object {
-    $_.Current.ControlType.ProgrammaticName -eq "ControlType.$Type" -and $_.Current.IsEnabled -and $_.Current.Name -match $Pattern
+    $_.Current.NativeWindowHandle -ne 0 -and $_.Current.IsEnabled -and $_.Current.Name -match $Pattern
   } | Select-Object -First 1
 }
 
@@ -186,10 +210,11 @@ function Invoke-UiDriver($Process) {
   # A user who accepts every default. After "Unable to uninstall!" the driver picks the second option of the reinstall
   # page (the workaround a user would try), and gives up (Cancel) when the same error comes back a third time.
   $seen = @{}
+  $script:RadioClicked = @{}
   $unableCount = 0
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   while (-not $Process.HasExited -and (Get-Date) -lt $deadline) {
-    Start-Sleep -Milliseconds 1500
+    Start-Sleep -Milliseconds 2000
     foreach ($w in (Get-DialogWindows)) {
       try {
         $texts = @(Get-Texts $w)
@@ -207,21 +232,25 @@ function Invoke-UiDriver($Process) {
           Log "seen 'Unable to uninstall!' ($unableCount)"
         }
         if ($unableCount -ge 3) {
-          $cancel = Find-Control $w 'Button' '^Cancel$'
-          if ($cancel) { Log 'click: Cancel (giving up)'; $cancel.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); continue }
+          $cancel = Find-Control $w '^Cancel$'
+          if ($cancel) { Log 'click: Cancel (giving up)'; Click-Button $cancel; continue }
         }
         if ($unableCount -ge 1) {
-          $radio = Find-Control $w 'RadioButton' "^(Do not uninstall|Don't uninstall)"
+          $radio = Find-Control $w "^(Do not uninstall|Don't uninstall)"
           if ($radio) {
-            $sel = $radio.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-            if (-not $sel.Current.IsSelected) { Log "select: $($radio.Current.Name)"; $sel.Select() }
+            if (-not $script:RadioClicked.ContainsKey($signature)) {
+              $script:RadioClicked[$signature] = $true
+              Log "select: $($radio.Current.Name)"
+              Click-Radio $radio
+              Start-Sleep -Milliseconds 500
+            }
           }
         }
         foreach ($pattern in '^Yes$', '^OK$', '^Next >$', '^Install$', '^Uninstall$', '^Finish$', '^Close$') {
-          $button = Find-Control $w 'Button' $pattern
+          $button = Find-Control $w $pattern
           if ($button) {
             Log "click: $($button.Current.Name) in '$($w.Current.Name)'"
-            $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+            Click-Button $button
             break
           }
         }
