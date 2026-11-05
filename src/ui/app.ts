@@ -43,6 +43,9 @@ import {
   toggleLocalDayOff,
 } from '../lib/schedule';
 import { withinWorkingHours } from '../lib/workingHours';
+import { askNote, callMinutes, endedNote, finishMeeting, ignoreCall, inCall, MEETING_ACTION_IDS, meetingActionOfId, meetingCandidates, type MeetingNote, type MicSignal, MIC_POLL_SECONDS, NO_MEETING, observeMic, parseMicSignal, searchTasks, type TaskRef, tracking, withinWorkingDay } from '../lib/meetings';
+import type { MeetingAction } from '../lib/messages/types';
+import { type PickerMode, renderMeetingSettings, renderMeetingToast } from './meetings';
 import type { FriendlyNotification, Platform, TrayMenu, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
@@ -213,6 +216,11 @@ export class DesktopApp {
   private openDays = new Set<Weekday>();
   /** "Add a day off" date typed in Settings. */
   private dayOffDraft = '';
+  /** Last microphone report of the host (meeting detection; memory only, shown in Settings). */
+  micSignal: MicSignal | null = null;
+  /** "Choose task" of the meeting question is open (for the meeting, or to set the generic meeting once). */
+  meetingPicker: PickerMode | null = null;
+  meetingQuery = '';
   /** "Daily done" toast after a daily-type timer stops. */
   dailyToast: { text: string; pose: PoseId; locale: string } | null = null;
   private dailyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -270,8 +278,10 @@ export class DesktopApp {
     this.platform.onTray((action) => void this.trayAction(action));
     // The regular check, woken by the host (on time while the window is hidden).
     this.platform.onWake(() => void this.tick());
-    // A button of a working-hours reminder notification (Start / Stop / Resume).
-    this.platform.onNotificationAction((id) => void this.reminderAction(actionOfId(id)));
+    // A button of a working-hours reminder notification (Start / Stop / Resume) or of a meeting question.
+    this.platform.onNotificationAction((id) => void (meetingActionOfId(id) !== null ? this.meetingAction(meetingActionOfId(id)) : this.reminderAction(actionOfId(id))));
+    // Meeting detection: what holds the microphone (only while it is on, see `wakePlan`).
+    this.platform.onMic((signal) => this.onMic(signal));
     this.platform.onShortcut(() => this.focusSearch());
     await this.applyShortcut(this.state.settings.shortcut, false);
     this.token = await this.platform.secretGet();
@@ -428,8 +438,9 @@ export class DesktopApp {
     this.token = null;
     // The friendly-message history goes too (its slots name the entries, `<task id>@<start>`), and the schedule
     // (overrides, days off, Beacon's copy) belongs to the person who signs out.
-    this.persist({ session: null, activeTimer: null, idleCheck: WATCHING, pendingNote: null, messages: { ...EMPTY_MESSAGES }, schedule: { ...EMPTY_SCHEDULE } });
+    this.persist({ session: null, activeTimer: null, idleCheck: WATCHING, pendingNote: null, messages: { ...EMPTY_MESSAGES }, schedule: { ...EMPTY_SCHEDULE }, meeting: { ...NO_MEETING } });
     this.reminderToast = null;
+    this.meetingPicker = null;
     this.queue.clear();
     this.dailyToast = null;
     this.nativeNotice = null;
@@ -627,8 +638,9 @@ export class DesktopApp {
     return taskKind({ ...(this.findTask(timer.taskId) ?? {}), taskTitle: timer.taskTitle }, this.messageLocale());
   }
 
-  /** Whether a meeting-like task is running (softer "Still in the meeting?", longer countdown). */
+  /** Whether a meeting-like task is running, or a call goes on (softer "Still in the meeting?", longer countdown). */
   inMeeting(): boolean {
+    if (this.meetingOn() && inCall(this.state.meeting)) return true;
     const timer = this.state.activeTimer;
     const state = this.state.idleCheck;
     if (timer !== null) return this.timerKind(timer) !== null;
@@ -902,6 +914,136 @@ export class DesktopApp {
     } else {
       await this.resume();
     }
+    this.render();
+  }
+
+  // ---- Meeting detection (opt-in, local only) ---------------------------------------------------------------------
+
+  /** Signed in and the person turned meeting detection on (dated consent). */
+  meetingOn(): boolean {
+    return this.state.session !== null && hasConsent(this.state, 'meetingDetection');
+  }
+
+  /**
+   * No meeting question now: friendly messages paused (the app's "do not disturb"), the "Still there?" question open,
+   * or no timer running outside the working day (Settings → My schedule, days off). A running timer means work.
+   */
+  private meetingQuiet(): boolean {
+    const now = this.now();
+    if (this.view === 'update-required' || pausedAt(this.state.messages, now) || this.state.idleCheck.phase !== 'watching') return true;
+    if (this.state.activeTimer !== null) return false;
+    const view = this.scheduleView();
+    const today = zonedParts(now, view.timeZone);
+    return !withinWorkingDay(view.merged.week[today.day as Weekday], today.minute, dayOffOn(today.date, view.daysOff) !== null);
+  }
+
+  /** A `mic` report of the host: moves the call along and shows (or takes away) the question. */
+  onMic(raw: unknown): void {
+    const signal = parseMicSignal(raw);
+    if (signal === null || !this.meetingOn()) return;
+    this.micSignal = signal;
+    const timer = this.state.activeTimer;
+    const running = timer === null ? null : { id: timer.taskId, title: timer.taskTitle, meeting: this.timerKind(timer) !== null };
+    const settings = this.state.settings;
+    const step = observeMic(this.state.meeting, signal, { minMinutes: settings.meetingMinMinutes, muted: settings.meetingMuted, running, quiet: this.meetingQuiet() });
+    if (step.state !== this.state.meeting) this.persist({ meeting: step.state });
+    if (step.effect === 'clear') this.meetingPicker = null;
+    if (step.effect === 'ask' || step.effect === 'ended') this.deliverMeeting();
+    this.render();
+  }
+
+  /** The open meeting question ("Which meeting is it?" or "Meeting over. Back to …?"), or null. */
+  meetingNote(): MeetingNote | null {
+    const state = this.state.meeting;
+    if (!this.meetingOn()) return null;
+    const locale = this.messageLocale();
+    if (state.phase === 'asking' && state.app !== null) {
+      const timer = this.state.activeTimer;
+      const running = timer !== null && this.timerKind(timer) === null ? { id: timer.taskId, title: timer.taskTitle } : null;
+      return askNote(locale, state.app, running, this.state.settings.meetingGeneric);
+    }
+    return state.phase === 'ended' ? endedNote(locale, callMinutes(state), state.previous) : null;
+  }
+
+  /**
+   * The question goes to the window (a toast with every answer) and, when the OS shows them, as a desktop notification
+   * with the pose and one button (a click on it opens the window). It sets the friendly messages' gap, like a reminder.
+   */
+  private deliverMeeting(): void {
+    const note = this.meetingNote();
+    if (note === null) return;
+    this.persist({ messages: { ...this.state.messages, lastShownAt: this.now().toISOString() } });
+    this.announce(note.text);
+    if (!this.nativeUsable()) return;
+    const id = note.native !== null ? MEETING_ACTION_IDS[note.native] : undefined;
+    void this.sendNativeNote({ title: note.title, body: note.text, pose: note.pose, action: note.native !== null && id !== undefined ? { id, label: note.labels[note.native] } : null });
+  }
+
+  /** An answer to the meeting question (window or notification button). Answers that no longer apply are ignored. */
+  async meetingAction(action: MeetingAction | null): Promise<void> {
+    const note = this.meetingNote();
+    if (action === null || note === null || !note.actions.includes(action)) return;
+    const state = this.state.meeting;
+    const generic = this.state.settings.meetingGeneric;
+    if (action === 'choose' || ((action === 'generic' || action === 'switch') && generic === null)) {
+      this.meetingPicker = action === 'choose' ? 'task' : 'generic';
+      this.meetingQuery = '';
+    } else if (action === 'generic' || action === 'switch') {
+      await this.startMeeting(generic as TaskRef);
+    } else if (action === 'notMeeting' || action === 'mute') {
+      if (action === 'mute' && state.app !== null) this.persist({ settings: { ...this.state.settings, meetingMuted: [...new Set([...this.state.settings.meetingMuted, state.app])] } });
+      this.persist({ meeting: ignoreCall(state) });
+      this.meetingPicker = null;
+    } else {
+      this.persist({ meeting: finishMeeting(state) });
+      if (action === 'back' && state.previous !== null) await this.start(this.findTask(state.previous.id) ?? state.previous);
+      else if (action === 'stop' && this.state.activeTimer !== null) await this.stop();
+    }
+    this.render();
+  }
+
+  /** × on the question: no more questions for this call (or the end question is closed). */
+  dismissMeeting(): void {
+    const state = this.state.meeting;
+    this.persist({ meeting: state.phase === 'ended' ? finishMeeting(state) : ignoreCall(state) });
+    this.meetingPicker = null;
+    this.render();
+  }
+
+  /** Starts the meeting's task, switching from the running one (remembered for "Back to …"). */
+  async startMeeting(task: TaskRef, asGeneric = false): Promise<void> {
+    const timer = this.state.activeTimer;
+    const previous = timer !== null && this.timerKind(timer) === null ? { id: timer.taskId, title: timer.taskTitle } : null;
+    const ref = { id: task.id, title: task.title };
+    this.meetingPicker = null;
+    this.persist({ meeting: tracking(this.state.meeting, ref, previous), ...(asGeneric ? { settings: { ...this.state.settings, meetingGeneric: ref } } : {}) });
+    if (timer?.taskId !== task.id) await this.start(this.findTask(task.id) ?? ref);
+    this.render();
+  }
+
+  /** Tasks for "Choose task": search matches, else meeting-like tasks first, then pinned and recent. */
+  meetingTasks(): Task[] {
+    const known = [...this.tasks, ...this.state.pinned];
+    if (this.meetingQuery.trim() !== '') return searchTasks(meetingCandidates([known], () => false, null, Number.MAX_SAFE_INTEGER), this.meetingQuery);
+    const recents = this.entries !== null ? recentTasks(this.entries, this.tasks, 9) : [];
+    return meetingCandidates([this.tasks.filter((task) => this.isMeetingTask(task)), this.state.pinned, recents, this.tasks], (task) => this.isMeetingTask(task), this.state.activeTimer?.taskId ?? null);
+  }
+
+  private isMeetingTask(task: Task): boolean {
+    return taskKind(task, this.messageLocale()) !== null;
+  }
+
+  /** Meeting detection turned off: the call state and the last report go; the host stops looking. */
+  private stopMeetingDetection(): void {
+    this.persist({ meeting: { ...NO_MEETING } });
+    this.micSignal = null;
+    this.meetingPicker = null;
+    this.render();
+  }
+
+  /** Settings → Meetings. */
+  setMeetingSetting(patch: Partial<Pick<LocalState['settings'], 'meetingMinMinutes' | 'meetingGeneric' | 'meetingMuted'>>): void {
+    this.persist({ settings: { ...this.state.settings, ...patch } });
     this.render();
   }
 
@@ -1528,6 +1670,7 @@ export class DesktopApp {
       this.state = recordConsent(this.state, feature, enabled, this.now());
       saveLocal(this.state, this.storage);
       if (feature === 'idleDetection' && !enabled && this.state.idleCheck.phase === 'asking') this.setIdleCheck(WATCHING);
+      if (feature === 'meetingDetection' && !enabled) this.stopMeetingDetection();
     });
   }
 
@@ -1741,12 +1884,15 @@ export class DesktopApp {
   wakePlan(): WakePlan {
     const state = this.state.idleCheck;
     const reminderAt = this.nextReminderAt();
-    if (!this.idleCheckEnabled()) return { deadlineAt: null, idleAfterSeconds: null, reminderAt };
+    // Meeting detection: the host looks at the microphone only while it is on.
+    const mic = this.meetingOn() ? { micEverySeconds: MIC_POLL_SECONDS } : {};
+    if (!this.idleCheckEnabled()) return { deadlineAt: null, idleAfterSeconds: null, reminderAt, ...mic };
     const settings = this.idleSettings();
     return {
       deadlineAt: state.phase === 'asking' && state.returnedAt === null ? Date.parse(state.askedAt) + settings.answerTimeoutMinutes * 60_000 : null,
       idleAfterSeconds: state.phase === 'watching' && this.state.activeTimer !== null ? settings.thresholdMinutes * 60 : null,
       reminderAt,
+      ...mic,
     };
   }
 
@@ -2042,10 +2188,12 @@ export class DesktopApp {
     const card = this.view === 'main' ? this.currentCard() : null;
     const daily = this.view === 'main' ? this.dailyToast : null;
     const reminder = this.view === 'main' ? this.visibleReminder() : null;
-    const key = `${card === null ? '' : `${card.kind}:${card.line}:${card.shownAt}`}|${daily?.text ?? ''}|${reminder === null ? '' : `${reminder.slot}:${reminder.shownAt}:${this.reminderActionable(reminder)}`}`;
+    const meeting = this.view === 'main' ? this.meetingNote() : null;
+    const key = `${card === null ? '' : `${card.kind}:${card.line}:${card.shownAt}`}|${daily?.text ?? ''}|${reminder === null ? '' : `${reminder.slot}:${reminder.shownAt}:${this.reminderActionable(reminder)}`}|${meeting === null ? '' : `${meeting.text}:${meeting.actions.join()}:${this.meetingPicker}:${this.meetingQuery}:${this.tasks.length}`}`;
     if (key === this.toastKey) return;
     this.toastKey = key;
     patch(this.toastRegion, [
+      meeting !== null && this.renderMeetingQuestion(meeting),
       reminder !== null && this.renderReminder(reminder),
       card !== null && this.renderCheer(),
       daily !== null && this.toast('daily-toast', daily.pose, daily.text, daily.locale, () => this.showDailyToast(null)),
@@ -2760,6 +2908,7 @@ export class DesktopApp {
       this.renderIdleSettings(),
       this.renderSchedule(),
       this.renderFriendlySettings(),
+      this.renderMeetingSettings(),
       this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText'),
       // Store (MSIX) builds cannot register the login item the autostart plugin writes: no switch there.
       this.channel === 'direct' && this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
@@ -2938,6 +3087,51 @@ export class DesktopApp {
     );
   }
 
+  /** The meeting question as a toast (`ui/meetings.ts`). */
+  private renderMeetingQuestion(note: MeetingNote): HTMLElement {
+    return renderMeetingToast({
+      t: this.t,
+      note,
+      picker: this.meetingPicker,
+      query: this.meetingQuery,
+      tasks: this.meetingPicker !== null ? this.meetingTasks() : [],
+      isMeeting: (task) => this.isMeetingTask(task),
+      onAction: (action) => void this.meetingAction(action),
+      onPick: (task) => void this.startMeeting(task, this.meetingPicker === 'generic'),
+      onQuery: (query) => {
+        this.meetingQuery = query;
+        this.render();
+      },
+      onCancelPicker: () => {
+        this.meetingPicker = null;
+        this.render();
+      },
+      onDismiss: () => this.dismissMeeting(),
+    });
+  }
+
+  /** Settings → Meetings: opt-in switch (dated consent), the wait, the generic meeting, muted apps (`ui/meetings.ts`). */
+  private renderMeetingSettings(): HTMLElement {
+    const settings = this.state.settings;
+    const record = this.state.consents.meetingDetection;
+    const recents = this.entries !== null ? recentTasks(this.entries, this.tasks, 9) : [];
+    return renderMeetingSettings({
+      t: this.t,
+      enabled: hasConsent(this.state, 'meetingDetection'),
+      consent: record !== undefined ? { granted: record.granted, date: this.dateFormat.format(new Date(record.at)) } : null,
+      minMinutes: settings.meetingMinMinutes,
+      generic: settings.meetingGeneric,
+      candidates: meetingCandidates([this.state.pinned, recents, this.tasks], (task) => this.isMeetingTask(task), null, 20),
+      muted: settings.meetingMuted,
+      signal: this.micSignal,
+      locale: this.messageLocale(),
+      onToggle: (on) => void this.setFeature('meetingDetection', on),
+      onMinMinutes: (minutes) => this.setMeetingSetting({ meetingMinMinutes: minutes }),
+      onGeneric: (task) => this.setMeetingSetting({ meetingGeneric: task }),
+      onUnmute: (app) => this.setMeetingSetting({ meetingMuted: settings.meetingMuted.filter((item) => item !== app) }),
+    });
+  }
+
   /** "Show them as desktop notifications" and, when the OS does not show them, why the messages stay in the app. */
   private renderDesktopNotifications(): HTMLElement {
     const t = this.t;
@@ -3019,7 +3213,7 @@ export class DesktopApp {
       { id: 'privacy' },
       h('p', {}, t('privacyIntro')),
       section('privacy-sent', 'privacySentTitle', ['privacySentSignIn', 'privacySentTimer', 'privacySentIdle', 'privacySentUpdates']),
-      section('privacy-local', 'privacyLocalTitle', ['privacyLocalToken', 'privacyLocalState', 'privacyLocalIdle', 'privacyLocalTotals']),
+      section('privacy-local', 'privacyLocalTitle', ['privacyLocalToken', 'privacyLocalState', 'privacyLocalIdle', 'privacyLocalMeetings', 'privacyLocalTotals']),
       section('privacy-never', 'privacyNeverTitle', ['privacyNever']),
       h('p', {}, t('privacyRights')),
       h(

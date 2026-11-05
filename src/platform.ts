@@ -68,6 +68,8 @@ export interface WakePlan {
   idleAfterSeconds: number | null;
   /** The next working-hours reminder (lib/schedule.ts). */
   reminderAt: number | null;
+  /** Meeting detection is on: look at the microphone this often (seconds; absent = never). */
+  micEverySeconds?: number;
 }
 
 /** A notification button: the id sent back when pressed (`schedule-start` …) and its translated label. */
@@ -143,6 +145,8 @@ export interface Platform {
   onWake(handler: (reason: WakeReason) => void): void;
   /** A notification button was pressed (its `NotificationAction.id`). */
   onNotificationAction(handler: (id: string) => void): void;
+  /** What holds the microphone (meeting detection, only while `WakePlan.micEverySeconds` asks for it; lib/meetings.ts). */
+  onMic(handler: (signal: unknown) => void): void;
   setWakePlan(plan: WakePlan): Promise<void>;
   /** The "Still there?" window; `null` when the host has none (the prompt is then a modal in the main window). */
   readonly promptWindow: PromptHost | null;
@@ -209,6 +213,8 @@ export interface BrowserHooks {
   notificationAction(id: string): void;
   /** An answer from the fake prompt window. */
   answerPrompt(answer: PromptAnswer): void;
+  /** The fake heartbeat reports the microphone (`{ at, inUse, apps, source }`, as src-tauri/src/meeting). */
+  mic(signal: unknown): void;
 }
 
 export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o) => globalThis.fetch(i, o)): Platform & { hooks: BrowserHooks } {
@@ -219,6 +225,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
   const wakeHandlers: ((reason: WakeReason) => void)[] = [];
   const actionHandlers: ((id: string) => void)[] = [];
   const answerHandlers: ((answer: PromptAnswer) => void)[] = [];
+  const micHandlers: ((signal: unknown) => void)[] = [];
   const hooks: BrowserHooks = {
     idleSeconds: 0,
     opened: [],
@@ -254,6 +261,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     wake: (reason = 'tick') => wakeHandlers.forEach((handler) => handler(reason)),
     notificationAction: (id) => actionHandlers.forEach((handler) => handler(id)),
     answerPrompt: (answer) => answerHandlers.forEach((handler) => handler(answer)),
+    mic: (signal) => micHandlers.forEach((handler) => handler(signal)),
   };
   const promptHost: PromptHost = {
     open: async (view) => {
@@ -296,6 +304,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     },
     onWake: (handler) => void wakeHandlers.push(handler),
     onNotificationAction: (handler) => void actionHandlers.push(handler),
+    onMic: (handler) => void micHandlers.push(handler),
     setWakePlan: async (plan) => void (hooks.wakePlan = plan),
     get promptWindow() {
       return hooks.nativePrompt ? promptHost : null;

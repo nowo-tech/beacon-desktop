@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type MeetingCatalog, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** Português (tu): almoço por volta das 13h, café a meio da manhã e da tarde. */
 export const pools: Pools = {
@@ -223,4 +223,15 @@ export const reminders: ReminderCatalog = {
   actions: { start: 'Começar', stop: 'Parar', resume: 'Retomar' },
   lastTask: 'Última tarefa: {task}.',
   today: 'Hoje: {total}.',
+};
+
+/** Meeting detection: the question while a call goes on, and the one when it ends. */
+export const meetings: MeetingCatalog = {
+  titles: { ask: 'Reunião?', ended: 'Reunião terminada' },
+  ask: 'Parece que estás numa reunião ({app}). Que reunião é?',
+  askSwitch: 'Parece que estás numa reunião ({app}) e o cronómetro continua em {task}. Mudamos para a reunião?',
+  ended: 'Reunião terminada ({minutes} min). Voltar a {task}?',
+  endedStop: 'Reunião terminada ({minutes} min). Paro o cronómetro?',
+  browser: 'chamada no navegador',
+  actions: { choose: 'Escolher tarefa', generic: 'Reunião genérica', switch: 'Mudar para a reunião', notMeeting: 'Não é uma reunião', mute: 'Não perguntar nesta app', back: 'Voltar', stop: 'Parar' },
 };

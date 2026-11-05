@@ -1,4 +1,4 @@
-import { f, hm, type Keywords, type Pools, type ReminderCatalog, type Titles, w, type Windows } from './types';
+import { f, hm, type Keywords, type Pools, type MeetingCatalog, type ReminderCatalog, type Titles, w, type Windows } from './types';
 
 /** Nederlands (je): vroege lunch, koffie om tien en om drie. */
 export const pools: Pools = {
@@ -223,4 +223,15 @@ export const reminders: ReminderCatalog = {
   actions: { start: 'Starten', stop: 'Stoppen', resume: 'Hervatten' },
   lastTask: 'Laatste taak: {task}.',
   today: 'Vandaag: {total}.',
+};
+
+/** Meeting detection: the question while a call goes on, and the one when it ends. */
+export const meetings: MeetingCatalog = {
+  titles: { ask: 'Vergadering?', ended: 'Vergadering voorbij' },
+  ask: 'Je lijkt in een vergadering te zitten ({app}). Welke vergadering is het?',
+  askSwitch: 'Je lijkt in een vergadering te zitten ({app}) en de klok loopt nog op {task}. Overschakelen naar de vergadering?',
+  ended: 'Vergadering voorbij ({minutes} min). Terug naar {task}?',
+  endedStop: 'Vergadering voorbij ({minutes} min). Klok stoppen?',
+  browser: 'gesprek in de browser',
+  actions: { choose: 'Taak kiezen', generic: 'Algemene vergadering', switch: 'Naar de vergadering', notMeeting: 'Geen vergadering', mute: 'Niet vragen bij deze app', back: 'Terug', stop: 'Stoppen' },
 };

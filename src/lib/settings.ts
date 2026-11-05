@@ -2,12 +2,13 @@ import type { Scope, Task, Timer } from '../api/types';
 import { DEFAULT_SHORTCUT } from '../platform';
 import { EMPTY_MESSAGES, type MessageState, sanitizeMessages } from './friendly';
 import { type IdleCheckState, WATCHING } from './idleCheck';
+import { DEFAULT_MIN_CALL_MINUTES, type MeetingApp, type MeetingState, MIN_CALL_CHOICES, NO_MEETING, sanitizeMeeting, sanitizeMuted, sanitizeTaskRef, type TaskRef } from './meetings';
 import { DEFAULT_LEAD_MINUTES, EMPTY_SCHEDULE, LEAD_CHOICES, sanitizeSchedule, type ScheduleState } from './schedule';
 import type { ServerFeatures } from './serverFeatures';
 import { isTheme, type ThemePreference } from './theme';
 
 /** Opt-in features. Each one is off by default and keeps a dated consent record. */
-export type Feature = 'idleDetection' | 'notifications' | 'autostart';
+export type Feature = 'idleDetection' | 'notifications' | 'autostart' | 'meetingDetection';
 
 export interface ConsentRecord {
   granted: boolean;
@@ -45,6 +46,14 @@ export interface Settings {
   scheduleReminders: boolean;
   /** "Shall we start?" this many minutes before the start time (`LEAD_CHOICES`). */
   scheduleLeadMinutes: number;
+  /** Meeting detection (opt-in, off by default, dated consent): notice calls (microphone in use by a meeting app). */
+  meetingDetection: boolean;
+  /** Ask what a call is once it lasted this many minutes (`MIN_CALL_CHOICES`). */
+  meetingMinMinutes: number;
+  /** The task "Generic meeting" starts (chosen once, changeable in Settings). */
+  meetingGeneric: TaskRef | null;
+  /** Apps whose calls are never asked about ("Don't ask for this app"). */
+  meetingMuted: MeetingApp[];
 }
 
 /**
@@ -88,6 +97,8 @@ export interface LocalState {
   messages: MessageState;
   /** My schedule: local overrides of Beacon's working hours, local days off, reminders already shown. Local only. */
   schedule: ScheduleState;
+  /** Meeting detection: the call going on and the question about it (app id and times only). Local only. */
+  meeting: MeetingState;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -104,6 +115,10 @@ export const DEFAULT_SETTINGS: Settings = {
   nativeIntroSeen: false,
   scheduleReminders: true,
   scheduleLeadMinutes: DEFAULT_LEAD_MINUTES,
+  meetingDetection: false,
+  meetingMinMinutes: DEFAULT_MIN_CALL_MINUTES,
+  meetingGeneric: null,
+  meetingMuted: [],
 };
 
 const KEY = 'time-track-desktop';
@@ -122,6 +137,7 @@ export function emptyState(): LocalState {
     features: null,
     messages: { ...EMPTY_MESSAGES },
     schedule: { ...EMPTY_SCHEDULE },
+    meeting: { ...NO_MEETING },
   };
 }
 
@@ -144,7 +160,12 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
         nativeIntroSeen: raw.settings?.nativeIntroSeen === true,
         scheduleReminders: typeof raw.settings?.scheduleReminders === 'boolean' ? raw.settings.scheduleReminders : DEFAULT_SETTINGS.scheduleReminders,
         scheduleLeadMinutes: LEAD_CHOICES.includes(raw.settings?.scheduleLeadMinutes as number) ? (raw.settings?.scheduleLeadMinutes as number) : DEFAULT_SETTINGS.scheduleLeadMinutes,
+        meetingDetection: raw.settings?.meetingDetection === true,
+        meetingMinMinutes: MIN_CALL_CHOICES.includes(raw.settings?.meetingMinMinutes as number) ? (raw.settings?.meetingMinMinutes as number) : DEFAULT_SETTINGS.meetingMinMinutes,
+        meetingGeneric: sanitizeTaskRef(raw.settings?.meetingGeneric),
+        meetingMuted: sanitizeMuted(raw.settings?.meetingMuted),
       },
+      meeting: sanitizeMeeting(raw.meeting),
       messages: sanitizeMessages(raw.messages),
       schedule: sanitizeSchedule(raw.schedule),
       idleCheck: typeof raw.idleCheck === 'object' && raw.idleCheck !== null && 'phase' in raw.idleCheck ? raw.idleCheck : WATCHING,

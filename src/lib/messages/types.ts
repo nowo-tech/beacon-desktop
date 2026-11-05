@@ -139,3 +139,27 @@ export interface ReminderCatalog {
   /** After the end line. */
   today: string;
 }
+
+/** Buttons of the meeting questions (`src/lib/meetings.ts`). */
+export const MEETING_ACTIONS = ['choose', 'generic', 'switch', 'notMeeting', 'mute', 'back', 'stop'] as const;
+export type MeetingAction = (typeof MEETING_ACTIONS)[number];
+
+/**
+ * Meeting detection (`src/lib/meetings.ts`), per locale: "Looks like you're in a meeting ({app}). Which meeting is it?"
+ * and, when the call ends, "Meeting over ({minutes} min). Back to {task}?". `{app}` is the app's name, or `browser`
+ * for a call in a web browser.
+ */
+export interface MeetingCatalog {
+  titles: { ask: string; ended: string };
+  /** No timer, or none to switch from. */
+  ask: string;
+  /** A timer runs on a task that is not a meeting (`{task}`). */
+  askSwitch: string;
+  /** The call ended and there is a task to go back to (`{task}`). */
+  ended: string;
+  /** The call ended, nothing to go back to. */
+  endedStop: string;
+  /** Name of a call in a web browser (Google Meet, Jitsi, Teams or Zoom on the web). */
+  browser: string;
+  actions: Record<MeetingAction, string>;
+}
