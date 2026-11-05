@@ -277,6 +277,11 @@ describe('meeting detection in the app', () => {
     expect(ui.$('#meeting-status').textContent).toContain('no indica');
     ui.hooks.mic({ at: TEN, inUse: false, apps: [], source: 'process' });
     expect(ui.$('#meeting-status').textContent).toBe('Ahora: el micrófono está libre.');
+    // A report that changes nothing only updates that line: what is being typed in Settings stays.
+    ui.$<HTMLInputElement>('#shortcut').value = 'Ctrl+Alt+M';
+    ui.hooks.mic({ at: TEN + 5_000, inUse: false, apps: [], source: 'unavailable' });
+    expect(ui.$<HTMLInputElement>('#shortcut').value).toBe('Ctrl+Alt+M');
+    expect(ui.$('#meeting-status').textContent).toContain('no indica');
     ui.hooks.mic('garbage');
     await ui.call(0.5, 1, ['teams']);
     expect(ui.app.state.meeting.phase).toBe('starting');

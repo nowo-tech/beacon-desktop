@@ -148,8 +148,9 @@ export function observeMic(state: MeetingState, signal: MicSignal, ctx: MeetingC
   // The microphone went free: the call ends once it stays free for `END_GRACE_MS`.
   const release = (current: MeetingState): { state: MeetingState; over: boolean } => {
     if (held) return { state: current.releasedAt === null ? current : { ...current, releasedAt: null }, over: false };
-    const releasedAt = current.releasedAt ?? iso(at);
-    return { state: { ...current, releasedAt }, over: at - Date.parse(releasedAt) >= END_GRACE_MS };
+    // The same object while nothing changes (the app re-renders only on a change).
+    const next = current.releasedAt === null ? { ...current, releasedAt: iso(at) } : current;
+    return { state: next, over: at - Date.parse(next.releasedAt as string) >= END_GRACE_MS };
   };
   switch (state.phase) {
     case 'idle':

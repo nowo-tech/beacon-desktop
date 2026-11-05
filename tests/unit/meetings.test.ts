@@ -88,6 +88,8 @@ describe('call state machine', () => {
     ({ state } = run(state, MIN + 20_000, MIN + 40_000, []));
     expect(state.phase).toBe('starting');
     expect(state.releasedAt).not.toBeNull();
+    // Still free: the very same state (nothing to re-render).
+    expect(observeMic(state, mic(MIN + 50_000, []), ctx()).state).toBe(state);
     const back = run(state, MIN + 60_000, 3 * MIN, ['zoom']);
     expect(back.effects).toEqual([{ at: 2 * MIN, effect: 'ask' }]);
     // Free for a whole minute: the short call is forgotten without a question.

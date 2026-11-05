@@ -111,6 +111,12 @@ export interface MeetingSettingsProps {
   onUnmute(app: MeetingApp): void;
 }
 
+/** What the last microphone check found ("Now: the microphone is in use (Teams)."), for Settings. */
+export function meetingStatus(t: Translate, signal: MicSignal | null, locale: MessageLocale): string {
+  const key: MessageKey = signal === null ? 'meetingStatusWaiting' : signal.source === 'unavailable' ? 'meetingStatusUnavailable' : signal.apps.length > 0 ? 'meetingStatusApps' : signal.inUse ? 'meetingStatusOther' : 'meetingStatusFree';
+  return t(key, { apps: signal?.apps.map((app) => appName(app, locale)).join(', ') ?? '' });
+}
+
 /** Settings → Meetings: the opt-in switch and what it reads, then (when on) the wait, the generic meeting and muted apps. */
 export function renderMeetingSettings(props: MeetingSettingsProps): HTMLElement {
   const { t } = props;
@@ -150,8 +156,6 @@ function renderOptions(props: MeetingSettingsProps): HTMLElement {
     const task = choices.find((item) => item.id === generic.value);
     props.onGeneric(task !== undefined ? { id: task.id, title: task.title } : null);
   });
-  const status: MessageKey = props.signal === null ? 'meetingStatusWaiting' : props.signal.source === 'unavailable' ? 'meetingStatusUnavailable' : props.signal.apps.length > 0 ? 'meetingStatusApps' : props.signal.inUse ? 'meetingStatusOther' : 'meetingStatusFree';
-  const apps = props.signal?.apps.map((app) => appName(app, props.locale)).join(', ') ?? '';
   return h(
     'div',
     { class: 'meeting-options' },
@@ -177,6 +181,6 @@ function renderOptions(props: MeetingSettingsProps): HTMLElement {
           ),
         ),
       ),
-    h('p', { class: 'muted', id: 'meeting-status', attrs: { 'aria-live': 'off' } }, t(status, { apps })),
+    h('p', { class: 'muted', id: 'meeting-status', attrs: { 'aria-live': 'off' } }, meetingStatus(t, props.signal, props.locale)),
   );
 }

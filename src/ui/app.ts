@@ -45,7 +45,7 @@ import {
 import { withinWorkingHours } from '../lib/workingHours';
 import { askNote, callMinutes, endedNote, finishMeeting, ignoreCall, inCall, MEETING_ACTION_IDS, meetingActionOfId, meetingCandidates, type MeetingNote, type MicSignal, MIC_POLL_SECONDS, NO_MEETING, observeMic, parseMicSignal, searchTasks, type TaskRef, tracking, withinWorkingDay } from '../lib/meetings';
 import type { MeetingAction } from '../lib/messages/types';
-import { type PickerMode, renderMeetingSettings, renderMeetingToast } from './meetings';
+import { meetingStatus, type PickerMode, renderMeetingSettings, renderMeetingToast } from './meetings';
 import type { FriendlyNotification, Platform, TrayMenu, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
@@ -946,10 +946,13 @@ export class DesktopApp {
     const running = timer === null ? null : { id: timer.taskId, title: timer.taskTitle, meeting: this.timerKind(timer) !== null };
     const settings = this.state.settings;
     const step = observeMic(this.state.meeting, signal, { minMinutes: settings.meetingMinMinutes, muted: settings.meetingMuted, running, quiet: this.meetingQuiet() });
-    if (step.state !== this.state.meeting) this.persist({ meeting: step.state });
+    const changed = step.state !== this.state.meeting;
+    if (changed) this.persist({ meeting: step.state });
     if (step.effect === 'clear') this.meetingPicker = null;
     if (step.effect === 'ask' || step.effect === 'ended') this.deliverMeeting();
-    this.render();
+    // Every 20 s: only the status line of Settings changes (a full render would reset what is being typed there).
+    if (changed || step.effect !== 'none') this.render();
+    else this.body.querySelector('#meeting-status')?.replaceChildren(meetingStatus(this.t, signal, this.messageLocale()));
   }
 
   /** The open meeting question ("Which meeting is it?" or "Meeting over. Back to …?"), or null. */
