@@ -122,14 +122,30 @@ FunctionEnd
     DeleteRegKey HKCU "${TT_LEGACY_KEY}"
     DeleteRegKey /ifempty HKCU "${TT_LEGACY_VENDOR_KEY}"
   ${EndIf}
-  ; Start at login set up by the 0.1.0 MSI copy points at Program Files: follow the app to this install.
+  ; Start at login set up by the 0.1.0 MSI copy points at Program Files: follow the app to this install, also when that
+  ; copy is kept (0.5.0 left it then, and both copies could start at login: two tray icons). Only this install starts
+  ; at login; the old copy can still be opened by hand.
   ReadRegStr $R8 HKCU "${TT_RUN_KEY}" "${TT_PRODUCT}"
   ${If} $R8 != ""
     nsis_tauri_utils::StrReplace "$R8" "$PROGRAMFILES64\${TT_PRODUCT}\" "$INSTDIR\"
     Pop $R9
     ${If} $R9 != $R8
-    ${AndIfNot} ${FileExists} "$PROGRAMFILES64\${TT_PRODUCT}\${MAINBINARYNAME}.exe"
       WriteRegStr HKCU "${TT_RUN_KEY}" "${TT_PRODUCT}" "$R9"
     ${EndIf}
   ${EndIf}
+  ; A per-machine "TimeTrack" Run value (HKLM, written by an elevated copy) starts a second copy at login. Removing it
+  ; needs administrator rights, so this only works from an elevated installer; otherwise the app reports it at start
+  ; (src-tauri/src/autostart.rs) and README → "Two TimeTrack icons in the tray" says how to remove it.
+  ReadRegStr $R8 HKLM "${TT_RUN_KEY}" "${TT_PRODUCT}"
+  ${StrCase} $R8 $R8 "L"
+  ${StrLoc} $R9 $R8 "\timetrack\" ">"
+  ${If} $R9 != ""
+    ClearErrors
+    DeleteRegValue HKLM "${TT_RUN_KEY}" "${TT_PRODUCT}"
+    ${IfNot} ${Errors}
+      DetailPrint "Removed the per-machine start-at-login entry of ${TT_PRODUCT}"
+    ${EndIf}
+  ${EndIf}
+  ; Other start-at-login values for this install or the 0.1.0 MSI copy (any name other than "TimeTrack") are removed
+  ; by the app itself on its next start (autostart.rs), which knows every executable name.
 !macroend

@@ -3,6 +3,34 @@
 All notable changes to this project are documented here ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/)).
 
+## [Unreleased]
+
+Likely 0.5.1.
+
+### Fixed
+
+- **Two TimeTrack icons in the Windows tray** (two copies running in the background). Causes and fixes:
+  - No single-instance guard: opening TimeTrack from the Start menu or a shortcut while it was hidden in the tray
+    started a second copy. `tauri-plugin-single-instance` (2.5) is now the first plugin: a second launch exits at
+    once and shows, unminimises and focuses the running window; a second start at login (`--hidden`) just exits
+    (`on_second_launch`, `src-tauri/src/lib.rs`). Windows: per-session named mutex; macOS: local socket; Linux: D-Bus
+    name on the session bus (no session bus: the app starts unguarded, as before; AppImage and .deb alike).
+  - Duplicate start-at-login entries: the autostart plugin writes one `Run` value named `TimeTrack` with the
+    executable path at the time; older installs can leave others (the 0.1.0 `.msi` copy in Program Files, which the
+    0.5.0 installer left in place when that copy was kept; a per-machine `HKLM` value written by an elevated copy; a
+    value under another name). At start, release builds of the direct-download channel keep *Start at login* as one
+    `HKCU` value for the running executable and remove the others (`HKLM` only when allowed; new
+    `src-tauri/src/autostart.rs`, unit-tested). The installer (`windows/installer-hooks.nsh`) now moves a value
+    pointing at the 0.1.0 copy to this install also when that copy is kept, and removes a per-machine `TimeTrack`
+    value pointing at a TimeTrack copy when it runs with administrator rights.
+  - Tray created twice in one process: it never was (one `TrayIconBuilder`, from `setup`), now guarded by id, and the
+    main window no longer gets `core:tray:default` through `core:default` (the core defaults are listed one by one
+    without the tray), so the webview cannot create another tray icon. Rust tests check all three.
+- `installer-upgrade-test.yml` / `scripts/windows/upgrade-test.ps1`: from 0.5.1 on, each scenario seeds the
+  start-at-login entries older versions could leave and checks that exactly one `HKCU` `TimeTrack` value for the new
+  executable remains once the app has started, and that a second launch exits at once with one process left.
+- README → *Two TimeTrack icons in the tray*: how to check and remove duplicates by hand on Windows.
+
 ## [0.5.0] - 2026-11-05
 
 **Upgrading on Windows from 0.1.0 (`.msi`):** the in-app update installs in passive mode, so it removes a leftover

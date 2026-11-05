@@ -9,6 +9,7 @@
 //! detection on (opt-in), the heartbeat also tells the UI whether a known meeting app holds the microphone
 //! (`meeting/`): app ids only, never window titles, URLs or audio, and nothing is stored or sent.
 
+mod autostart;
 mod browser;
 mod heartbeat;
 mod meeting;
@@ -32,6 +33,8 @@ use tauri_plugin_updater::UpdaterExt;
 const KEYCHAIN_SERVICE: &str = "tech.nowo.time-track-desktop";
 const KEYCHAIN_USER: &str = "session-token";
 const TRAY_ID: &str = "main";
+/// Argument of the start-at-login entry: start hidden in the tray.
+const HIDDEN_ARG: &str = "--hidden";
 /// Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME; the UI can change it (Settings).
 const DEFAULT_SHORTCUT: &str = "CommandOrControl+Alt+Shift+T";
 /// Shortcut slots of `set_global_shortcut`: show the window and search, or "Continue the last task" (registered by the
@@ -858,7 +861,23 @@ fn notify_friendly(
     notify::show(&app, &note)
 }
 
+/// Another launch of the app (Start menu, desktop shortcut, a second start-at-login entry) while this one runs: it
+/// exits and this one shows its window, unless it was a start at login (`--hidden`), which stays in the tray.
+fn on_second_launch(app: &AppHandle, args: &[String]) {
+    if second_launch_shows_window(args) {
+        show_main(app);
+    }
+}
+
+fn second_launch_shows_window(args: &[String]) -> bool {
+    !args.iter().skip(1).any(|arg| arg == HIDDEN_ARG)
+}
+
+/// Builds the tray icon once: a second call (it is only called from `setup`) keeps the existing icon.
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    if app.tray_by_id(TRAY_ID).is_some() || app.try_state::<TrayState>().is_some() {
+        return Ok(());
+    }
     // Minimal untranslated menu until the UI sends the translated one (`set_tray_menu`).
     let status = MenuItem::with_id(app, "status", "TimeTrack", false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open TimeTrack", true, None::<&str>)?;
@@ -973,7 +992,13 @@ fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
 pub fn run() {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-    let builder = tauri::Builder::default();
+    // First plugin, so that a second launch exits before anything else starts (another tray icon, shortcuts, the
+    // heartbeat): it hands its arguments to the running app (`on_second_launch`) and exits. Windows: a named mutex per
+    // session; macOS: a socket; Linux: a D-Bus name (no session bus: the app starts normally, unguarded).
+    let builder =
+        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            on_second_launch(app, &args)
+        }));
     // The Store build has no updater configuration (tauri.store.conf.json removes it) and never self-updates.
     let builder = if store_channel() {
         builder
@@ -990,7 +1015,7 @@ pub fn run() {
         // Registered but never enabled by default: the user opts in from Settings.
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--hidden"]),
+            Some(vec![HIDDEN_ARG]),
         ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -1025,11 +1050,18 @@ pub fn run() {
             browser::manage(app.handle());
             create_main_window(app.handle())?;
             build_tray(app)?;
+            // Duplicate or stale start-at-login entries (0.1.0 MSI copy, HKLM) start a second copy: keep one, for
+            // this executable (autostart.rs). Not in dev builds (it would point the entry at target\debug) nor in
+            // the Store build.
+            #[cfg(windows)]
+            if !cfg!(debug_assertions) && !store_channel() {
+                autostart::apply(&app.package_info().name, &[HIDDEN_ARG]);
+            }
             spawn_heartbeat(app.handle().clone());
             // Screen lock / sleep events for "Pause on lock or sleep" (the UI decides whether to use them).
             session::start(app.handle());
             // Started at login (opt-in autostart passes --hidden): stay in the tray.
-            if std::env::args().any(|arg| arg == "--hidden") {
+            if std::env::args().any(|arg| arg == HIDDEN_ARG) {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
                 }
@@ -1173,6 +1205,56 @@ mod tests {
         ] {
             assert!(!internal_navigation(&parse(external)), "{external}");
         }
+    }
+
+    #[test]
+    fn a_second_launch_shows_the_window_unless_it_is_a_start_at_login() {
+        let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        assert!(second_launch_shows_window(&args(&["TimeTrack.exe"])));
+        assert!(second_launch_shows_window(&args(&[])));
+        assert!(!second_launch_shows_window(&args(&[
+            "TimeTrack.exe",
+            "--hidden"
+        ])));
+        // The executable path itself is never taken for the flag.
+        assert!(second_launch_shows_window(&args(&["--hidden"])));
+    }
+
+    /// One tray icon per process: built in one place, guarded, and the webview cannot create another one.
+    #[test]
+    fn the_tray_icon_is_created_once() {
+        let source = include_str!("lib.rs");
+        let builder = ["TrayIcon", "Builder::"].concat();
+        assert_eq!(source.matches(&builder).count(), 1, "one tray builder");
+        let calls = ["build_tray", "(app)?"].concat();
+        assert_eq!(source.matches(&calls).count(), 1, "built from setup only");
+        let guard = [
+            "if app.tray_by_id(TRAY_ID).is_some()",
+            " || app.try_state::<TrayState>().is_some()",
+        ]
+        .concat();
+        assert!(source.contains(&guard));
+        for capability in [
+            include_str!("../capabilities/default.json"),
+            include_str!("../capabilities/prompt.json"),
+        ] {
+            for permission in granted(capability) {
+                // `core:default` includes `core:tray:default`, which allows `new`.
+                assert!(
+                    permission != "core:default" && !permission.starts_with("core:tray"),
+                    "{permission}"
+                );
+            }
+        }
+    }
+
+    /// The single-instance plugin comes first, before any plugin that could start something.
+    #[test]
+    fn single_instance_is_the_first_plugin() {
+        let source = include_str!("lib.rs");
+        let run = source.find("pub fn run()").unwrap();
+        let first = run + source[run..].find(".plugin(").unwrap();
+        assert!(source[first..].starts_with(".plugin(tauri_plugin_single_instance::init("));
     }
 
     #[test]

@@ -17,7 +17,11 @@
                              check the rest
 
   Then checks: installer exit code, a single "TimeTrack" entry under the Uninstall keys (HKCU and HKLM, both views)
-  carrying the new version, no MSI left behind, the installed executable's version and that the app starts. Writes
+  carrying the new version, no MSI left behind, the installed executable's version and that the app starts. From
+  0.5.1 on also: start-at-login entries seeded before the upgrade like older versions left them (the app's value
+  pointing at the old copy, a second value under another name, a per-machine value) end up as ONE HKCU "TimeTrack"
+  value for the new executable once the new app has started, and a second launch exits at once, leaving one process
+  (one tray icon). Writes
   result.json and a Markdown summary to -OutDir (and to $env:GITHUB_STEP_SUMMARY when set). Exit code 1 when a check
   failed. Needs Windows PowerShell 5.1 (UI Automation assemblies).
 #>
@@ -118,6 +122,34 @@ function Get-AppProcesses {
       try { $path = $_.Path } catch { }
       $path -and ($dirs | Where-Object { $path.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) })
     })
+}
+
+$RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run'
+
+# Start-at-login values (HKCU and HKLM, 64-bit view) that start some copy of TimeTrack.
+function Get-RunEntries {
+  $found = @()
+  foreach ($s in @(@{ Hive = [Microsoft.Win32.RegistryHive]::CurrentUser; Name = 'HKCU' }, @{ Hive = [Microsoft.Win32.RegistryHive]::LocalMachine; Name = 'HKLM' })) {
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($s.Hive, [Microsoft.Win32.RegistryView]::Registry64)
+    $key = $base.OpenSubKey($RunKey)
+    if ($null -eq $key) { continue }
+    foreach ($name in $key.GetValueNames()) {
+      $command = [string] $key.GetValue($name)
+      if ($command -match '(?i)\\(timetrack|time-track-desktop)\.exe') {
+        $found += [pscustomobject] @{ Hive = $s.Name; Name = $name; Command = $command }
+      }
+    }
+    $key.Close()
+  }
+  return , $found
+}
+
+function Set-RunEntry([string] $Hive, [string] $Name, [string] $Command) {
+  $root = if ($Hive -eq 'HKLM') { [Microsoft.Win32.RegistryHive]::LocalMachine } else { [Microsoft.Win32.RegistryHive]::CurrentUser }
+  $key = [Microsoft.Win32.RegistryKey]::OpenBaseKey($root, [Microsoft.Win32.RegistryView]::Registry64).CreateSubKey($RunKey)
+  $key.SetValue($Name, $Command)
+  $key.Close()
+  Log "seeded start-at-login $Hive\$Name = $Command"
 }
 
 # --- Processes ----------------------------------------------------------------------------------------------------
@@ -290,6 +322,19 @@ if ($Old -in 'nsis', 'both') {
 }
 $before = Show-State 'old version installed'
 
+$newBase = [version] [regex]::Match($newVersion, '^\d+\.\d+\.\d+').Value
+$checkInstances = $newBase -ge [version] '0.5.1'
+if ($checkInstances) {
+  # What older versions could leave: the app's value for the old copy (0.1.0 MSI in Program Files, or the per-user
+  # install), a second value under another name, and a per-machine value written by an elevated copy.
+  $seedExe = $null
+  foreach ($dir in (Get-InstallDirs)) { if (-not $seedExe) { $seedExe = Get-AppExe $dir } }
+  if (-not $seedExe) { throw 'no old executable to seed start-at-login entries' }
+  Set-RunEntry 'HKCU' $Product "$seedExe --hidden"
+  Set-RunEntry 'HKCU' 'time-track-desktop' "`"$seedExe`" --hidden"
+  Set-RunEntry 'HKLM' $Product "$seedExe --hidden"
+}
+
 if ($AppRunning) {
   $oldExe = $null
   foreach ($dir in (Get-InstallDirs)) { if (-not $oldExe) { $oldExe = Get-AppExe $dir } }
@@ -325,6 +370,29 @@ if (-not $newExe) {
   if ($fileVersion -notlike "$newVersion*") { Fail "installed executable is $fileVersion, expected $newVersion" }
   Get-AppProcesses | ForEach-Object { Log "stopping $($_.Id) before the start check"; Stop-Process -Id $_.Id -Force }
   if (-not (Start-App $newExe)) { Fail 'the upgraded app does not start' }
+  elseif ($checkInstances) {
+    # Single instance: a second launch (here with --hidden, like a duplicate start-at-login entry) exits at once.
+    Log "second launch: $newExe --hidden"
+    $second = Start-Process -FilePath $newExe -ArgumentList '--hidden' -PassThru
+    $secondHandle = $second.Handle
+    if (-not $second.WaitForExit(20000)) {
+      Fail 'a second launch kept running next to the first one (two tray icons)'
+    } else {
+      Log "second launch exited with $($second.ExitCode)"
+      if ($second.ExitCode -ne 0) { Fail "second launch exit code $($second.ExitCode) (expected 0)" }
+    }
+    $alive = @(Get-AppProcesses)
+    Log "processes after the second launch: $($alive.Count)"
+    if ($alive.Count -ne 1) { Fail "$($alive.Count) TimeTrack processes after a second launch (expected 1)" }
+    # Start-at-login: one HKCU "TimeTrack" value for the new executable (the app cleaned up at start).
+    $runs = Get-RunEntries
+    foreach ($r in $runs) { Log ("  start-at-login {0}\{1} = {2}" -f $r.Hive, $r.Name, $r.Command) }
+    if ($runs.Count -ne 1) {
+      Fail "$($runs.Count) start-at-login entries for $Product (expected exactly 1)"
+    } elseif ($runs[0].Hive -ne 'HKCU' -or $runs[0].Name -ne $Product -or -not $runs[0].Command.StartsWith($newExe, [StringComparison]::OrdinalIgnoreCase)) {
+      Fail "start-at-login entry is $($runs[0].Hive)\$($runs[0].Name) = $($runs[0].Command) (expected HKCU\$Product = $newExe --hidden)"
+    }
+  }
   Get-AppProcesses | ForEach-Object { Stop-Process -Id $_.Id -Force }
 }
 
@@ -333,6 +401,7 @@ $result = [pscustomobject] @{
   mode        = $Mode
   appRunning  = [bool] $AppRunning
   newVersion  = $newVersion
+  runEntries  = $(if ($checkInstances) { Get-RunEntries } else { @() })
   exitCode    = $exitCode
   before      = $before
   after       = $after

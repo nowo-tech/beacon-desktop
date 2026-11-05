@@ -32,6 +32,9 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
+# One process per user: a second launch (Start menu, a duplicate start-at-login entry) hands over to the running app
+# and exits, so there is never a second tray icon (lib.rs `single_instance`).
+tauri-plugin-single-instance = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
 # Native friendly-message notifications with the pose picture and click handling (notify.rs); already used by

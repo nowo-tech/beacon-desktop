@@ -2,8 +2,9 @@ name: Installer upgrade test
 
 # Manual only (Windows minutes cost 2x): installs an older TimeTrack on a clean GitHub-hosted Windows runner, upgrades
 # it with a newer NSIS installer and checks the result (scripts/windows/upgrade-test.ps1): installer exit code, one
-# single "TimeTrack" Uninstall entry with the new version, no old MSI left, the app starts. Each scenario is its own
-# job, so each one starts from a clean machine.
+# single "TimeTrack" Uninstall entry with the new version, no old MSI left, the app starts; from 0.5.1 on also one
+# single start-at-login entry (seeded duplicates removed) and a second launch exiting at once (one tray icon). Each
+# scenario is its own job, so each one starts from a clean machine.
 #
 # Inputs:
 #   old_run_id   Release run whose "desktop-windows" artifact holds the oldest installers (default: v0.1.0, MSI + NSIS,
@@ -40,7 +41,7 @@ on:
         default: ''
       version:
         description: Version stamped on the build of this ref
-        default: '0.5.0'
+        default: '0.5.1'
       scenarios:
         description: all, or comma-separated scenario ids
         default: all
@@ -58,7 +59,7 @@ env:
   DEFAULT_OLD_RUN_ID: '41621683190'
   DEFAULT_PREV_RUN_ID: '41895956986'
   DEFAULT_NEW_RUN_ID: ''
-  DEFAULT_VERSION: '0.5.0'
+  DEFAULT_VERSION: '0.5.1'
   DEFAULT_SCENARIOS: all
 
 jobs:
