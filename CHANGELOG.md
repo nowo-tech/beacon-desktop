@@ -42,7 +42,8 @@ Likely 0.5.1.
 - Every GitHub Action in `.github/workflows/*.yml` (`release.yml` included) is pinned to a full commit SHA, with its
   version in a trailing comment, instead of a movable tag such as `@v7`, `@v2` or the `@stable` branch (security
   review 2026-11-05, GC-I9). Dependabot (`github-actions`, monthly) keeps the SHAs and comments up to date;
-  `dtolnay/rust-toolchain` now gets `toolchain: stable` as an input, since the ref no longer names it.
+  `dtolnay/rust-toolchain` now gets `toolchain: stable` as an input, since the ref no longer names it. That action is
+  pinned to a head of its `stable` branch, which Dependabot cannot track: refresh it by hand (CONTRIBUTING.md).
 
 ## [0.5.0] - 2026-11-05
 

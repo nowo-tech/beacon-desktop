@@ -69,7 +69,9 @@ Why these pins:
   R1x / E5–E9) and can switch between RSA and ECDSA. The ISRG roots (YR, YE, X1, X2) match all of them. The YR1 pin
   is only informational.
 - **The backup CA is from a different company.** Google Trust Services offers free ACME certificates. If Let's
-  Encrypt is unavailable or distrusted, Beacon can switch to GTS without an app update.
+  Encrypt is unavailable or distrusted, Beacon can switch to GTS without an app update, since GTS R1 / R4 are already
+  pinned. The server side needs preparation first: CAA allows only `letsencrypt.org` today, so `pki.goog` must be
+  added and Traefik needs a GTS ACME resolver before GTS can issue (see *Emergency* in the runbook below).
 
 To recompute a pin from a certificate:
 
@@ -162,8 +164,21 @@ version that users still run.
 refresh the dates (`version` +1, new `issued`, new `expires`) and ship.
 
 **Emergency (the CA in use is distrusted or compromised):** switch the host to the backup CA (Google Trust
-Services). The installed apps already accept it, so no app update is needed. Then pick a new backup CA and ship it
-with the add → ship → remove steps.
+Services). The installed apps already accept it (GTS R1 / R4 are pinned), so no app update is needed. The CAA record
+in force (`nowo.tech CAA 0 issue "letsencrypt.org"`, DEVOPS runbook DNS-CAA.md) does not allow GTS, so the order is:
+
+1. **CAA:** add `0 issue "pki.goog"` at the `nowo.tech` apex (DNS-CAA.md, section 4). Check it over DNS-over-HTTPS
+   before going on; without it the GTS ACME order fails.
+2. **Traefik resolver:** add a GTS ACME resolver to Traefik (`caServer` `https://dv.acme-v02.api.pki.goog/directory`,
+   with the EAB key id and HMAC key from a Google Cloud project; the EAB values are secrets and stay in the operator's
+   vault) and point the `beacon.nowo.tech` router at it. Keep the Let's Encrypt resolver for the other hosts.
+3. **Verify the chain:** once Traefik serves the GTS certificate, the S18 pinned SSL monitor must show *up* (the GTS
+   chain ends at GTS Root R1 or R4, both in its pin list), and the manual check in *Server-side preconditions* must
+   find a pinned key. If it does not, roll the router back to the Let's Encrypt resolver.
+4. **Switch is done:** check from an app (Settings shows *Secure connection*, any API call works). Remove
+   `letsencrypt.org` from CAA only if Let's Encrypt is distrusted, and only once no host still uses it.
+
+Then pick a new backup CA and ship it with the add → ship → remove steps (pins, S18 monitor pins and CAA together).
 
 **Adding a host** (for example a second official region): add it to `hosts` (exact name, lowercase, no wildcard, no
 IP) and ship it with the add → ship steps.
