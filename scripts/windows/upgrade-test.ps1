@@ -213,9 +213,12 @@ function Invoke-Installer([string] $File, [string] $Arguments, [string] $Label, 
   return $p.ExitCode
 }
 
-function Start-App([string] $Exe) {
+function Start-App([string] $Exe, [string] $StdErr) {
   Log "start app: $Exe"
-  $p = Start-Process -FilePath $Exe -PassThru
+  $start = @{ FilePath = $Exe; PassThru = $true }
+  # The app logs its start-at-login changes to stderr (src-tauri/src/autostart.rs).
+  if ($StdErr) { $start.RedirectStandardError = $StdErr }
+  $p = Start-Process @start
   Start-Sleep -Seconds 10
   $p.Refresh()
   if ($p.HasExited) { Log "app exited early with $($p.ExitCode)"; return $false }
@@ -422,7 +425,8 @@ if (-not $newExe) {
   Log "installed executable: $newExe ($fileVersion)"
   if ($fileVersion -notlike "$newVersion*") { Fail "installed executable is $fileVersion, expected $newVersion" }
   Get-AppProcesses | ForEach-Object { Log "stopping $($_.Id) before the start check"; Stop-Process -Id $_.Id -Force }
-  if (-not (Start-App $newExe)) { Fail 'the upgraded app does not start' }
+  $appErr = Join-Path $OutDir 'app-stderr.log'
+  if (-not (Start-App $newExe $appErr)) { Fail 'the upgraded app does not start' }
   elseif ($checkInstances) {
     # Single instance: a second launch (here with --hidden, like a duplicate start-at-login entry) exits at once.
     Log "second launch: $newExe --hidden"
@@ -438,9 +442,16 @@ if (-not $newExe) {
     Log "processes after the second launch: $($alive.Count)"
     if ($alive.Count -ne 1) { Fail "$($alive.Count) TimeTrack processes after a second launch (expected 1)" }
     # Start-at-login: one HKCU "TimeTrack" value for the new executable, path quoted (the app cleaned up at start).
+    $ours = { param($list) @($list | Where-Object { -not $_.Command.TrimStart('"').StartsWith($Vendor, [StringComparison]::OrdinalIgnoreCase) }) }
+    for ($i = 0; $i -lt 30; $i++) {
+      $runs = & $ours (Get-RunEntries)
+      if ($runs.Count -eq 1 -and $runs[0].Command.StartsWith('"')) { break }
+      Start-Sleep -Seconds 1
+    }
+    if (Test-Path $appErr) { Get-Content $appErr | ForEach-Object { Log "  app stderr: $_" } }
     $all = Get-RunEntries
     foreach ($r in $all) { Log ("  start-at-login {0}\{1} = {2}" -f $r.Hive, $r.Name, $r.Command) }
-    $runs = @($all | Where-Object { -not $_.Command.TrimStart('"').StartsWith($Vendor, [StringComparison]::OrdinalIgnoreCase) })
+    $runs = & $ours $all
     if ($runs.Count -ne 1) {
       Fail "$($runs.Count) start-at-login entries for $Product (expected exactly 1)"
     } elseif ($runs[0].Hive -ne 'HKCU' -or $runs[0].Name -ne $Product -or -not $runs[0].Command.StartsWith("`"$newExe`"", [StringComparison]::OrdinalIgnoreCase)) {

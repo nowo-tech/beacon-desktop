@@ -1043,6 +1043,13 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // Duplicate or stale start-at-login entries (0.1.0 MSI copy, HKLM) start a second copy: keep one, for
+            // this installed executable (autostart.rs), first, before the window and the tray. Not in dev builds nor
+            // in the Store build.
+            #[cfg(windows)]
+            if !cfg!(debug_assertions) && !store_channel() {
+                autostart::apply(&app.package_info().name, &[HIDDEN_ARG]);
+            }
             app.manage(HeartbeatState(Mutex::new(heartbeat::Heartbeat::new())));
             app.manage(MainFocus::default());
             app.manage(prompt::PromptState::default());
@@ -1050,13 +1057,6 @@ pub fn run() {
             browser::manage(app.handle());
             create_main_window(app.handle())?;
             build_tray(app)?;
-            // Duplicate or stale start-at-login entries (0.1.0 MSI copy, HKLM) start a second copy: keep one, for
-            // this executable (autostart.rs). Not in dev builds (it would point the entry at target\debug) nor in
-            // the Store build.
-            #[cfg(windows)]
-            if !cfg!(debug_assertions) && !store_channel() {
-                autostart::apply(&app.package_info().name, &[HIDDEN_ARG]);
-            }
             spawn_heartbeat(app.handle().clone());
             // Screen lock / sleep events for "Pause on lock or sleep" (the UI decides whether to use them).
             session::start(app.handle());
