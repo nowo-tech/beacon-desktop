@@ -5156,7 +5156,7 @@ dependencies = [
 
 [[package]]
 name = "time-track-desktop"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "core-foundation 0.10.1",
  "block2",
