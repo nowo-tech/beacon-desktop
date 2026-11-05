@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SHORTCUT, browserPlatform } from '../../src/platform';
 import { DesktopApp } from '../../src/ui/app';
 import { nodeFetch, startMock } from './helpers';
@@ -147,8 +147,15 @@ describe('0.2.0 UX', () => {
   it('shows project · board and the start time on the timer when the server sends them', async () => {
     await env.control('config', { taskExtras: { 'T-104': { projectTitle: 'Billing' } } });
     const ui = await signedIn({ locale: 'es' });
-    await ui.app.start({ id: 'T-104', title: 'Fix invoice rounding bug' });
-    expect(ui.$('#timer-meta').textContent).toMatch(/^Billing · Engineering · desde \d{1,2}:\d{2}$/);
+    // Freeze only Date (the in-process mock stamps startedAt with it) at a local time with a one-digit hour,
+    // so the result does not depend on the clock or the timezone of the machine running the test.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 10, 5, 8, 5) });
+    try {
+      await ui.app.start({ id: 'T-104', title: 'Fix invoice rounding bug' });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(ui.$('#timer-meta').textContent).toBe('Billing · Engineering · desde 8:05');
     expect(ui.$('#quick-empty').textContent).toContain('Inicia una tarea');
     expect(ui.$('#elapsed').getAttribute('role')).toBe('timer');
     expect(ui.$('#stop').getAttribute('aria-label')).toBe('Parar «Fix invoice rounding bug»');
