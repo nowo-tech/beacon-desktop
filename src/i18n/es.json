@@ -305,5 +305,6 @@
   "dayOffAdd": "Añadir día libre",
   "dayOffRemove": "Quitar el día libre del {date}",
   "remove": "Quitar",
-  "scheduleLocal": "Tus cambios y días libres se quedan en este equipo; no se envía nada a Beacon."
+  "scheduleLocal": "Tus cambios y días libres se quedan en este equipo; no se envía nada a Beacon.",
+  "promptOpenApp": "Abrir TimeTrack"
 }

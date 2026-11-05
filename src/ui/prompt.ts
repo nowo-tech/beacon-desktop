@@ -26,7 +26,9 @@ export type PromptAction =
   | 'gap-discard'
   | 'resume'
   | 'not-now'
-  | 'escape';
+  | 'escape'
+  /** "Open TimeTrack" in the prompt window: brings the main window forward; the prompt stays. */
+  | 'open-app';
 
 export interface PromptAnswer {
   action: PromptAction;
@@ -112,6 +114,8 @@ export interface PromptView {
   theme: 'light' | 'dark' | null;
   /** Said (politely) when Esc is pressed: the prompt needs an answer and Esc does not dismiss it. */
   escapeHint: string;
+  /** "Open TimeTrack" link (prompt window only; `null` in the in-app modal). */
+  openApp: string | null;
   /** Element to focus after this update (`focusSeq` changes each time the host asks for it). */
   focus: string | null;
   focusSeq: number;
@@ -279,7 +283,14 @@ export function renderPrompt(view: PromptView, options: PromptOptions): Rendered
       },
     },
     picture,
-    h('div', { class: 'still-there-body' }, h('h2', { id: `${view.id}-title` }, view.title), ...view.blocks.map(block), hint),
+    h(
+      'div',
+      { class: 'still-there-body' },
+      h('h2', { id: `${view.id}-title` }, view.title),
+      ...view.blocks.map(block),
+      typeof view.openApp === 'string' && h('button', { class: 'link prompt-open-app', id: 'prompt-open-app', key: 'prompt-open-app', attrs: { type: 'button' }, on: { click: () => answer({ action: 'open-app' }) } }, view.openApp),
+      hint,
+    ),
   );
   return {
     element,

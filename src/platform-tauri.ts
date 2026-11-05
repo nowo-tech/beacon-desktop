@@ -7,7 +7,7 @@ import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import type { NotificationPermission, Platform, PromptClient, PromptHost, UpdateCheck, UpdateProgress, WakeReason } from './platform';
+import { notificationBody, type NotificationPermission, type Platform, type PromptClient, type PromptHost, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 
 const permission = (state: string): NotificationPermission => (state === 'granted' ? 'granted' : state === 'denied' ? 'denied' : 'prompt');
@@ -26,6 +26,7 @@ export function tauriPromptClient(): PromptClient {
     view: () => invoke<PromptView | null>('prompt_view'),
     onView: (handler) => void listen<PromptView>('prompt-view', (event) => handler(event.payload)),
     answer: (answer) => invoke('prompt_answer', { answer }),
+    openMain: () => invoke('prompt_show_main'),
   };
 }
 
@@ -60,7 +61,7 @@ export function tauriPlatform(): Platform {
     notify: async (title, body) => {
       let granted = await isPermissionGranted();
       if (!granted) granted = (await requestPermission()) === 'granted';
-      if (granted) sendNotification({ title, body });
+      if (granted) sendNotification({ title, body: notificationBody(body, navigator.userAgent) });
     },
     // Native notification with the pose and click-to-open, from Rust (src-tauri/src/notify.rs).
     notifyFriendly: async (note) => {

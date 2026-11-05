@@ -145,6 +145,15 @@ fn msix_cache(local_app_data: &Path, family: &str) -> PathBuf {
         .join("LocalCache")
 }
 
+/// Plain text for a Linux notification body: servers that advertise `body-markup` (GNOME, KDE, …) would otherwise
+/// render `<b>`, `<a>` or `<img>` from it.
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
+pub fn escape_markup(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 #[cfg_attr(windows, allow(dead_code))]
 /// The button pressed, from what the notification server reported (XDG sends its id, macOS' NSUserNotification its
 /// label), or `None`.
@@ -232,6 +241,8 @@ mod platform {
         image: Option<&Path>,
         action: Option<NoteAction>,
     ) -> Result<(), String> {
+        #[cfg(not(target_os = "macos"))]
+        let body = &escape_markup(body);
         let mut notification = notify_rust::Notification::new();
         notification
             .summary(title)
@@ -436,6 +447,15 @@ mod tests {
             pressed(&NotificationResponse::Action("schedule-stop".into()), None),
             None
         );
+    }
+
+    #[test]
+    fn linux_bodies_are_plain_text() {
+        assert_eq!(
+            escape_markup("Tom & Jerry <b>bold</b> <img src=x>"),
+            "Tom &amp; Jerry &lt;b&gt;bold&lt;/b&gt; &lt;img src=x&gt;"
+        );
+        assert_eq!(escape_markup("¿Un café?"), "¿Un café?");
     }
 
     #[test]

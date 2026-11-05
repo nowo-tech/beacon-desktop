@@ -21,8 +21,11 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - Server URL, your e-mail, the running timer, queued offline actions (with the time each happened), the tasks you pin
   and the last task you tracked (id and title, to resume it), an unsent "meeting" note, the "Still there?" state (the
   question being asked, if any), the server's feature switches, your settings and the date of each consent decision,
-  and which friendly messages were shown lately (line numbers and times, so they do not repeat), in the app's local
-  storage. Signing out deletes the token, the timer, the queue and the idle-check state.
+  and the friendly-message history (so lines do not repeat and each moment comes once a day): the line numbers shown
+  lately, the time of the last one, the current one with the running entry it belongs to, and the moments and cheers
+  already used. Entries are named by their task id and start time (`<task id>@<start>`). All of it is in the app's
+  local storage. Signing out deletes the token, the timer, the queue, the idle-check state and the friendly-message
+  history.
 - **Clear local data** (Settings → What we collect) signs you out and deletes all of the above, and turns "start at
   login" off.
 - Today / This week totals and recent tasks are computed on this computer from your own entries (`entries:read`, the
@@ -35,7 +38,8 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
   computer, only to decide when to ask whether you are still there. The counter is never stored, logged or sent.
   Screen lock and sleep count as idle.
 - The question opens in its own small window in the middle of the screen, on top of other windows; it holds only what
-  the main window shows there and sends nothing itself.
+  the main window shows there and sends nothing itself. It shows the running task's title, so during a screen share
+  the people watching can see it too.
 - Your organisation turns it on or off and sets the wait (TimeTrackBundle 1.10, `GET me`); you can make the wait
   longer in Settings. With a server that does not say (1.9), it is off until you turn it on (dated consent).
 - With no answer, the timer stops at your last input and the app asks you about that time when you are back.

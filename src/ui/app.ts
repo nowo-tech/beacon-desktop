@@ -3,7 +3,7 @@ import type { DeviceCode, Entry, Me, Task, Timer } from '../api/types';
 import { dashboardUrl, myTimeUrl, sameOriginHttps, taskUrl } from '../lib/beacon';
 import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
 import { type ErrorStage, type ErrorView, describeError } from '../lib/errors';
-import { type Card, type Switches, afterStop, beaconLocale, beaconTimeZone, CARD_TTL_MINUTES, CATALOG, DAILY_TOAST_MS, IDLE_COUNTDOWN_MINUTES, lineText, MEETING_COUNTDOWN_MINUTES, messageLocale, MIN_GAP_MINUTES, nextCard, noticeTitle, pausedAt, pauseMessages, pickDailyDone, pickIdleLine, resumeMessages, taskKind, visibleCard, zonedParts } from '../lib/friendly';
+import { type Card, type Switches, afterStop, beaconLocale, beaconTimeZone, CARD_TTL_MINUTES, CATALOG, DAILY_TOAST_MS, EMPTY_MESSAGES, IDLE_COUNTDOWN_MINUTES, lineText, MEETING_COUNTDOWN_MINUTES, messageLocale, MIN_GAP_MINUTES, nextCard, noticeTitle, pausedAt, pauseMessages, pickDailyDone, pickIdleLine, resumeMessages, taskKind, visibleCard, zonedParts } from '../lib/friendly';
 import type { NoticeKind, PoseId, TaskKind } from '../lib/messages/types';
 import { createTranslator, detectLocale, type Locale, type MessageKey, type Translate } from '../lib/i18n';
 import { type GapChoice, type IdleCheckState, type IdleChoice, WATCHING, decide, decideGap, observeIdle, promptSpan } from '../lib/idleCheck';
@@ -426,10 +426,13 @@ export class DesktopApp {
   private async signedOut(notice: string | null): Promise<void> {
     await this.platform.secretDelete();
     this.token = null;
-    // The schedule (overrides, days off, Beacon's copy) belongs to the person who signs out.
-    this.persist({ session: null, activeTimer: null, idleCheck: WATCHING, pendingNote: null, schedule: { ...EMPTY_SCHEDULE } });
+    // The friendly-message history goes too (its slots name the entries, `<task id>@<start>`), and the schedule
+    // (overrides, days off, Beacon's copy) belongs to the person who signs out.
+    this.persist({ session: null, activeTimer: null, idleCheck: WATCHING, pendingNote: null, messages: { ...EMPTY_MESSAGES }, schedule: { ...EMPTY_SCHEDULE } });
     this.reminderToast = null;
     this.queue.clear();
+    this.dailyToast = null;
+    this.nativeNotice = null;
     this.tasks = [];
     this.entries = null;
     this.me = null;
@@ -2482,6 +2485,8 @@ export class DesktopApp {
       lang: this.locale,
       theme: forcedTheme(this.state.settings.theme),
       escapeHint: t('promptEscapeHint'),
+      // Only in its own window: the in-app modal is already in the main window.
+      openApp: this.promptInWindow() ? t('promptOpenApp') : null,
       focus: this.promptFocus.id,
       focusSeq: this.promptFocus.seq,
     };
@@ -2613,7 +2618,8 @@ export class DesktopApp {
       case 'not-now':
         return this.resumeAfterGap(false);
       case 'escape':
-        // Never a dismissal: the prompt stays until it is answered.
+      case 'open-app':
+        // Never a dismissal: the prompt stays until it is answered ("Open TimeTrack" is handled by its window).
         return;
     }
   }

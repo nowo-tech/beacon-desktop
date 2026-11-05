@@ -305,5 +305,6 @@
   "dayOffAdd": "Add day off",
   "dayOffRemove": "Remove the day off of {date}",
   "remove": "Remove",
-  "scheduleLocal": "Your changes and days off stay on this computer; nothing is sent to Beacon."
+  "scheduleLocal": "Your changes and days off stay on this computer; nothing is sent to Beacon.",
+  "promptOpenApp": "Open TimeTrack"
 }

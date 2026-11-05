@@ -4,7 +4,7 @@ import type { Me, Timer } from '../../src/api/types';
 import { CATALOG, IDLE_COUNTDOWN_MINUTES, MESSAGE_LOCALES, noticeTitle, PAUSE_MINUTES, pauseMessages, pausedAt, resumeMessages, EMPTY_MESSAGES } from '../../src/lib/friendly';
 import { POOL_KINDS } from '../../src/lib/messages/types';
 import { loadLocal } from '../../src/lib/settings';
-import { browserPlatform, browserPromptClient, type BrowserPromptHooks } from '../../src/platform';
+import { browserPlatform, browserPromptClient, notificationBody, type BrowserPromptHooks } from '../../src/platform';
 import { DesktopApp } from '../../src/ui/app';
 import { clock, PromptMount, renderPrompt, secondsLeft, type PromptView } from '../../src/ui/prompt';
 import { startPromptWindow } from '../../src/ui/promptWindow';
@@ -310,7 +310,10 @@ describe('"Still there?" in its own window', () => {
     await tick();
     expect(ui.hooks.promptOpened).toBe(1);
     const view = ui.hooks.prompt as PromptView;
-    expect(view).toMatchObject({ id: 'idle', title: 'Still there?', windowTitle: 'Still there?', lang: 'en', escapeHint: expect.any(String) });
+    expect(view).toMatchObject({ id: 'idle', title: 'Still there?', windowTitle: 'Still there?', lang: 'en', escapeHint: expect.any(String), openApp: 'Open TimeTrack' });
+    ui.hooks.answerPrompt({ action: 'open-app' });
+    await tick();
+    expect(ui.app.state.idleCheck.phase).toBe('asking');
     expect(view.blocks.map((block) => block.kind)).toEqual(['text', 'text', 'text', 'choices', 'countdown']);
     expect(view.blocks[0]).toMatchObject({ kind: 'text', id: 'idle-quip', tone: 'quip' });
     // The main window shows no modal, only where the question is.
@@ -388,6 +391,8 @@ describe('"Still there?" in its own window', () => {
     expect(ui.app.promptWindowFailed).toBe(true);
     expect(ui.$('#idle')).not.toBeNull();
     expect(ui.$('#idle').getAttribute('role')).toBe('dialog');
+    // The in-app modal is already in the main window: no "Open TimeTrack" there.
+    expect(ui.$('#prompt-open-app')).toBeNull();
     expect(ui.$('#prompt-elsewhere')).toBeNull();
     ui.app.destroy();
   });
@@ -420,6 +425,7 @@ const VIEW: PromptView = {
   lang: 'en',
   theme: 'dark',
   escapeHint: 'This question needs an answer.',
+  openApp: 'Open TimeTrack',
   focus: null,
   focusSeq: 0,
   blocks: [
@@ -466,6 +472,10 @@ describe('the prompt renderer and the prompt window', () => {
     expect(document.activeElement?.id).toBe('idle-here');
     root.querySelector<HTMLButtonElement>('#idle-here')?.click();
     expect(hooks.answers).toEqual([{ action: 'escape' }, { action: 'here' }]);
+    // "Open TimeTrack" brings the main window forward and is not an answer.
+    root.querySelector<HTMLButtonElement>('#prompt-open-app')?.click();
+    expect(hooks.openedMain).toBe(1);
+    expect(hooks.answers).toHaveLength(2);
     // An update from the main window, asking for a focus.
     hooks.setView?.({
       ...VIEW,
@@ -516,5 +526,35 @@ describe('the prompt renderer and the prompt window', () => {
     region.querySelector<HTMLButtonElement>('#gap-reassign')?.click();
     expect(answers).toEqual([{ action: 'gap-reassign', taskId: 'T-3' }]);
     mount.dispose();
+  });
+});
+
+describe('privacy and plain text (security review FN-L2, FN-I4)', () => {
+  beforeEach(async () => {
+    localStorage.clear();
+    await env.control('reset', {});
+    await env.control('config', { deviceInterval: 1 });
+  });
+
+  it('signing out deletes the friendly-message history (its slots name the entries)', async () => {
+    const ui = await signedIn();
+    running(ui, 121);
+    ui.app.checkFriendly();
+    const stored = loadLocal(localStorage).messages;
+    expect(stored.card?.entry).toMatch(/^T-101@/);
+    expect(stored.seen.some((slot) => slot.includes('T-101@'))).toBe(true);
+    await ui.app.logout();
+    const after = loadLocal(localStorage);
+    expect(after.messages).toEqual(EMPTY_MESSAGES);
+    expect(JSON.stringify(after)).not.toContain('T-101@');
+    expect(ui.app.dailyToast).toBeNull();
+    ui.app.destroy();
+  });
+
+  it('Linux notification bodies are plain text; other systems unchanged', () => {
+    const title = 'Fix <b>bold</b> & <img src=x onerror=alert(1)>';
+    expect(notificationBody(title, 'Mozilla/5.0 (X11; Linux x86_64)')).toBe('Fix &lt;b&gt;bold&lt;/b&gt; &amp; &lt;img src=x onerror=alert(1)&gt;');
+    expect(notificationBody(title, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)')).toBe(title);
+    expect(notificationBody(title, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)')).toBe(title);
   });
 });

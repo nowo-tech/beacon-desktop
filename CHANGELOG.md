@@ -115,6 +115,19 @@ Likely 0.5.0.
     Settings → My schedule, the four reminders as Windows toasts and the in-app toast, light and dark, in Spanish.
   - Mock server: `daysOff` and `locale` on `GET me` (config).
 
+### Security
+
+- App commands are ACL-scoped (security review 2026-11-05, FN-L1): `build.rs` declares them in the app manifest
+  (`src-tauri/app-commands.rs`) and each capability grants its window only its own (`main`: keychain, tray,
+  shortcut, updater, heartbeat, notifications, opening the prompt; `prompt`: `prompt_view`, `prompt_answer`,
+  `prompt_show_main`). The commands also check the caller's window label.
+- Signing out deletes the friendly-message history, whose slots name entries by task id and start (FN-L2); PRIVACY.md
+  says exactly what it holds.
+- Linux notification bodies are escaped to plain text, so a task title cannot become markup on servers with
+  `body-markup` (FN-I4).
+- The prompt window has an *Open TimeTrack* link; README and PRIVACY say it shows the task title, visible on a shared
+  screen (FN-I5).
+
 ### Changed
 
 - Overtime lines ("take a real break", from 6 h) carry no figure at all in any language: no hour count, no "ten

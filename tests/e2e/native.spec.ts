@@ -149,6 +149,7 @@ const VIEW = {
   lang: 'en',
   theme: null,
   escapeHint: 'This question needs an answer: choose one of the options.',
+  openApp: 'Open TimeTrack',
   focus: null,
   focusSeq: 0,
   blocks: [

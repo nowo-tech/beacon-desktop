@@ -131,13 +131,28 @@ fn icon_variant(base: &Image<'_>, running: bool) -> Image<'static> {
     Image::new_owned(rgba, width, height)
 }
 
+/// Defence in depth on top of the capabilities (build.rs declares every app command, each window gets only its own):
+/// the privileged commands also refuse any caller but the main window.
+pub(crate) fn only_from(window: &tauri::Window, label: &str) -> Result<(), String> {
+    caller_allowed(window.label(), label)
+}
+
+pub(crate) fn caller_allowed(caller: &str, label: &str) -> Result<(), String> {
+    if caller == label {
+        Ok(())
+    } else {
+        Err("not allowed from this window".into())
+    }
+}
+
 fn keychain() -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER).map_err(|e| e.to_string())
 }
 
 /// Session token from the OS keychain (Keychain / Credential Manager / Secret Service). `None` when absent.
 #[tauri::command]
-fn secret_get() -> Result<Option<String>, String> {
+fn secret_get(window: tauri::Window) -> Result<Option<String>, String> {
+    only_from(&window, "main")?;
     match keychain()?.get_password() {
         Ok(token) => Ok(Some(token)),
         Err(keyring::Error::NoEntry) => Ok(None),
@@ -146,12 +161,14 @@ fn secret_get() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn secret_set(token: String) -> Result<(), String> {
+fn secret_set(window: tauri::Window, token: String) -> Result<(), String> {
+    only_from(&window, "main")?;
     keychain()?.set_password(&token).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn secret_delete() -> Result<(), String> {
+fn secret_delete(window: tauri::Window) -> Result<(), String> {
+    only_from(&window, "main")?;
     match keychain()?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(e.to_string()),
@@ -161,7 +178,13 @@ fn secret_delete() -> Result<(), String> {
 /// Seconds since the last keyboard / mouse input, read locally from the OS. Never sent anywhere.
 /// Returns 0 when the platform cannot tell (e.g. some Wayland sessions): idle detection then never triggers.
 #[tauri::command]
-fn idle_seconds() -> u64 {
+fn idle_seconds(window: tauri::Window) -> Result<u64, String> {
+    only_from(&window, "main")?;
+    Ok(read_idle_seconds())
+}
+
+/// The OS idle counter (also read by the heartbeat thread).
+fn read_idle_seconds() -> u64 {
     user_idle::UserIdle::get_time()
         .map(|idle| idle.as_seconds())
         .unwrap_or(0)
@@ -169,7 +192,12 @@ fn idle_seconds() -> u64 {
 
 /// Updates the tray tooltip, title (macOS, Linux), status line and icon variant.
 #[tauri::command]
-fn set_tray_status(app: AppHandle, status: TrayStatus) -> Result<(), String> {
+fn set_tray_status(
+    app: AppHandle,
+    window: tauri::Window,
+    status: TrayStatus,
+) -> Result<(), String> {
+    only_from(&window, "main")?;
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         tray.set_tooltip(Some(&status.tooltip))
             .map_err(|e| e.to_string())?;
@@ -199,7 +227,8 @@ fn set_tray_status(app: AppHandle, status: TrayStatus) -> Result<(), String> {
 /// status · Stop / Resume · Switch to ▸ · Search task… · — · Open TimeTrack · Open Beacon · My time · — · Pause friendly
 /// messages 1 h · Check for updates… · Settings… · Quit.
 #[tauri::command]
-fn set_tray_menu(app: AppHandle, menu: TrayMenuSpec) -> Result<(), String> {
+fn set_tray_menu(app: AppHandle, window: tauri::Window, menu: TrayMenuSpec) -> Result<(), String> {
+    only_from(&window, "main")?;
     let err = |e: tauri::Error| e.to_string();
     let state = app.state::<TrayState>();
     let mut status_slot = state.status.lock().map_err(|e| e.to_string())?;
@@ -293,7 +322,12 @@ fn set_tray_menu(app: AppHandle, menu: TrayMenuSpec) -> Result<(), String> {
 /// Replaces the global shortcut. On failure (in use by another app, invalid) the previous one is registered again and
 /// the error goes back to the UI, which shows it in Settings.
 #[tauri::command]
-fn set_global_shortcut(app: AppHandle, accelerator: String) -> Result<(), String> {
+fn set_global_shortcut(
+    app: AppHandle,
+    window: tauri::Window,
+    accelerator: String,
+) -> Result<(), String> {
+    only_from(&window, "main")?;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
     let shortcuts = app.global_shortcut();
     let state = app.state::<TrayState>();
@@ -473,7 +507,15 @@ fn parse_update(body: &str, header_min: Option<String>, installable: bool) -> Up
 /// Beacon's updater route (`time_track_client_updater`). 204 = up to date, 401 = sign in again (not an error),
 /// 200 = `{version, notes, pub_date, url, signature, min_supported_version?}` (Tauri v2 dynamic-server format).
 #[tauri::command]
-async fn check_update(app: AppHandle, server: String, token: String) -> UpdateCheck {
+async fn check_update(
+    app: AppHandle,
+    window: tauri::Window,
+    server: String,
+    token: String,
+) -> UpdateCheck {
+    if let Err(message) = only_from(&window, "main") {
+        return UpdateCheck::Error { message };
+    }
     if store_channel() {
         return UpdateCheck::Disabled;
     }
@@ -563,7 +605,13 @@ impl ProgressThrottle {
 /// Downloads, verifies (minisign public key of the build, signed version) and installs the update, then restarts.
 /// The Bearer token is set at runtime through the updater builder headers and removed for the artifact download.
 #[tauri::command]
-async fn install_update(app: AppHandle, server: String, token: String) -> Result<(), String> {
+async fn install_update(
+    app: AppHandle,
+    window: tauri::Window,
+    server: String,
+    token: String,
+) -> Result<(), String> {
+    only_from(&window, "main")?;
     if store_channel() {
         return Err("Updates come from the Microsoft Store.".into());
     }
@@ -662,7 +710,12 @@ struct HeartbeatState(Mutex<heartbeat::Heartbeat>);
 
 /// What the UI wants to be woken for besides the 30 s tick: the end of the countdown, the idle threshold.
 #[tauri::command]
-fn set_wake_plan(app: AppHandle, plan: heartbeat::WakePlan) -> Result<(), String> {
+fn set_wake_plan(
+    app: AppHandle,
+    window: tauri::Window,
+    plan: heartbeat::WakePlan,
+) -> Result<(), String> {
+    only_from(&window, "main")?;
     app.state::<HeartbeatState>()
         .0
         .lock()
@@ -678,7 +731,7 @@ fn spawn_heartbeat(app: AppHandle) {
         .spawn(move || loop {
             std::thread::sleep(Duration::from_millis(heartbeat::POLL_MS));
             let wake = match app.state::<HeartbeatState>().0.lock() {
-                Ok(mut beat) => beat.poll(heartbeat::now_ms(), idle_seconds),
+                Ok(mut beat) => beat.poll(heartbeat::now_ms(), read_idle_seconds),
                 Err(_) => None,
             };
             if let Some(wake) = wake {
@@ -689,7 +742,12 @@ fn spawn_heartbeat(app: AppHandle) {
 
 /// A friendly message as a native notification (see notify.rs). An error makes the UI show it inside the app.
 #[tauri::command]
-fn notify_friendly(app: AppHandle, note: notify::FriendlyNote) -> Result<(), String> {
+fn notify_friendly(
+    app: AppHandle,
+    window: tauri::Window,
+    note: notify::FriendlyNote,
+) -> Result<(), String> {
+    only_from(&window, "main")?;
     notify::show(&app, &note)
 }
 
@@ -838,7 +896,8 @@ pub fn run() {
             prompt::prompt_view,
             prompt::prompt_answer,
             prompt::prompt_focus,
-            prompt::prompt_close
+            prompt::prompt_close,
+            prompt::prompt_show_main
         ])
         .run(tauri::generate_context!())
         .expect("error while running TimeTrack");
@@ -847,6 +906,69 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod app_commands {
+        include!("../app-commands.rs");
+    }
+    use app_commands::{APP_COMMANDS, MAIN_COMMANDS, PROMPT_COMMANDS};
+
+    fn granted(capability: &str) -> Vec<String> {
+        let json: serde_json::Value = serde_json::from_str(capability).unwrap();
+        json["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p.as_str().map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn every_app_command_is_declared_and_granted_to_exactly_one_window() {
+        let main = granted(include_str!("../capabilities/default.json"));
+        let prompt = granted(include_str!("../capabilities/prompt.json"));
+        let allow = |command: &str| format!("allow-{}", command.replace('_', "-"));
+        for command in MAIN_COMMANDS {
+            assert!(main.contains(&allow(command)), "{command} for main");
+            assert!(
+                !prompt.contains(&allow(command)),
+                "{command} not for prompt"
+            );
+        }
+        for command in PROMPT_COMMANDS {
+            assert!(prompt.contains(&allow(command)), "{command} for prompt");
+            assert!(!main.contains(&allow(command)), "{command} not for main");
+        }
+        // The prompt window gets nothing else but listening to its content.
+        assert_eq!(prompt.len(), PROMPT_COMMANDS.len() + 2);
+        let mut both: Vec<&str> = MAIN_COMMANDS
+            .iter()
+            .chain(PROMPT_COMMANDS)
+            .copied()
+            .collect();
+        both.sort();
+        let mut declared = APP_COMMANDS.to_vec();
+        declared.sort();
+        assert_eq!(both, declared);
+        // The same list as `generate_handler!`.
+        let source = include_str!("lib.rs");
+        let start = source.find("generate_handler![").unwrap();
+        let end = start + source[start..].find(']').unwrap();
+        let mut registered: Vec<&str> = source[start + 18..end]
+            .split(',')
+            .map(|name| name.trim().trim_start_matches("prompt::"))
+            .filter(|name| !name.is_empty())
+            .collect();
+        registered.sort();
+        assert_eq!(registered, declared);
+    }
+
+    #[test]
+    fn privileged_commands_refuse_other_windows() {
+        assert!(caller_allowed("main", "main").is_ok());
+        assert!(caller_allowed("prompt", "main").is_err());
+        assert!(caller_allowed("main", prompt::LABEL).is_err());
+        assert!(caller_allowed(prompt::LABEL, prompt::LABEL).is_ok());
+    }
 
     #[test]
     fn endpoint_keeps_tauri_placeholders() {
