@@ -2,12 +2,12 @@
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { availableMonitors, currentMonitor, getCurrentWindow, type Monitor, PhysicalPosition, PhysicalSize } from '@tauri-apps/api/window';
 import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { notificationBody, type NotificationPermission, type Platform, type PromptClient, type PromptHost, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
+import { notificationBody, type NotificationPermission, type Platform, type WindowHost, type PromptClient, type PromptHost, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 
 const permission = (state: string): NotificationPermission => (state === 'granted' ? 'granted' : state === 'denied' ? 'denied' : 'prompt');
@@ -19,6 +19,33 @@ const promptHost: PromptHost = {
   close: () => invoke('prompt_close'),
   onAnswer: (handler) => void listen<PromptAnswer>('prompt-answer', (event) => handler(event.payload)),
 };
+
+const workArea = (monitor: Monitor) => ({ x: monitor.workArea.position.x, y: monitor.workArea.position.y, width: monitor.workArea.size.width, height: monitor.workArea.size.height });
+
+/** The main window's bounds (capabilities core:window:allow-set-size / allow-set-position / allow-unmaximize). */
+function windowHost(): WindowHost {
+  const win = getCurrentWindow();
+  return {
+    bounds: async () => {
+      if ((await win.isMaximized()) || (await win.isMinimized())) return null;
+      const [position, size] = await Promise.all([win.outerPosition(), win.innerSize()]);
+      return { x: position.x, y: position.y, width: size.width, height: size.height };
+    },
+    screens: async () => {
+      const [all, current, scale] = await Promise.all([availableMonitors(), currentMonitor(), win.scaleFactor()]);
+      return { areas: all.map(workArea), current: current === null ? null : workArea(current), scale };
+    },
+    setBounds: async (rect) => {
+      if (await win.isMaximized()) await win.unmaximize();
+      await win.setSize(new PhysicalSize(rect.width, rect.height));
+      await win.setPosition(new PhysicalPosition(rect.x, rect.y));
+    },
+    onChange: (handler) => {
+      void win.onResized(handler);
+      void win.onMoved(handler);
+    },
+  };
+}
 
 /** Inside the prompt window. */
 export function tauriPromptClient(): PromptClient {
@@ -80,6 +107,7 @@ export function tauriPlatform(): Platform {
     // A button of a working-hours reminder notification (src-tauri/src/notify.rs, known ids only).
     onNotificationAction: (handler) => void listen<string>('notification-action', (event) => handler(event.payload)),
     promptWindow: promptHost,
+    windowHost: windowHost(),
     // Title bar / native menus follow the app's theme; `null` hands it back to the system (capability core:window:allow-set-theme).
     setWindowTheme: (theme) => getCurrentWindow().setTheme(theme),
     autostartEnabled: () => isEnabled(),

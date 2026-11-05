@@ -33,7 +33,7 @@ Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile 
 - Tray timer (`H:MM` and task, tooltip with today's total, running / stopped icon) in the Windows notification area
   (bottom right, like Docker Desktop), the macOS menu bar and the Linux StatusNotifier / AppIndicator, with a translated
   menu: the running task and its time (refreshed every 30 s), Stop / Resume, Switch to (pinned and recent tasks),
-  Search task…, Open TimeTrack, Open Beacon, My time, *Pause friendly messages for 1 h*, Settings, Quit. A left click
+  Search task…, Open TimeTrack, Full view / Compact view, Open Beacon, My time, *Pause friendly messages for 1 h*, Settings, Quit. A left click
   shows or hides the window (Windows, macOS; Linux AppIndicators only open the menu). Closing or minimising the
   window keeps the app running in the tray: the timer, the "Still there?" check and the friendly messages carry on,
   woken on time by a wall-clock heartbeat in Rust (`src-tauri/src/heartbeat.rs`), not by the webview's timers, which
@@ -41,6 +41,11 @@ Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile 
   Settings.
 - Pinned and recent tasks (`Alt+1…9`), Resume the last task, Today / This week totals, search with `Ctrl/Cmd + K`, arrow
   keys and Enter.
+- Two views: the **compact view** (the quick tracker, one centred column up to 900 px wide) and the **full view** (from
+  900 px: sections sidebar, task list with the running timer on top, detail pane with the selected task's time today
+  and this week and the week by day; Settings as a page). Switch with the header button, the tray menu or
+  `Ctrl/Cmd + Shift + L`; each view reopens at its own remembered size and position, on screen. `F6` moves between
+  the panes. The window cannot be made smaller than the compact view (380 × 560).
 - Device-flow sign-in (no password typed in the app); `401` asks you to sign in again.
 - Task search, start / stop / switch. Offline queue: actions taken offline (and "Still there?" answers) are kept on this
   computer, survive a restart and are replayed in order with their real times (`startedAt` / `endedAt`, TimeTrackBundle

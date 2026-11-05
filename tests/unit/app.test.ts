@@ -664,7 +664,7 @@ describe('desktop app', () => {
       expect(ui.$<HTMLAnchorElement>('#open-beacon').href).toBe(`${HTTPS}/dashboard`);
       expect(ui.$('#open-beacon').getAttribute('aria-label')).toBe('Open Beacon');
       expect(ui.$<HTMLAnchorElement>('#open-my-time').href).toBe(`${HTTPS}/dashboard/tasks/time`);
-      expect([...nav.children].map((el) => el.id)).toEqual(['open-beacon', 'open-settings']);
+      expect([...nav.children].map((el) => el.id)).toEqual(['open-beacon', 'layout-toggle', 'open-settings']);
       const links = [...ui.root.querySelectorAll<HTMLAnchorElement>('#tasks a.beacon-link')];
       expect(links.map((a) => a.closest('li')?.getAttribute('data-task'))).toEqual(['T-101']);
       expect(links[0].getAttribute('aria-label')).toBe('Open “Write onboarding guide” in Beacon');

@@ -60,6 +60,9 @@ struct TrayMenuSpec {
     switch_to: Vec<TrayMenuItem>,
     search: String,
     open: String,
+    /// "Full view" (`layout-full`) or "Compact view" (`layout-compact`): the other view; absent while signed out.
+    #[serde(default)]
+    layout: Option<TrayMenuItem>,
     open_beacon: Option<String>,
     my_time: Option<String>,
     /// "Check for updates" (absent in the Microsoft Store build, where the Store updates the app).
@@ -85,6 +88,8 @@ fn tray_action_allowed(id: &str) -> bool {
             | "settings"
             | "pause-friendly"
             | "resume-friendly"
+            | "layout-full"
+            | "layout-compact"
     ) || (id.starts_with("switch:") && id.len() > 7 && id.len() <= 200)
 }
 
@@ -224,7 +229,7 @@ fn set_tray_status(
 }
 
 /// Rebuilds the tray menu with the UI's translated labels and quick tasks:
-/// status · Stop / Resume · Switch to ▸ · Search task… · — · Open TimeTrack · Open Beacon · My time · — · Pause friendly
+/// status · Stop / Resume · Switch to ▸ · Search task… · — · Open TimeTrack · Full / Compact view · Open Beacon · My time · — · Pause friendly
 /// messages 1 h · Check for updates… · Settings… · Quit.
 #[tauri::command]
 fn set_tray_menu(app: AppHandle, window: tauri::Window, menu: TrayMenuSpec) -> Result<(), String> {
@@ -270,6 +275,13 @@ fn set_tray_menu(app: AppHandle, window: tauri::Window, menu: TrayMenuSpec) -> R
     built
         .append(&MenuItem::with_id(&app, "open", &menu.open, true, None::<&str>).map_err(err)?)
         .map_err(err)?;
+    if let Some(item) = menu.layout.filter(|item| tray_action_allowed(&item.id)) {
+        built
+            .append(
+                &MenuItem::with_id(&app, item.id, &item.label, true, None::<&str>).map_err(err)?,
+            )
+            .map_err(err)?;
+    }
     if let Some(label) = menu.open_beacon {
         built
             .append(
@@ -768,7 +780,10 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 "open" => show_main(app),
                 "quit" => app.exit(0),
                 _ if tray_action_allowed(id) => {
-                    if matches!(id, "search" | "settings" | "check-updates") {
+                    if matches!(
+                        id,
+                        "search" | "settings" | "check-updates" | "layout-full" | "layout-compact"
+                    ) {
                         show_main(app);
                     }
                     let _ = app.emit("tray-action", id.to_string());
@@ -993,6 +1008,8 @@ mod tests {
             "settings",
             "pause-friendly",
             "resume-friendly",
+            "layout-full",
+            "layout-compact",
             "switch:T-1",
         ] {
             assert!(tray_action_allowed(id), "{id}");
@@ -1058,6 +1075,15 @@ mod tests {
         )
         .expect("old spec");
         assert!(old.pause_friendly.is_none());
+        assert!(old.layout.is_none());
+        let layout: TrayMenuSpec = serde_json::from_str(
+            r#"{"primary":null,"switchLabel":"s","switchTo":[],"search":"s","open":"o","layout":{"id":"layout-full","label":"Full view"},"openBeacon":null,"myTime":null,"checkUpdates":null,"settings":"s","quit":"q"}"#,
+        )
+        .expect("layout spec");
+        assert_eq!(
+            layout.layout.map(|item| item.id).as_deref(),
+            Some("layout-full")
+        );
     }
 
     #[test]

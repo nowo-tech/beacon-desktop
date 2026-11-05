@@ -13,7 +13,7 @@ import { type ClampNote, type QueuedAction, type SyncResult, applyLocally } from
 import { type ServerFeatures, effectiveThreshold, serverFeatures, thresholdChoices } from '../lib/serverFeatures';
 import { hostOf, prepareServerUrl, type ServerUrlProblem } from '../lib/serverUrl';
 import { type Feature, type LocalState, DEFAULT_SETTINGS, LOCAL_KEYS, MAX_PINNED, emptyState, hasConsent, loadLocal, recordConsent, saveLocal } from '../lib/settings';
-import { computeTotals, formatHoursMinutes, recentTasks, startOfWeek, taskContext, todayByTask, type Totals } from '../lib/summary';
+import { computeTotals, formatHoursMinutes, recentTasks, startOfDay, startOfWeek, taskContext, todayByTask, type Totals } from '../lib/summary';
 import { elapsedSeconds, formatElapsed } from '../lib/time';
 import { applyTheme, forcedTheme, THEMES, type ThemePreference } from '../lib/theme';
 import { appsPage, safeVerificationUri } from '../lib/urls';
@@ -43,6 +43,8 @@ import {
   toggleLocalDayOff,
 } from '../lib/schedule';
 import { withinWorkingHours } from '../lib/workingHours';
+import { type LayoutMode, layoutFor, loadWindowMemory, otherMode, placeWindow, saveWindowMemory, WINDOW_KEY, type WindowMemory } from '../lib/layout';
+import { type DaySpan, todaySpans, weekByTask, weekDays } from '../lib/week';
 import type { FriendlyNotification, Platform, TrayMenu, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
@@ -50,6 +52,9 @@ import { art, ERROR_POSES, moment, poseArt, variant, type Moment } from './masco
 import { PromptMount, type PromptAnswer, type PromptBlock, type PromptButton, type PromptChoices, type PromptTaskOption, type PromptText, type PromptView } from './prompt';
 
 export type View = 'loading' | 'login' | 'device' | 'main' | 'settings' | 'privacy' | 'update-required';
+
+/** Sections of the full layout's sidebar (the compact layout shows the tasks section). */
+export type Section = 'tasks' | 'quick' | 'time';
 
 export interface AppDeps {
   storage?: Storage;
@@ -67,6 +72,10 @@ export interface AppDeps {
   storeUrl?: string;
   /** Random source of the friendly messages (tests pin it). */
   random?: () => number;
+  /** Width of the window's content in CSS px (layout breakpoint); default `window.innerWidth`. */
+  viewportWidth?: () => number;
+  /** Pause before a moved / resized window is remembered (ms). */
+  windowSaveMs?: number;
 }
 
 export type Channel = 'direct' | 'store';
@@ -116,6 +125,8 @@ interface MainRegions {
   search: HTMLInputElement;
   quick: HTMLElement;
   list: HTMLElement;
+  /** Full layout, "My time": today's entries and the week by day. */
+  time: HTMLElement;
   footer: HTMLElement;
 }
 
@@ -221,6 +232,21 @@ export class DesktopApp {
   private readonly toastRegion: HTMLElement;
   private lastTrayMenu = '';
   private main: MainRegions | null = null;
+  /** Layout drawn now (from the window width, lib/layout.ts). */
+  layout: LayoutMode;
+  /** Full layout: sidebar section shown in the main pane. */
+  section: Section = 'tasks';
+  /** Full layout: task shown in the detail pane (`null`: the running one, if any). */
+  selectedTaskId: string | null = null;
+  /** View last used and the window's bounds in each one (per device). */
+  windowMemory: WindowMemory;
+  private windowTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A render is under way: focus moved back by `patch` is not a selection. */
+  private rendering = false;
+  /** Full layout: sections sidebar · main pane (messages and view) · detail pane. */
+  private readonly sidebar: HTMLElement;
+  private readonly center: HTMLElement;
+  private readonly detail: HTMLElement;
   private readonly header: HTMLElement;
   private readonly status: HTMLElement;
   /** Persistent polite live region: only its text changes, so an announcement is read once, not on every render. */
@@ -260,8 +286,18 @@ export class DesktopApp {
     this.body = h('div', { class: 'view', id: 'view' });
     this.liveRegion = h('p', { class: 'sr-only', id: 'live', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
     this.toastRegion = h('div', { class: 'toasts', id: 'toasts', attrs: { 'aria-live': 'polite', 'aria-relevant': 'additions' } });
-    this.root.replaceChildren(this.header, this.status, this.alert, this.liveRegion, this.body, this.toastRegion);
+    this.windowMemory = loadWindowMemory(this.storage);
+    this.layout = layoutFor(this.viewportWidth());
+    this.sidebar = h('nav', { class: 'sidebar pane', id: 'sidebar', attrs: { hidden: true, tabindex: '-1' } });
+    this.center = h('div', { class: 'main-pane pane', id: 'main-pane', attrs: { tabindex: '-1' } }, this.status, this.alert, this.body);
+    this.detail = h('aside', { class: 'detail pane', id: 'detail', attrs: { hidden: true, tabindex: '-1', 'aria-labelledby': 'detail-title' } });
+    this.root.replaceChildren(this.header, h('div', { class: 'frame', id: 'frame' }, this.sidebar, this.center, this.detail), this.liveRegion, this.toastRegion);
     document.addEventListener('keydown', (event) => this.onKey(event));
+    globalThis.addEventListener?.('resize', () => this.relayout());
+  }
+
+  private viewportWidth(): number {
+    return this.deps.viewportWidth?.() ?? globalThis.innerWidth ?? 0;
   }
 
   async init(): Promise<void> {
@@ -273,6 +309,7 @@ export class DesktopApp {
     // A button of a working-hours reminder notification (Start / Stop / Resume).
     this.platform.onNotificationAction((id) => void this.reminderAction(actionOfId(id)));
     this.platform.onShortcut(() => this.focusSearch());
+    await this.restoreWindow();
     await this.applyShortcut(this.state.settings.shortcut, false);
     this.token = await this.platform.secretGet();
     if (this.state.session === null || this.token === null) {
@@ -288,7 +325,7 @@ export class DesktopApp {
   destroy(): void {
     this.abort?.abort();
     for (const timer of [this.ticker, this.deviceTicker]) if (timer !== null) clearInterval(timer);
-    for (const timer of [this.searchTimer, this.noticeTimer, this.dailyTimer]) if (timer !== null) clearTimeout(timer);
+    for (const timer of [this.searchTimer, this.noticeTimer, this.dailyTimer, this.windowTimer]) if (timer !== null) clearTimeout(timer);
     this.main?.prompt.dispose();
   }
 
@@ -442,6 +479,8 @@ export class DesktopApp {
     this.main?.prompt.dispose();
     this.main = null;
     this.query = '';
+    this.section = 'tasks';
+    this.selectedTaskId = null;
     this.error = null;
     this.view = 'login';
     this.setNotice(notice);
@@ -1092,6 +1131,7 @@ export class DesktopApp {
       switchTo: signedIn ? this.quickTasks().slice(0, MAX_TRAY_TASKS).map((task) => ({ id: `switch:${task.id}`, label: task.title })) : [],
       search: t('traySearch'),
       open: t('trayOpen'),
+      layout: signedIn ? { id: `layout-${otherMode(this.layout)}`, label: t(this.layout === 'full' ? 'layoutCompact' : 'layoutFull') } : null,
       openBeacon: dashboardUrl(server) !== null ? t('openBeacon') : null,
       myTime: myTimeUrl(server) !== null ? t('myTime') : null,
       checkUpdates: signedIn && this.channel === 'direct' ? t('trayCheckUpdates') : null,
@@ -1116,6 +1156,7 @@ export class DesktopApp {
     else if (action === 'resume') await this.resume();
     else if (action === 'pause-friendly' || action === 'resume-friendly') await this.pauseFriendly(action === 'pause-friendly');
     else if (action === 'search') this.focusSearch();
+    else if (action === 'layout-full' || action === 'layout-compact') await this.setLayoutMode(action === 'layout-full' ? 'full' : 'compact');
     else if (action === 'open-beacon') this.openBeacon(dashboardUrl(server));
     else if (action === 'my-time') this.openBeacon(myTimeUrl(server));
     else if (action === 'settings' && this.state.session !== null) this.show('settings');
@@ -1553,7 +1594,10 @@ export class DesktopApp {
       // Not available on this system.
     }
     await this.platform.secretDelete();
-    for (const key of LOCAL_KEYS) this.storage.removeItem(key);
+    for (const key of [...LOCAL_KEYS, WINDOW_KEY]) this.storage.removeItem(key);
+    this.windowMemory = loadWindowMemory(this.storage);
+    this.section = 'tasks';
+    this.selectedTaskId = null;
     this.token = null;
     this.state = emptyState();
     this.serverDraft = this.deps.beaconUrl ?? '';
@@ -1571,6 +1615,121 @@ export class DesktopApp {
     await this.updateTray();
   }
 
+  // ---- window layouts ---------------------------------------------------------------------------------------------
+
+  /** The full layout is drawn: wide window, signed in, on the main screen or Settings. */
+  fullLayout(): boolean {
+    return this.layout === 'full' && this.state.session !== null && (this.view === 'main' || this.view === 'settings' || this.view === 'privacy');
+  }
+
+  /** Section of the main screen: the sidebar's choice in the full layout, the task list in the compact one. */
+  currentSection(): Section {
+    return this.fullLayout() ? this.section : 'tasks';
+  }
+
+  /** The window width crossed the breakpoint: redraw in the other layout. */
+  relayout(): void {
+    if (!this.root.isConnected) return;
+    const layout = layoutFor(this.viewportWidth());
+    if (layout === this.layout) return;
+    this.layout = layout;
+    this.render();
+    void this.updateTray();
+  }
+
+  /** Puts the window where it was in the view last used (or at that view's preset size), on a screen it fits on. */
+  private async restoreWindow(): Promise<void> {
+    const host = this.platform.windowHost;
+    try {
+      const target = placeWindow(this.windowMemory.mode, this.windowMemory, await host.screens());
+      const current = await host.bounds();
+      if (current === null || JSON.stringify(current) !== JSON.stringify(target)) await host.setBounds(target);
+    } catch {
+      // The window stays where the OS put it.
+    }
+    host.onChange(() => this.windowChanged());
+  }
+
+  private windowChanged(): void {
+    if (this.windowTimer !== null) clearTimeout(this.windowTimer);
+    this.windowTimer = setTimeout(() => {
+      this.windowTimer = null;
+      void this.rememberWindow();
+    }, this.deps.windowSaveMs ?? 400);
+  }
+
+  /** Remembers the window's bounds for the layout its width gives (not while maximised or minimised). */
+  async rememberWindow(): Promise<void> {
+    let bounds;
+    try {
+      bounds = await this.platform.windowHost.bounds();
+    } catch {
+      return;
+    }
+    if (bounds === null) return;
+    const mode = layoutFor(this.viewportWidth());
+    this.windowMemory = { mode, bounds: { ...this.windowMemory.bounds, [mode]: bounds } };
+    saveWindowMemory(this.windowMemory, this.storage);
+  }
+
+  /** "Compact view" / "Full view": resizes the window to that view's remembered size (or preset), on screen. */
+  async setLayoutMode(mode: LayoutMode): Promise<void> {
+    if (this.windowTimer !== null) {
+      clearTimeout(this.windowTimer);
+      this.windowTimer = null;
+    }
+    await this.rememberWindow();
+    this.windowMemory = { ...this.windowMemory, mode };
+    saveWindowMemory(this.windowMemory, this.storage);
+    const host = this.platform.windowHost;
+    try {
+      await host.setBounds(placeWindow(mode, this.windowMemory, await host.screens()));
+    } catch {
+      // The OS refused: the window keeps its size, and the layout keeps following its width.
+    }
+    this.announce(this.t(mode === 'full' ? 'layoutFull' : 'layoutCompact'));
+  }
+
+  /** Full layout: a sidebar section in the main pane. */
+  showSection(section: Section): void {
+    this.section = section;
+    if (this.view === 'main') this.render();
+    else this.show('main');
+  }
+
+  /** Full layout: the task shown in the detail pane (rows are selected by click or keyboard focus). */
+  selectTask(taskId: string): void {
+    if (!this.fullLayout() || this.selectedTaskId === taskId) return;
+    this.selectedTaskId = taskId;
+    this.main?.root.querySelectorAll<HTMLElement>('li[data-task]').forEach((row) => this.markRow(row, row.dataset.task === taskId));
+    this.renderPanes();
+  }
+
+  private markRow(row: HTMLElement, selected: boolean): void {
+    row.classList.toggle('selected', selected);
+    if (selected) row.setAttribute('aria-current', 'true');
+    else row.removeAttribute('aria-current');
+  }
+
+  /** The detail pane's task: the selected one, else the running one. */
+  detailTask(): Task | null {
+    const timer = this.state.activeTimer;
+    const id = this.selectedTaskId ?? timer?.taskId ?? null;
+    if (id === null) return null;
+    if (timer !== null && timer.taskId === id) return this.timerTask(timer);
+    return this.findTask(id) ?? this.quickTasks().find((task) => task.id === id) ?? null;
+  }
+
+  /** F6 / Shift+F6: sidebar → main pane → detail pane (full layout). */
+  private cyclePane(step: number): void {
+    const panes = [this.sidebar, this.center, this.detail].filter((pane) => !pane.hidden);
+    const at = panes.findIndex((pane) => pane.contains(document.activeElement));
+    const next = panes[at === -1 ? 0 : (at + step + panes.length) % panes.length];
+    const preferred = next === this.sidebar ? next.querySelector<HTMLElement>('[aria-current="page"]') : next === this.center && this.view === 'main' && this.currentSection() === 'tasks' ? this.main?.search : null;
+    const target = preferred ?? next.querySelector<HTMLElement>('button:not([disabled]), a[href], input, select, [tabindex="0"]') ?? next;
+    target.focus();
+  }
+
   // ---- keyboard ---------------------------------------------------------------------------------------------------
 
   focusSearch(): void {
@@ -1580,7 +1739,10 @@ export class DesktopApp {
     this.main?.search.select();
   }
 
-  /** In-app shortcuts: Ctrl/⌘+K or "/" search, Alt+1…9 quick tasks, Ctrl/⌘+Shift+S stop / resume, Ctrl/⌘+, settings. */
+  /**
+   * In-app shortcuts: Ctrl/⌘+K or "/" search, Alt+1…9 quick tasks, Ctrl/⌘+Shift+S stop / resume, Ctrl/⌘+, settings,
+   * Ctrl/⌘+Shift+L compact / full view, F6 / Shift+F6 next / previous pane (full view).
+   */
   private onKey(event: KeyboardEvent): void {
     if (!this.root.isConnected) return;
     if (this.view !== 'main' && this.view !== 'settings' && this.view !== 'privacy') return;
@@ -1593,6 +1755,12 @@ export class DesktopApp {
     } else if (event.key === '/' && !typing && !mod) {
       event.preventDefault();
       this.focusSearch();
+    } else if (mod && event.shiftKey && event.key.toLowerCase() === 'l') {
+      event.preventDefault();
+      void this.setLayoutMode(otherMode(this.layout));
+    } else if (event.key === 'F6' && this.fullLayout()) {
+      event.preventDefault();
+      this.cyclePane(event.shiftKey ? -1 : 1);
     } else if (mod && event.key === ',') {
       event.preventDefault();
       this.show('settings');
@@ -1704,6 +1872,15 @@ export class DesktopApp {
   // ---- rendering --------------------------------------------------------------------------------------------------
 
   render(): void {
+    this.rendering = true;
+    try {
+      this.draw();
+    } finally {
+      this.rendering = false;
+    }
+  }
+
+  private draw(): void {
     if (this.ticker !== null) {
       clearInterval(this.ticker);
       this.ticker = null;
@@ -1715,6 +1892,7 @@ export class DesktopApp {
     this.renderHeader();
     this.renderMessages();
     this.renderToasts();
+    this.renderPanes();
     if (this.view === 'main') {
       this.renderMain();
     } else {
@@ -1790,10 +1968,168 @@ export class DesktopApp {
         { class: 'actions', attrs: { 'aria-label': t('beaconLinks') } },
         this.offline && signedIn && this.queue.size > 0 && h('span', { class: 'badge', id: 'queue-badge', attrs: { title: t('offline', { count: this.queue.size }) } }, String(this.queue.size)),
         dashboard !== null && this.beaconLink(dashboard, t('openBeacon'), { id: 'open-beacon', icon: true }),
+        signedIn && (this.view === 'main' || sub) && this.layoutToggle(),
         this.view === 'main' && this.iconButton('settings', t('settings'), { id: 'open-settings', onClick: () => this.show('settings'), shortcut: 'Control+,' }),
         this.view === 'login' && this.iconButton('help', t('whereFind'), { id: 'help', onClick: () => this.toggleWhere() }),
       ),
     ]);
+  }
+
+  /** Header: "Full view" (icon only in the compact header) / "Compact view" (with its label in the full one). */
+  private layoutToggle(): HTMLButtonElement {
+    const to = otherMode(this.layout);
+    const label = this.t(to === 'full' ? 'layoutToFull' : 'layoutToCompact');
+    const props = { id: 'layout-toggle', onClick: () => void this.setLayoutMode(to), shortcut: 'Control+Shift+L' };
+    if (to === 'full') return this.iconButton('columns', label, props);
+    return h(
+      'button',
+      { class: 'secondary small', id: props.id, attrs: { type: 'button', title: label, 'aria-keyshortcuts': props.shortcut }, on: { click: props.onClick } },
+      icon('compact'),
+      this.t('layoutCompact'),
+    );
+  }
+
+  /** Full layout: the sections sidebar and (on the main screen) the detail pane; both empty and hidden otherwise. */
+  private renderPanes(): void {
+    const full = this.fullLayout();
+    const detail = full && this.view === 'main';
+    this.root.setAttribute('data-layout', full ? 'full' : 'compact');
+    this.root.classList.toggle('with-detail', detail);
+    this.sidebar.hidden = !full;
+    this.detail.hidden = !detail;
+    this.sidebar.setAttribute('aria-label', this.t('sectionsLabel'));
+    patch(this.sidebar, full ? this.renderSidebar() : []);
+    patch(this.detail, detail ? this.renderDetail() : []);
+  }
+
+  private renderSidebar(): Child[] {
+    const t = this.t;
+    const main = this.view === 'main';
+    const item = (id: string, name: IconName, label: string, current: boolean, onClick: () => void, shortcut?: string) =>
+      h(
+        'li',
+        {},
+        h('button', { class: 'nav-item', id, key: id, attrs: { type: 'button', 'aria-current': current ? 'page' : undefined, 'aria-keyshortcuts': shortcut }, on: { click: onClick } }, icon(name), h('span', {}, label)),
+      );
+    return [
+      h(
+        'ul',
+        { class: 'nav-list' },
+        item('nav-tasks', 'list', t('navTasks'), main && this.section === 'tasks', () => this.showSection('tasks')),
+        item('nav-quick', 'pin', t('pinnedRecent'), main && this.section === 'quick', () => this.showSection('quick')),
+        item('nav-time', 'clock', t('myTime'), main && this.section === 'time', () => this.showSection('time')),
+        item('nav-settings', 'settings', t('settings'), !main, () => this.show('settings'), 'Control+,'),
+      ),
+      h('p', { class: 'nav-hint muted', id: 'pane-hint' }, t('paneHint')),
+    ];
+  }
+
+  /** Detail pane: the selected (or running) task with its time today and this week, then the week by day. */
+  private renderDetail(): Child[] {
+    const t = this.t;
+    const now = this.now();
+    const timer = this.state.activeTimer;
+    const entries = this.entries;
+    const task = this.detailTask();
+    const tile = (id: string, label: string, seconds: number) => h('div', { class: 'tile', id }, h('span', { class: 'label' }, label), h('span', { class: 'value' }, formatHoursMinutes(seconds)));
+    const blocks: Child[] = [];
+    if (task === null) {
+      blocks.push(h('h2', { class: 'detail-title', id: 'detail-title' }, t('detailLabel')), h('p', { class: 'muted', id: 'detail-empty' }, t('detailEmpty')));
+    } else {
+      const running = timer !== null && timer.taskId === task.id;
+      const pinned = this.isPinned(task.id);
+      const link = taskUrl(task.url, this.state.session?.server);
+      const context = taskContext(task);
+      blocks.push(
+        h('span', { class: running ? 'chip running' : 'chip' }, running ? `● ${t('tracking')}` : t('detailLabel')),
+        h('h2', { class: 'detail-title', id: 'detail-title' }, task.title),
+        context !== '' && h('p', { class: 'muted', id: 'detail-context' }, context),
+        h(
+          'div',
+          { class: 'row-actions' },
+          running
+            ? h('button', { class: 'danger small', id: 'detail-stop', key: 'detail-stop', attrs: { type: 'button', 'aria-disabled': this.busy ? 'true' : undefined, 'aria-label': t('stopTask', { task: task.title }) }, on: { click: () => this.whenIdle(() => this.stop()) } }, icon('stop'), t('stop'))
+            : h('button', { class: 'primary small', id: 'detail-start', key: 'detail-start', attrs: { type: 'button', 'aria-disabled': this.busy ? 'true' : undefined, 'aria-label': t(timer !== null ? 'switchTask' : 'startTask', { task: task.title }) }, on: { click: () => this.whenIdle(() => this.start(task)) } }, icon(timer !== null ? 'switch' : 'play'), t(timer !== null ? 'switch' : 'start')),
+          h('button', { class: 'secondary small', id: 'detail-pin', key: 'detail-pin', attrs: { type: 'button', 'aria-pressed': pinned ? 'true' : 'false' }, on: { click: () => this.togglePin(task) } }, icon('pin'), t(pinned ? 'unpin' : 'pin')),
+          link !== null && this.beaconLink(link, t('openTaskInBeacon', { title: task.title }), { id: 'detail-open-in-beacon', key: 'detail-open-in-beacon', icon: true }),
+        ),
+      );
+      if (entries !== null) {
+        blocks.push(
+          h('div', { class: 'detail-tiles' }, tile('detail-today', t('detailToday'), todayByTask(entries, timer, now).get(task.id) ?? 0), tile('detail-week', t('detailWeek'), weekByTask(entries, timer, now).get(task.id) ?? 0)),
+          h('h3', { class: 'section-title', id: 'detail-entries-title' }, t('detailEntries')),
+          this.spanList('detail-entries', todaySpans(entries, timer, now, task.id), false),
+        );
+      }
+    }
+    if (entries === null) blocks.push(h('p', { class: 'muted', id: 'detail-no-entries' }, t('entriesUnavailable')));
+    else blocks.push(h('h3', { class: 'section-title', id: 'detail-week-title' }, t('weekSummary')), this.weekList('detail-week-days', 'detail-week-title'));
+    return blocks;
+  }
+
+  /** Full layout, "My time": today's entries (all tasks) and the week by day, with Beacon's page when there is one. */
+  private renderMyTime(): Child[] {
+    const t = this.t;
+    const myTime = myTimeUrl(this.state.session?.server);
+    if (this.entries === null) return [h('h2', { class: 'section-title', id: 'time-title' }, t('myTime')), h('p', { class: 'empty-state', id: 'time-unavailable' }, t('entriesUnavailable'))];
+    return [
+      h('h2', { class: 'section-title', id: 'time-title' }, t('todayEntries')),
+      this.spanList('time-today', todaySpans(this.entries, this.state.activeTimer, this.now()), true),
+      h('h2', { class: 'section-title', id: 'time-week-title' }, t('weekSummary')),
+      this.weekList('time-week', 'time-week-title'),
+      myTime !== null && this.beaconLink(myTime, t('myTimeInBeacon'), { id: 'time-open-beacon', key: 'time-open-beacon', className: 'my-time' }),
+    ];
+  }
+
+  /** Today's stretches: `09:00–10:15 · task · 1:15` (the running one ends "now"). */
+  private spanList(id: string, spans: DaySpan[], titles: boolean): HTMLElement {
+    const t = this.t;
+    if (spans.length === 0) return h('p', { class: 'muted', id: `${id}-empty` }, t('noEntriesToday'));
+    return h(
+      'ul',
+      { class: 'spans', id },
+      ...spans.map((span) =>
+        h(
+          'li',
+          { class: span.running ? 'running' : undefined },
+          h('span', { class: 'span-time' }, `${this.time(span.from)}–${span.running ? t('now') : this.time(span.to)}`),
+          titles && h('span', { class: 'span-task', attrs: { title: span.taskTitle } }, span.taskTitle),
+          h('span', { class: 'span-duration' }, formatHoursMinutes(span.seconds)),
+        ),
+      ),
+    );
+  }
+
+  /** The week by day: name, a bar (decorative, scaled to the longest day or 8 h) and the time as text. */
+  private weekList(id: string, labelledBy: string): HTMLElement {
+    const now = this.now();
+    const days = weekDays(this.entries ?? [], this.state.activeTimer, now);
+    const longest = Math.max(8 * 3600, ...days.map((day) => day.seconds));
+    const today = startOfDay(now).getTime();
+    const weekday = new Intl.DateTimeFormat(this.locale, { weekday: 'short' });
+    const total = days.reduce((sum, day) => sum + day.seconds, 0);
+    return h(
+      'div',
+      { class: 'week', id },
+      h(
+        'ol',
+        { class: 'week-days', attrs: { 'aria-labelledby': labelledBy } },
+        ...days.map((day) => {
+          const fill = h('span', { class: 'week-fill' });
+          // Through the CSSOM (allowed by the CSP, unlike a style attribute).
+          fill.style.width = `${Math.round((day.seconds / longest) * 100)}%`;
+          const isToday = day.date.getTime() === today;
+          return h(
+            'li',
+            { class: isToday ? 'today' : undefined, attrs: { 'aria-current': isToday ? 'date' : undefined } },
+            h('span', { class: 'week-day' }, weekday.format(day.date)),
+            h('span', { class: 'week-bar', attrs: { 'aria-hidden': 'true' } }, fill),
+            h('span', { class: 'week-value' }, formatHoursMinutes(day.seconds)),
+          );
+        }),
+      ),
+      h('p', { class: 'week-total' }, h('span', {}, this.t('thisWeek')), h('strong', {}, formatHoursMinutes(total))),
+    );
   }
 
   private toggleWhere(): void {
@@ -1987,6 +2323,12 @@ export class DesktopApp {
     this.renderTimer(main.timer);
     this.renderTotals(main.totals);
     this.renderLists(main);
+    const section = this.currentSection();
+    (main.search.parentElement as HTMLElement).hidden = section !== 'tasks';
+    main.quick.hidden = section === 'time';
+    main.list.hidden = section !== 'tasks';
+    main.time.hidden = section !== 'time';
+    patch(main.time, section === 'time' ? this.renderMyTime() : []);
     patch(main.footer, [h('span', {}, this.t('signedInAs', { name: this.state.session?.displayName ?? this.state.session?.identifier ?? '' }))]);
     this.renderModal(main);
   }
@@ -2000,7 +2342,7 @@ export class DesktopApp {
     const open = view !== null;
     // Visible (and the rest inert) before the prompt is drawn, so it can take the focus.
     main.modal.hidden = !open;
-    for (const child of [this.header, ...Array.from(main.root.children)]) {
+    for (const child of [this.header, this.sidebar, this.detail, ...Array.from(main.root.children)]) {
       if (child !== main.modal) child.toggleAttribute('inert', open);
     }
     main.prompt.show(view);
@@ -2079,7 +2421,12 @@ export class DesktopApp {
     search.addEventListener('input', () => {
       if (this.searchTimer !== null) clearTimeout(this.searchTimer);
       this.query = search.value;
-      this.renderLists(this.main as MainRegions);
+      this.rendering = true;
+      try {
+        this.renderLists(this.main as MainRegions);
+      } finally {
+        this.rendering = false;
+      }
       this.searchTimer = setTimeout(() => void this.search(search.value), this.deps.searchDelayMs ?? 250);
     });
     search.addEventListener('keydown', (event) => {
@@ -2099,6 +2446,7 @@ export class DesktopApp {
       search,
       quick: h('section', { class: 'list-section', id: 'quick-section' }),
       list: h('section', { class: 'list-section', id: 'list-section' }),
+      time: h('section', { class: 'list-section', id: 'time-section', attrs: { hidden: true, 'aria-labelledby': 'time-title' } }),
       footer: h('footer', { class: 'footer' }),
       modal,
       prompt: new PromptMount(modal, { onAnswer: (answer) => void this.answerPrompt(answer), onExpired: () => void this.tick(), now: this.now }),
@@ -2106,6 +2454,14 @@ export class DesktopApp {
     regions.root.addEventListener('keydown', (event) => {
       if (event.target !== search && !regions.modal.contains(event.target as Node)) this.onListKey(event);
     });
+    // Full layout: a row clicked or reached with the keyboard shows in the detail pane.
+    const pick = (event: Event) => {
+      if (this.rendering) return;
+      const row = (event.target as Element | null)?.closest?.('li[data-task]');
+      if (row instanceof HTMLElement && row.dataset.task !== undefined) this.selectTask(row.dataset.task);
+    };
+    regions.root.addEventListener('focusin', pick);
+    regions.root.addEventListener('click', pick);
     regions.root.append(
       regions.banners,
       regions.timer,
@@ -2114,6 +2470,7 @@ export class DesktopApp {
       h('p', { class: 'sr-only', id: 'search-hint' }, t('searchHint')),
       regions.quick,
       regions.list,
+      regions.time,
       regions.footer,
       regions.modal,
     );
@@ -2386,7 +2743,7 @@ export class DesktopApp {
 
   private renderLists(main: MainRegions): void {
     const t = this.t;
-    const searching = this.query.trim() !== '';
+    const searching = this.query.trim() !== '' && this.currentSection() === 'tasks';
     const perTask = this.entries !== null ? todayByTask(this.entries, this.state.activeTimer, this.now()) : new Map<string, number>();
     const quick = this.quickTasks();
     if (searching) {
@@ -2428,9 +2785,10 @@ export class DesktopApp {
     const seconds = perTask.get(task.id) ?? 0;
     const meta = [taskContext(task), seconds > 0 ? t('todayOnTask', { time: formatHoursMinutes(seconds) }) : ''].filter((part) => part !== '').join(' · ');
     const label = running ? t('switchTask', { task: task.title }) : t('startTask', { task: task.title });
+    const selected = this.fullLayout() && this.detailTask()?.id === task.id;
     return h(
       'li',
-      { attrs: { 'data-task': task.id } },
+      { class: selected ? 'selected' : undefined, attrs: { 'data-task': task.id, 'aria-current': selected ? 'true' : undefined } },
       h('button', {
         class: pinned ? 'icon-button pin pinned' : 'icon-button pin',
         key: `pin-${task.id}`,
@@ -3019,7 +3377,7 @@ export class DesktopApp {
       { id: 'privacy' },
       h('p', {}, t('privacyIntro')),
       section('privacy-sent', 'privacySentTitle', ['privacySentSignIn', 'privacySentTimer', 'privacySentIdle', 'privacySentUpdates']),
-      section('privacy-local', 'privacyLocalTitle', ['privacyLocalToken', 'privacyLocalState', 'privacyLocalIdle', 'privacyLocalTotals']),
+      section('privacy-local', 'privacyLocalTitle', ['privacyLocalToken', 'privacyLocalState', 'privacyLocalWindow', 'privacyLocalIdle', 'privacyLocalTotals']),
       section('privacy-never', 'privacyNeverTitle', ['privacyNever']),
       h('p', {}, t('privacyRights')),
       h(
