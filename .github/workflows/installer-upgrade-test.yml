@@ -114,9 +114,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
@@ -148,7 +148,7 @@ jobs:
           # GC-I6: marks this build as a test build; release.yml refuses to publish anything next to this file.
           echo "Test build of $GITHUB_REF ($GITHUB_SHA) with a throwaway updater key. Never publish it." > out/THROWAWAY-UPDATER-KEY-DO-NOT-PUBLISH.txt
           ls -la out
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: new-installer
           path: out/
@@ -164,11 +164,11 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: scripts/windows
       - name: Old installers
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: desktop-windows
           path: old
@@ -176,13 +176,13 @@ jobs:
           github-token: ${{ github.token }}
       - name: New installer (this run's build)
         if: needs.plan.outputs.new_run_id == ''
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: new-installer
           path: new
       - name: New installer (another run, release or this workflow)
         if: needs.plan.outputs.new_run_id != ''
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: '{desktop-windows,new-installer}'
           merge-multiple: true
@@ -197,7 +197,7 @@ jobs:
           & .\scripts\windows\upgrade-test.ps1 -Old ${{ matrix.old }} -OldDir old -NewDir new -Mode ${{ matrix.mode }} -AppRunning:$running -OldMsiStays:$msiStays -OutDir out
           exit $LASTEXITCODE
       - if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: upgrade-${{ matrix.id }}
           path: out/

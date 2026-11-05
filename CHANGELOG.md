@@ -38,6 +38,11 @@ Likely 0.5.1.
     self-hosted servers behind a private or corporate CA are not supported, updater included (FY-I7).
     docs/PINNING.md lists the server-side preconditions: CAA for `letsencrypt.org` and `pki.goog`, an explicit ACME
     issuer (never ZeroSSL), and a chain monitor (FY-M1).
+- Every GitHub Action in `.github/workflows/*.yml` (`release.yml` included) is pinned to a full commit SHA, with its
+  version in a trailing comment, instead of a movable tag such as `@v7`, `@v2` or the `@stable` branch (security
+  review 2026-11-05, GC-I9). Dependabot (`github-actions`, monthly) keeps the SHAs and comments up to date;
+  `dtolnay/rust-toolchain` now gets `toolchain: stable` as an input, since the ref no longer names it.
+
 ## [0.5.0] - 2026-11-05
 
 **Upgrading on Windows from 0.1.0 (`.msi`):** the in-app update installs in passive mode, so it removes a leftover

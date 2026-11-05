@@ -28,7 +28,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2 # the PR merge commit and its base parent, for the path filter
       - name: Detect changed inputs
@@ -36,9 +36,9 @@ jobs:
         run: .github/scripts/ci-changes.sh "${{ github.event_name }}" | tee -a "$GITHUB_OUTPUT"
       # pnpm/action-setup (~30 s) and the actions cache for the pnpm store (~3 min to restore) only on GitHub-hosted runners.
       - if: steps.changes.outputs.web == 'true' && runner.environment == 'github-hosted'
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - if: steps.changes.outputs.web == 'true'
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
@@ -76,7 +76,7 @@ jobs:
       - if: steps.changes.outputs.web == 'true'
         run: pnpm test:e2e
       - if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-results
           path: test-results/
@@ -93,7 +93,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2 # the PR merge commit and its base parent, for the path filter
       - name: Detect changed inputs
@@ -106,12 +106,13 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
             libssl-dev libxss-dev libx11-dev libdbus-1-dev
       - if: steps.changes.outputs.rust == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-11-05
         with:
+          toolchain: stable
           components: rustfmt, clippy
       # Self-hosted runners use sccache and host-mounted cargo caches; uploading target/ there only costs time.
       - if: steps.changes.outputs.rust == 'true' && runner.environment == 'github-hosted'
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
       - name: Placeholder frontend (generate_context! needs ../dist)
