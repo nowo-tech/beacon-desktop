@@ -1366,10 +1366,10 @@ mod tests {
         let plain = root.join("plain");
         std::fs::write(&plain, "x").unwrap();
         let real = RealFs;
-        let plain = plain.to_str().unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let plain = plain.to_str().unwrap();
             assert!(!real.is_executable(plain));
             std::fs::set_permissions(plain, std::fs::Permissions::from_mode(0o755)).unwrap();
             assert!(real.is_executable(plain));
@@ -1379,6 +1379,8 @@ mod tests {
             assert_ne!(stem(&resolved), "brave");
             assert!(custom_browser(link.to_str().unwrap(), Os::Linux, &real).is_err());
         }
+        #[cfg(not(unix))]
+        assert!(real.is_executable(plain.to_str().unwrap()));
         assert!(!real.is_executable(root.to_str().unwrap()));
         assert!(real.resolve("/nonexistent/browser").is_none());
         std::fs::remove_dir_all(root).unwrap();
