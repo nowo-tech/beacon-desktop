@@ -5158,8 +5158,8 @@ dependencies = [
 name = "time-track-desktop"
 version = "0.5.0"
 dependencies = [
- "core-foundation 0.10.1",
  "block2",
+ "core-foundation 0.10.1",
  "core-foundation-sys",
  "keyring",
  "libc",
@@ -5182,8 +5182,8 @@ dependencies = [
  "tauri-winrt-notification",
  "url",
  "user-idle",
- "winreg",
  "windows-sys 0.61.2",
+ "winreg",
  "zbus 5.19.0",
 ]
 
