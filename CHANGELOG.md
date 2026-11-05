@@ -229,7 +229,9 @@ system, any other is kept.
   regular file: an `.exe` outside `C:\Windows` on Windows, an `.app` bundle with `Contents/Info.plist` on macOS, a
   file with an execute bit on Linux; shells, interpreters and launchers (`sh`, `bash`, `env`, `python3`, `perl`,
   `xdg-open`, `cmd`, `powershell`, `mshta`, `rundll32` …) are refused, also behind a symbolic link. It is checked again
-  before every launch. *Clear local data* resets it to the system default.
+  before every launch, and the resolved path that was checked is the one launched (GC-I7). *Clear local data* resets it to the system default.
+- `platforms.yml` runs Rust clippy and tests on hosted Windows and macOS for pull requests that touch `src-tauri`
+  and by hand; ci.yml keeps Linux (GC-I4).
 - Linux `.desktop` entries whose `Exec` hands the URL to a shell (`sh -c "browser %u"`, `bash -lc …`, or the URL inside
   a quoted command string, which the Desktop Entry spec forbids) are not offered as browsers (GC-I1).
 - Signing out also deletes the last task, the pinned tasks, the "Working without a timer?" state and the generic
