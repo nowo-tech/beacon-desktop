@@ -19,7 +19,10 @@ Likely 0.5.1.
   anyway"; a non-sensitive event (host, pin set version) goes to stderr. Self-hosted servers keep standard WebPKI and
   Settings says "Connection not pinned"; loopback is never pinned. The pin set (`src-tauri/pins.json`) has a version
   and an expiry (2028-05-01); past it the app falls back to WebPKI and asks for an update, and CI fails 90 days
-  before. New commands `beacon_fetch` and `connection_security`, granted to `main` only.
+  before. New commands `beacon_fetch` and `connection_security`, granted to `main` only. The pin set is the one the
+  review (FY) checked: Let's Encrypt and Google Trust Services only. It also accepts a Cloudflare edge certificate
+  from either of them, but not one from SSL.com or Sectigo, so `beacon.nowo.tech` stays *DNS only* (docs/PINNING.md,
+  *Cloudflare proxy*).
 - Pinning follow-ups (security review 2026-11-05, appendix FY):
   - `beacon_fetch`, the update check and the updater only talk to the origin (scheme, host, port) of the server being
     signed in to: new command `beacon_bind` (main window only), called before the sign-in requests and at start-up;
