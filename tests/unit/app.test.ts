@@ -33,7 +33,8 @@ async function signedIn(options: Parameters<typeof mount>[0] = {}, server = env.
   const ui = mount(options);
   await ui.app.init();
   const done = ui.app.connect(server);
-  await tick();
+  // The code screen appears after preflight and the device-code request: wait for it (slow CI runners).
+  for (let waited = 0; ui.$('#user-code') === null && waited < 3000; waited += 40) await tick();
   const code = ui.$('#user-code').textContent ?? '';
   await env.control('device/approve', { userCode: code });
   await done;
