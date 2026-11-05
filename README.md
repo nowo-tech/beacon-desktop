@@ -171,6 +171,13 @@ required" screen send you to the Store listing instead.
   to Beacon is not trusted (unexpected certificate)*, with no way to continue. Self-hosted servers keep standard TLS
   validation, shown as *Connection not pinned* in Settings; `localhost` is never pinned. The update check and the
   updater use the same pinned client. Rotation runbook: [docs/PINNING.md](docs/PINNING.md).
+- **Self-hosted servers need a publicly trusted certificate.** The app trusts only the Mozilla root store compiled
+  into it (`webpki-roots`), never the OS trust store. A self-hosted Beacon behind a private or corporate CA (or a
+  self-signed certificate) is **not supported**: sign-in, API calls, the update check and in-app updates all fail
+  with a certificate error. Use a certificate that chains to the Mozilla root store (for example Let's Encrypt).
+- **Bound to your server.** Every request and the updater go to the origin (scheme, host, port) of the server you
+  signed in to, and nowhere else; switching servers means signing out first. Plain `http://` to `localhost`,
+  `127.0.0.1` or `[::1]` works in development (debug) builds only; release builds require `https://`.
 - Reporting and design notes: [SECURITY.md](SECURITY.md).
 
 ## Tauri capabilities
@@ -249,4 +256,5 @@ requests.
 
 Docs: [CHANGELOG](CHANGELOG.md) · [PRIVACY](PRIVACY.md) · [SECURITY](SECURITY.md) · [CONTRIBUTING](CONTRIBUTING.md)
 
-License: [MIT](LICENSE).
+License: [MIT](LICENSE). Third-party notices (`webpki-roots`, CDLA-Permissive-2.0):
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

@@ -128,6 +128,21 @@ Likely 0.5.0.
   Settings says "Connection not pinned"; loopback is never pinned. The pin set (`src-tauri/pins.json`) has a version
   and an expiry (2028-05-01); past it the app falls back to WebPKI and asks for an update, and CI fails 90 days
   before. New commands `beacon_fetch` and `connection_security`, granted to `main` only.
+- Pinning follow-ups (security review 2026-11-05, appendix FY):
+  - `beacon_fetch`, the update check and the updater only talk to the origin (scheme, host, port) of the server being
+    signed in to: new command `beacon_bind` (main window only), called before the sign-in requests and at start-up;
+    other origins are refused, so `Authorization` never leaves that origin; switching servers needs a sign-out
+    (`secret_delete` clears the binding). Plain `http://` to `localhost` / `127.0.0.1` / `[::1]` is accepted in debug
+    builds only (FY-L1).
+  - Pin set expiry tripwire: `.github/workflows/pins.yml` runs `scripts/release/check-pin-expiry.mjs` every Monday and
+    on demand (fails within 90 days), and `release.yml` refuses to build when the set expires within 180 days (FY-L2).
+  - An expired pin set is shown in the main view (card) and once per pin set version as a desktop notification, not
+    only in Settings (FY-I1).
+  - Updater error details no longer carry URL query strings (pre-signed artifact URLs) into "Copy details" (FY-I2).
+  - THIRD-PARTY-NOTICES.md lists `webpki-roots` (CDLA-Permissive-2.0) (FY-I6). README / SECURITY.md say that
+    self-hosted servers behind a private or corporate CA are not supported, updater included (FY-I7).
+    docs/PINNING.md lists the server-side preconditions: CAA for `letsencrypt.org` and `pki.goog`, an explicit ACME
+    issuer (never ZeroSSL), and a chain monitor (FY-M1).
 - App commands are ACL-scoped (security review 2026-11-05, FN-L1): `build.rs` declares them in the app manifest
   (`src-tauri/app-commands.rs`) and each capability grants its window only its own (`main`: keychain, tray,
   shortcut, updater, heartbeat, notifications, opening the prompt; `prompt`: `prompt_view`, `prompt_answer`,

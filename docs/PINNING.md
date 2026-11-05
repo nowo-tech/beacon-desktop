@@ -23,13 +23,19 @@ Bearer token) is sent.
      (unexpected certificate)*, with Retry / Copy details. The action is not queued as offline. A non-sensitive event
      goes to stderr: `[tls-pinning] beacon_untrusted_certificate: unexpected certificate for <host> (pin set v<N>)`.
      It never includes a token, URL or certificate.
+- **Bound origin.** `beacon_fetch`, the update check and the updater only talk to the origin of the server being
+  signed in to (`beacon_bind`); plain `http://` to loopback works in debug builds only.
+- **Trusted roots.** Only `webpki-roots` (Mozilla root store, CDLA-Permissive-2.0) is trusted, for every host.
+  Self-hosted servers behind a private or corporate CA are not supported (API and updater).
 - **Scope.** Only the hosts listed in `pins.json` are pinned. Self-hosted Beacon servers keep normal WebPKI
   validation, and Settings shows *Connection not pinned*. Loopback (`localhost`, `127.0.0.1`, `::1`) and IP addresses
   are never pinned.
 - **Expiry.** The pin set has an `expires` date. After that date the app stops enforcing it: it falls back to WebPKI
-  and Settings shows *pinning expired, update the app*. This means an old install can never be locked out. CI fails
-  90 days before the expiry date (`shipped_pin_set_is_valid_and_covers_the_production_host`), so a new set ships in
-  time.
+  and Settings shows *pinning expired, update the app*; the main view shows the same as a card, and a desktop
+  notification says it once per pin set version. This means an old install can never be locked out. CI fails 90 days
+  before the expiry date (`shipped_pin_set_is_valid_and_covers_the_production_host` on Rust changes, and
+  `.github/workflows/pins.yml` every Monday and on demand), and `release.yml` refuses to build a release when the set
+  expires within 180 days (`scripts/release/check-pin-expiry.mjs`), so a new set ships in time.
 - **Updater.** The update check sends the Bearer token to Beacon, so it must be pinned. The minisign signature already
   protects the downloaded artifact, but it does nothing for the token. The artifact download goes to object storage
   (another host, standard WebPKI, no token), and the signature is checked against the key built into the app.
@@ -71,6 +77,33 @@ To recompute a pin from a certificate:
 openssl x509 -in ca.pem -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64
 ```
 
+## Server-side preconditions (operations)
+
+A pinned app fails closed when the official host serves a chain without a pinned key, and the pinned update check
+fails too, so stuck apps cannot even learn about a fix. These must be in place on `beacon.nowo.tech` (and the name it
+points to, `little-vps.nowo.tech`) **before** a pinned build reaches users, and stay in place (audit FY-M1):
+
+1. **CAA records** that allow only the pinned CAs: `0 issue "letsencrypt.org"`, `0 issue "pki.goog"`, plus an
+   `iodef` contact (for example `0 iodef "mailto:security@…"`). No CAA record means any CA may issue.
+2. **An explicit ACME issuer** in the edge (Caddy / FrankenPHP / reverse proxy): Let's Encrypt only, or Let's Encrypt
+   plus Google Trust Services (with EAB). **Never ZeroSSL**: Caddy's default issuer list falls back to ZeroSSL after a
+   failed Let's Encrypt renewal, and one fallback would put an unpinned (Sectigo) chain on the host and lock out
+   every pinned install while browsers look fine.
+3. **A chain monitor** (CI cron or uptime check) that fails when no SPKI of the chain served by the host is in
+   `src-tauri/pins.json`, for example:
+
+   ```sh
+   openssl s_client -connect beacon.nowo.tech:443 -servername beacon.nowo.tech -showcerts </dev/null 2>/dev/null \
+     | awk '/BEGIN CERT/,/END CERT/' | csplit -s -z -f cert- - '/BEGIN CERT/' '{*}'
+   for c in cert-*; do openssl x509 -in "$c" -pubkey -noout | openssl pkey -pubin -outform der \
+     | openssl dgst -sha256 -binary | base64; done | grep -qxFf <(jq -r '.pins[].sha256' src-tauri/pins.json)
+   ```
+
+   It should also check that the served chain validates against `webpki-roots` (not only the system store), since
+   that is the only root store the app trusts.
+
+Before any CA switch (runbook step 3), check the new chain against these three as well.
+
 ## Rotation runbook
 
 Pins only change with a new signed app version. Always keep at least one pin that matches the live chain in every
@@ -107,6 +140,10 @@ TLS mock server at test time (`rcgen`).
   `beacon.nowo.tech`, has a backup CA, and expires more than 90 days out).
 - `src-tauri/src/net.rs` (end to end): a local TLS mock server with a CA made at test time, reached through the real
   client. Covered: the pinned success, a pin mismatch (exact error, and the server never receives the request), an
-  intermediate chain, an unpinned host, and an untrusted CA (plain TLS error).
+  intermediate chain, an unpinned host, an untrusted CA (plain TLS error), and requests to another origin than the
+  bound server (refused, nothing and no token reaches the server). Loopback http only in debug builds; updater error
+  details without query strings.
 - `tests/unit/pinning.test.ts`: the `beacon_fetch` bridge, the error mapping (Spanish and English text, no offline
-  mode, nothing queued) and the Settings line.
+  mode, nothing queued), the Settings line, binding the server (sign-in, start-up, sign-out) and the expired-pinning
+  card and notification.
+- `tests/unit/release-scripts.test.ts`: the expiry tripwire script used by `pins.yml` and `release.yml`.
