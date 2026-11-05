@@ -22,6 +22,7 @@
     "screenshots:friendly": "FRIENDLY_SCREENS=${FRIENDLY_SCREENS:-out/friendly-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/friendly.spec.ts",
     "screenshots:native": "NATIVE_SCREENS=${NATIVE_SCREENS:-out/native-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/native.spec.ts",
     "screenshots:schedule": "SCHEDULE_SCREENS=${SCHEDULE_SCREENS:-out/schedule-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/schedule.spec.ts",
+    "screenshots:layout": "LAYOUT_SCREENS=${LAYOUT_SCREENS:-out/layout-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/layout.spec.ts",
     "mock": "node mock-server/server.mjs",
     "release:check": "node scripts/release/check-updater-key.mjs",
     "store:manifest": "node scripts/store/msix-manifest.mjs"

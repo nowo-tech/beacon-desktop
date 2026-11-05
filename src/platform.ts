@@ -1,3 +1,4 @@
+import type { Rect, Screens } from './lib/layout';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 
 /**
@@ -48,6 +49,8 @@ export interface TrayMenu {
   switchTo: TrayMenuItem[];
   search: string;
   open: string;
+  /** "Full view" (`layout-full`) / "Compact view" (`layout-compact`): the other view (absent while signed out). */
+  layout?: TrayMenuItem | null;
   /** Present only while connected to an https server (see lib/beacon.ts). */
   openBeacon: string | null;
   myTime: string | null;
@@ -115,6 +118,17 @@ export function notificationBody(text: string, os: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/** The main window's size and position, in physical pixels (lib/layout.ts). */
+export interface WindowHost {
+  /** Outer position and inner size; `null` while maximised or minimised (nothing worth remembering). */
+  bounds(): Promise<Rect | null>;
+  screens(): Promise<Screens>;
+  /** Restores a maximised window first. */
+  setBounds(rect: Rect): Promise<void>;
+  /** The window was moved or resized (by the person or by `setBounds`). */
+  onChange(handler: () => void): void;
+}
+
 /** Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME, so the default adds Shift. */
 export const DEFAULT_SHORTCUT = 'CommandOrControl+Alt+Shift+T';
 
@@ -146,6 +160,8 @@ export interface Platform {
   setWakePlan(plan: WakePlan): Promise<void>;
   /** The "Still there?" window; `null` when the host has none (the prompt is then a modal in the main window). */
   readonly promptWindow: PromptHost | null;
+  /** Size and position of the main window ("Compact view" / "Full view"). */
+  readonly windowHost: WindowHost;
   /** Native window theme (title bar, menus): `null` follows the system. */
   setWindowTheme(theme: 'light' | 'dark' | null): Promise<void>;
   autostartEnabled(): Promise<boolean>;
@@ -181,6 +197,10 @@ export interface BrowserHooks {
   installStepMs: number;
   /** Number of successful fake installs (the real app relaunches instead). */
   installed: number;
+  /** Fake main window: its bounds (`null` = maximised), the screens and every `setBounds` asked for. */
+  window: { bounds: Rect | null; screens: Screens; set: Rect[] };
+  /** The fake window was moved or resized. */
+  windowChanged(): void;
   /** Last native window theme asked for (`null` = follow the system; `undefined` = never set). */
   windowTheme: 'light' | 'dark' | null | undefined;
   /** Fake OS notification permission (`unsupported` by default: friendly messages stay in the app). */
@@ -219,6 +239,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
   const wakeHandlers: ((reason: WakeReason) => void)[] = [];
   const actionHandlers: ((id: string) => void)[] = [];
   const answerHandlers: ((answer: PromptAnswer) => void)[] = [];
+  const windowHandlers: (() => void)[] = [];
   const hooks: BrowserHooks = {
     idleSeconds: 0,
     opened: [],
@@ -238,6 +259,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     ],
     installStepMs: 0,
     installed: 0,
+    window: { bounds: { x: 760, y: 220, width: 400, height: 640 }, screens: { areas: [{ x: 0, y: 0, width: 1920, height: 1040 }], current: { x: 0, y: 0, width: 1920, height: 1040 }, scale: 1 }, set: [] },
+    windowChanged: () => windowHandlers.forEach((handler) => handler()),
     windowTheme: undefined,
     notificationPermission: 'unsupported',
     permissionAnswer: 'granted',
@@ -299,6 +322,15 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     setWakePlan: async (plan) => void (hooks.wakePlan = plan),
     get promptWindow() {
       return hooks.nativePrompt ? promptHost : null;
+    },
+    windowHost: {
+      bounds: async () => hooks.window.bounds,
+      screens: async () => hooks.window.screens,
+      setBounds: async (rect) => {
+        hooks.window.set.push(rect);
+        hooks.window.bounds = rect;
+      },
+      onChange: (handler) => void windowHandlers.push(handler),
     },
     setWindowTheme: async (theme) => void (hooks.windowTheme = theme),
     autostartEnabled: async () => autostart,

@@ -8,6 +8,8 @@ export default defineConfig({
     // Friendly messages and schedule reminders depend on the local time: every test gets the same zone (tests that
     // need another one pass it explicitly).
     env: { TZ: 'UTC' },
+    // DOM tests run at the compact window size (as the e2e tests); layout tests resize the fake window themselves.
+    environmentOptions: { happyDOM: { width: 400, height: 640 } },
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts', 'scripts/**/*.mjs'],

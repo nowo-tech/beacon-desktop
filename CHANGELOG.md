@@ -9,6 +9,28 @@ Likely 0.5.0.
 
 ### Added
 
+- **Compact and full window views** (`src/lib/layout.ts`). Below 900 px the window keeps the quick tracker: one
+  column, at most 33rem wide and centred, so a window a bit wider never shows a stretched, empty UI. From 900 px (and
+  signed in) the full desktop view takes over: a sections sidebar (*Tasks*, *Pinned & recent*, *My time*, *Settings*),
+  the task list with the running timer pinned to the top of its pane, and a detail pane with the selected (or running)
+  task — Start / Switch / Stop, Pin, Open in Beacon, its time today and this week, today's entries on it — and the week
+  by day. *My time* lists today's entries of every task and the week by day; *Settings* opens as a page in the main
+  pane. Everything comes from the entries the app already reads (`src/lib/week.ts`), computed locally.
+- **"Compact view" / "Full view" toggle** in the header, in the tray menu (`layout-full` / `layout-compact`) and with
+  Ctrl/⌘+Shift+L: the window is resized to the size remembered for that view (else 400 × 640 or 1200 × 780), kept on
+  a screen it fits on or centred on the current one, never larger than the work area. The view, size and position of
+  each view are remembered per device (`time-track-desktop.window` in local storage; removed by *Clear local data*;
+  listed in *What we collect*); maximised or minimised windows are not remembered. Capabilities
+  `core:window:allow-set-size`, `allow-set-position` and `allow-unmaximize` (main window only).
+- Keyboard and screen readers in the full view: F6 / Shift+F6 move between the sidebar, the main pane and the detail
+  pane; arrow keys or a click on a row show that task in the detail pane (the row is marked `aria-current`); landmarks
+  `nav` (Sections), `main` and `aside` (Task details); the week is a list with the time as text (the bars are
+  decorative) and today marked `aria-current="date"`. Panes are inert behind the "Still there?" modal. English and
+  Spanish.
+- Tests: `tests/unit/layout.test.ts`, `tests/unit/layout-app.test.ts`, and `tests/e2e/layout.spec.ts` (400 × 640 and
+  1280 × 800 in light and dark: no horizontal scroll, panes never overlap, axe; view toggle, Ctrl+Shift+L, F6).
+  `pnpm screenshots:layout` writes Spanish review screenshots of both views and the width in between. The mock
+  server gets `POST /__mock/entries/seed`.
 - **Light and dark theme switch**: Settings → Theme, *System* (default) / *Light* / *Dark*, stored locally
   (`settings.theme`), applied before the first screen and to the native window (title bar) through Tauri's
   `Window.setTheme` (capability `core:window:allow-set-theme`). Every colour comes from the CSS tokens; text pairs keep
@@ -130,6 +152,8 @@ Likely 0.5.0.
 
 ### Changed
 
+- The main window opens at 400 × 640 and can no longer be made smaller than the compact layout (`minWidth` 380,
+  `minHeight` 560, was 360 × 480). The "Still there?" window keeps a fixed size (no longer resizable).
 - Overtime lines ("take a real break", from 6 h) carry no figure at all in any language: no hour count, no "ten
   minutes" (owner decision); a test enforces it.
 - The in-app toast (fallback) reserves room below the page while it is visible, so it never covers the last task rows.

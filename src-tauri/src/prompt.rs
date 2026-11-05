@@ -16,7 +16,7 @@ use tauri::{
 };
 
 pub const LABEL: &str = "prompt";
-/// Logical size of the prompt window (the content scrolls if a long translation needs more).
+/// Logical size of the prompt window, fixed (not resizable; the content scrolls if a long translation needs more).
 pub const WIDTH: f64 = 440.0;
 pub const HEIGHT: f64 = 560.0;
 
@@ -169,8 +169,7 @@ pub fn prompt_open(app: AppHandle, window: tauri::Window, view: Value) -> Result
     )
     .title(title)
     .inner_size(WIDTH, HEIGHT)
-    .min_inner_size(360.0, 420.0)
-    .resizable(true)
+    .resizable(false)
     .minimizable(false)
     .maximizable(false)
     .closable(false)
