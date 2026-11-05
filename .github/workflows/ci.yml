@@ -34,13 +34,32 @@ jobs:
       - name: Detect changed inputs
         id: changes
         run: .github/scripts/ci-changes.sh "${{ github.event_name }}" | tee -a "$GITHUB_OUTPUT"
-      - if: steps.changes.outputs.web == 'true'
+      # pnpm/action-setup (~30 s) and the actions cache for the pnpm store (~3 min to restore) only on GitHub-hosted runners.
+      - if: steps.changes.outputs.web == 'true' && runner.environment == 'github-hosted'
         uses: pnpm/action-setup@v6
       - if: steps.changes.outputs.web == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
+      # Self-hosted Linux images ship pnpm through corepack and a persistent pnpm store: use them, check the version
+      # against packageManager, and fall back to a corepack shim in RUNNER_TEMP when the image's pnpm differs.
+      - name: pnpm from the runner image (corepack)
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux' && steps.changes.outputs.web == 'true'
+        shell: bash
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+        run: |
+          want="$(node -p "require('./package.json').packageManager.split('@')[1].split('+')[0]")"
+          have="$(pnpm --version 2>/dev/null || true)"
+          if [ "$have" != "$want" ]; then
+            echo "::notice::runner pnpm '${have:-none}' != packageManager $want, using corepack"
+            corepack enable pnpm --install-directory "$RUNNER_TEMP/corepack-bin"
+            echo "$RUNNER_TEMP/corepack-bin" >> "$GITHUB_PATH"
+            have="$("$RUNNER_TEMP/corepack-bin/pnpm" --version)"
+          fi
+          echo "pnpm $have"
+          [ "$have" = "$want" ]
       - if: steps.changes.outputs.web == 'true'
         run: pnpm install --frozen-lockfile
       - if: steps.changes.outputs.web == 'true'
