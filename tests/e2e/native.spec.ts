@@ -86,7 +86,8 @@ test('a friendly message goes out as a desktop notification, not as a toast; the
   await expect.poll(() => page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.friendly.length)).toBe(1);
   const [sent] = await page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.friendly);
   expect(sent?.title).toBe('Milestone!');
-  expect(sent?.body).toMatch(/\b2 hours\b/);
+  // The line is picked at random from the milestone pool; one of its six lines carries no hour count.
+  expect(sent?.body).toMatch(/\b2 hours\b|^Another big chunk done\./);
   expect(sent?.pose).toMatch(/^[a-z-]+$/);
   await expect(page.locator('#cheer')).toHaveCount(0);
   const notice = page.getByRole('region', { name: 'Friendly messages now pop up on your desktop' });
