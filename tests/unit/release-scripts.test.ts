@@ -8,9 +8,11 @@ const SHAPED_KEY = Buffer.from(`untrusted comment: minisign public key: 01234567
 const config = (pubkey?: string) => ({ plugins: { updater: pubkey === undefined ? undefined : { pubkey } } });
 
 describe('updater key release check', () => {
-  it('the committed config carries the placeholder, and the Rust side knows the same marker', () => {
+  it('the committed config carries the owner\'s updater public key, and the Rust side knows the placeholder marker', () => {
     const conf = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
-    expect(conf.plugins.updater.pubkey).toBe(PLACEHOLDER);
+    expect(conf.plugins.updater.pubkey).not.toBe(PLACEHOLDER);
+    expect(describePubkey(conf.plugins.updater.pubkey)).toBe('B39E7F906C923893');
+    expect(checkUpdaterKey({ config: conf, env: {} })).toMatchObject({ ok: true, level: 'ok' });
     expect(conf.bundle.createUpdaterArtifacts).toBe(true);
     expect(conf.bundle.windows.nsis.installMode).toBe('currentUser');
     expect(conf.bundle.targets).not.toContain('msi');
