@@ -7,10 +7,13 @@
 //! there?"; it is not stored, logged or sent (only the user's answer is).
 
 mod heartbeat;
+mod net;
 mod notify;
+mod pinning;
 mod pose_art;
 mod prompt;
 
+use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -18,8 +21,6 @@ use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent, Wry};
-use tauri_plugin_http::reqwest;
-use tauri_plugin_http::reqwest::header::AUTHORIZATION;
 use tauri_plugin_updater::UpdaterExt;
 
 const KEYCHAIN_SERVICE: &str = "tech.nowo.time-track-desktop";
@@ -531,16 +532,12 @@ async fn check_update(
             &app.package_info().version.to_string(),
         )
         .replace("{{bundle_type}}", bundle);
-    let response = match reqwest::Client::new()
-        .get(&url)
-        .bearer_auth(&token)
-        .send()
-        .await
-    {
+    // Pinned TLS on the official host (net.rs): the Bearer token never goes through an inspecting proxy.
+    let response = match net::client().get(&url).bearer_auth(&token).send().await {
         Ok(response) => response,
         Err(e) => {
             return UpdateCheck::Error {
-                message: e.to_string(),
+                message: net::describe_error(e),
             }
         }
     };
@@ -627,11 +624,16 @@ async fn install_update(
         .map_err(|e| e.to_string())?
         .header("Authorization", format!("Bearer {token}"))
         .map_err(|e| e.to_string())?
+        // Same pinned TLS as the API (net.rs): the update check carries the Bearer token. The artifact itself is
+        // also verified with the minisign key of the build.
+        .configure_client(|client| {
+            client.tls_backend_preconfigured(pinning::shipped_client_config())
+        })
         .build()
         .map_err(|e| e.to_string())?
         .check()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| net::error_text(&e))?;
     // Gone since the check (rolled back, or another copy already updated): the UI shows the Beacon download.
     let Some(mut update) = update else {
         return Err("This update is no longer offered.".into());
@@ -653,7 +655,7 @@ async fn install_update(
             },
         )
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| net::error_text(&e))?;
     app.restart()
 }
 
@@ -818,7 +820,6 @@ pub fn run() {
         builder.plugin(tauri_plugin_updater::Builder::new().build())
     };
     builder
-        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
@@ -890,6 +891,8 @@ pub fn run() {
             set_global_shortcut,
             check_update,
             install_update,
+            net::beacon_fetch,
+            net::connection_security,
             set_wake_plan,
             notify_friendly,
             prompt::prompt_open,
@@ -955,7 +958,7 @@ mod tests {
         let end = start + source[start..].find(']').unwrap();
         let mut registered: Vec<&str> = source[start + 18..end]
             .split(',')
-            .map(|name| name.trim().trim_start_matches("prompt::"))
+            .map(|name| name.trim().rsplit("::").next().unwrap_or_default())
             .filter(|name| !name.is_empty())
             .collect();
         registered.sort();

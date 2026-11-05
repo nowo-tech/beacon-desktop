@@ -1,0 +1,16 @@
+{
+  "$comment": "TLS public-key pins of the official Beacon host(s), compiled into the app (src/pinning.rs). SPKI SHA-256, base64. CA keys only, never a leaf key. Rotation: docs/PINNING.md.",
+  "version": 1,
+  "issued": "2026-11-05",
+  "expires": "2028-05-01",
+  "hosts": ["beacon.nowo.tech"],
+  "pins": [
+    { "sha256": "fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88=", "label": "ISRG Root YR (Let's Encrypt Gen Y RSA root; in the served chain, cross-signed by ISRG Root X1)" },
+    { "sha256": "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=", "label": "ISRG Root X1 (trust anchor of the served chain)" },
+    { "sha256": "LoMHBotttiDko50Gi13uXW71eIy7LAttI+rYT8wXF4w=", "label": "Let's Encrypt YR1 (issuing intermediate seen 2026-11-05)" },
+    { "sha256": "sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w=", "label": "ISRG Root YE (Let's Encrypt Gen Y ECDSA root)" },
+    { "sha256": "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=", "label": "ISRG Root X2 (Let's Encrypt ECDSA root)" },
+    { "sha256": "hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=", "label": "GTS Root R1 (backup CA: Google Trust Services, RSA)" },
+    { "sha256": "mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=", "label": "GTS Root R4 (backup CA: Google Trust Services, ECDSA)" }
+  ]
+}

@@ -15,6 +15,13 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
   updates. The Microsoft Store build never checks with Beacon: the Store updates it.
 - Nothing else: no screenshots, keystrokes, applications, window titles, URLs, activity or idle state.
 
+How it travels: always over HTTPS. For the official Beacon server, the app only accepts certificates from the
+certificate authorities whose keys are built into it (TLS public-key pinning): a network that intercepts encrypted
+traffic (a TLS-inspecting proxy, antivirus or a rogue certificate) cannot read or change what is sent, and the app
+sends nothing and shows "La conexión con Beacon no es de confianza (certificado inesperado)" instead. Other servers
+use standard TLS validation (Settings says "Connection not pinned"). Nothing about this check is sent anywhere; a
+mismatch is logged locally with the server name only, never a token.
+
 ## Stored on this computer
 
 - The session token, in the OS keychain.

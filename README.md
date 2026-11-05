@@ -160,13 +160,27 @@ required" screen send you to the Store listing instead.
 
 <img src="docs/images/desktop-store-about.png" alt="Settings, About: Updates come from the Microsoft Store" width="200"> <img src="docs/images/desktop-store-update-required.png" alt="Update required in the Store build: Open Microsoft Store" width="200">
 
+## Security
+
+- **TLS public-key pinning.** Traffic to the official Beacon host (`beacon.nowo.tech`) cannot be read or modified
+  even on a network with a TLS-inspecting proxy or a rogue CA trusted by the OS: the Rust HTTP client
+  (`src-tauri/src/net.rs`, `src-tauri/src/pinning.rs`) validates the chain against the compiled-in Mozilla roots and
+  then requires one of the pinned CA keys (`src-tauri/pins.json`: Let's Encrypt / ISRG roots plus Google Trust
+  Services as the backup CA; never the leaf, so certificate renewals every 60–90 days need nothing). On a mismatch the
+  app sends nothing and shows *La conexión con Beacon no es de confianza (certificado inesperado)* / *The connection
+  to Beacon is not trusted (unexpected certificate)*, with no way to continue. Self-hosted servers keep standard TLS
+  validation, shown as *Connection not pinned* in Settings; `localhost` is never pinned. The update check and the
+  updater use the same pinned client. Rotation runbook: [docs/PINNING.md](docs/PINNING.md).
+- Reporting and design notes: [SECURITY.md](SECURITY.md).
+
 ## Tauri capabilities
 
 - **Every app command is ACL-scoped.** `src-tauri/build.rs` declares them in the app manifest
   (`tauri_build::AppManifest::commands`, list in `src-tauri/app-commands.rs`), so Tauri only lets a window call the
   commands its capability grants (`allow-<command>`); without a manifest any local window could call any command.
   A Rust test checks the list against `generate_handler!` and that each command is granted to exactly one window.
-- `src-tauri/capabilities/default.json`, window `main`: core defaults, HTTP to your server, opener,
+- `src-tauri/capabilities/default.json`, window `main`: core defaults, `beacon_fetch` (every request to your server,
+  through the pinned Rust client; there is no HTTP plugin permission) and `connection_security`, opener,
   `notification:default`, autostart enable / disable / is-enabled, process restart, set theme, and the app commands
   `secret_get` / `secret_set` / `secret_delete`, `idle_seconds`, `set_tray_status`, `set_tray_menu`,
   `set_global_shortcut`, `check_update`, `install_update`, `set_wake_plan`, `notify_friendly`, `prompt_open`,

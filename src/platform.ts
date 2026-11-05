@@ -115,12 +115,24 @@ export function notificationBody(text: string, os: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * How the connection to the server is protected (Settings). `pinned`: the official Beacon host, TLS public keys pinned
+ * in the app (docs/PINNING.md); `unpinned`: another server, standard TLS validation; `expired`: this build's pin set
+ * expired (update the app); `local`: loopback development server.
+ */
+export interface ConnectionSecurity {
+  status: 'pinned' | 'unpinned' | 'expired' | 'local';
+  pinSetVersion: number;
+}
+
 /** Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME, so the default adds Shift. */
 export const DEFAULT_SHORTCUT = 'CommandOrControl+Alt+Shift+T';
 
 export interface Platform {
   readonly kind: 'tauri' | 'browser';
   fetch: typeof fetch;
+  /** TLS pinning state for `server`; `null` when the host does not know (plain browser: the browser validates TLS). */
+  connectionSecurity(server: string): Promise<ConnectionSecurity | null>;
   appVersion(): Promise<string>;
   hostName(): Promise<string>;
   secretGet(): Promise<string | null>;
@@ -201,6 +213,8 @@ export interface BrowserHooks {
   promptFocused: number;
   /** The fake prompt window cannot be opened. */
   promptFails: boolean;
+  /** What the fake host answers for the connection's TLS pinning (`null`: unknown, nothing shown). */
+  connectionSecurity: ConnectionSecurity | null;
   shortcutPressed(): void;
   trayAction(action: string): void;
   /** The fake heartbeat fires. */
@@ -249,6 +263,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     promptOpened: 0,
     promptFocused: 0,
     promptFails: false,
+    connectionSecurity: null,
     shortcutPressed: () => shortcutHandlers.forEach((handler) => handler()),
     trayAction: (action) => trayHandlers.forEach((handler) => handler(action)),
     wake: (reason = 'tick') => wakeHandlers.forEach((handler) => handler(reason)),
@@ -269,6 +284,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     kind: 'browser',
     hooks,
     fetch: fetchImpl,
+    connectionSecurity: async () => hooks.connectionSecurity,
     appVersion: async () => version,
     hostName: async () => 'Browser',
     secretGet: async () => secret,

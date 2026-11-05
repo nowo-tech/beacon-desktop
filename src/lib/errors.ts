@@ -2,6 +2,17 @@ import { ApiError } from '../api/client';
 import type { MessageKey } from './i18n';
 import { hostOf } from './serverUrl';
 
+/**
+ * Marker of a TLS pin mismatch on the official Beacon host (src-tauri/src/pinning.rs `UNTRUSTED_MARKER`): the Rust
+ * client refused the server's certificate chain, so nothing was sent. Keep both in step.
+ */
+export const UNTRUSTED_CERTIFICATE = 'beacon_untrusted_certificate';
+
+/** True for a pin mismatch: fail closed, shown as an error (never as "offline", never with "continue anyway"). */
+export function isUntrustedCertificate(error: unknown): boolean {
+  return error instanceof ApiError && error.isNetwork && error.message.includes(UNTRUSTED_CERTIFICATE);
+}
+
 /** What the user can do about an error. `retry` repeats the failed action; `copy` copies the technical details. */
 export type ErrorAction = 'retry' | 'copy' | 'reconnect' | 'help';
 
@@ -53,6 +64,7 @@ export function describeError(error: unknown, context: ErrorContext): ErrorView 
     details: errorDetails(error, context),
   });
   if (!(error instanceof ApiError)) return view('generic', 'errGenericTitle', 'errGenericText', ['retry', 'copy']);
+  if (isUntrustedCertificate(error)) return view('untrusted_certificate', 'errUntrustedTitle', 'errUntrustedText', ['retry', 'copy']);
   if (error.isNetwork) return view('unreachable', 'errUnreachableTitle', 'errUnreachableText', ['retry', 'copy']);
   if (context.stage === 'preflight' && (error.status === 404 || error.status === 405)) {
     return view('not_beacon', 'errNotBeaconTitle', 'errNotBeaconText', ['retry', 'help', 'copy']);

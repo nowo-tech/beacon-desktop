@@ -4,10 +4,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart';
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { notificationBody, type NotificationPermission, type Platform, type PromptClient, type PromptHost, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
+import { type NativeRequest, type NativeResponse, nativeFetch } from './lib/nativeFetch';
+import { type ConnectionSecurity, notificationBody, type NotificationPermission, type Platform, type PromptClient, type PromptHost, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 
 const permission = (state: string): NotificationPermission => (state === 'granted' ? 'granted' : state === 'denied' ? 'denied' : 'prompt');
@@ -33,8 +33,10 @@ export function tauriPromptClient(): PromptClient {
 export function tauriPlatform(): Platform {
   return {
     kind: 'tauri',
+    // Rust HTTP client with TLS public-key pinning for the official Beacon host (src-tauri/src/net.rs, docs/PINNING.md).
     // No redirects: the Bearer token stays bound to the configured server (audit CN D8).
-    fetch: ((input: RequestInfo | URL, init?: RequestInit) => tauriFetch(input, { ...init, maxRedirections: 0 })) as typeof fetch,
+    fetch: nativeFetch((request: NativeRequest) => invoke<NativeResponse>('beacon_fetch', { request })),
+    connectionSecurity: (server) => invoke<ConnectionSecurity>('connection_security', { server }),
     appVersion: () => getVersion(),
     hostName: async () => (navigator.platform.toLowerCase().includes('mac') ? 'Mac' : navigator.platform.toLowerCase().includes('win') ? 'Windows PC' : 'Linux PC'),
     secretGet: () => invoke<string | null>('secret_get'),

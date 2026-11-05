@@ -2,7 +2,7 @@ import { ApiError, TimeTrackApi, normalizeServerUrl } from '../api/client';
 import type { DeviceCode, Entry, Me, Task, Timer } from '../api/types';
 import { dashboardUrl, myTimeUrl, sameOriginHttps, taskUrl } from '../lib/beacon';
 import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
-import { type ErrorStage, type ErrorView, describeError } from '../lib/errors';
+import { type ErrorStage, type ErrorView, describeError, isUntrustedCertificate } from '../lib/errors';
 import { type Card, type Switches, afterStop, beaconLocale, beaconTimeZone, CARD_TTL_MINUTES, CATALOG, DAILY_TOAST_MS, EMPTY_MESSAGES, IDLE_COUNTDOWN_MINUTES, lineText, MEETING_COUNTDOWN_MINUTES, messageLocale, MIN_GAP_MINUTES, nextCard, noticeTitle, pausedAt, pauseMessages, pickDailyDone, pickIdleLine, resumeMessages, taskKind, visibleCard, zonedParts } from '../lib/friendly';
 import type { NoticeKind, PoseId, TaskKind } from '../lib/messages/types';
 import { createTranslator, detectLocale, type Locale, type MessageKey, type Translate } from '../lib/i18n';
@@ -43,7 +43,7 @@ import {
   toggleLocalDayOff,
 } from '../lib/schedule';
 import { withinWorkingHours } from '../lib/workingHours';
-import type { FriendlyNotification, Platform, TrayMenu, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
+import type { ConnectionSecurity, FriendlyNotification, Platform, TrayMenu, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
 import { art, ERROR_POSES, moment, poseArt, variant, type Moment } from './mascot';
@@ -177,6 +177,8 @@ export class DesktopApp {
   showWhere = false;
   shortcutMessage: { text: string; ok: boolean } | null = null;
   offline = false;
+  /** TLS pinning state of the connected server, shown in Settings (`null`: unknown or not asked yet). */
+  connectionSecurity: ConnectionSecurity | null = null;
   busy = false;
   query = '';
   version = '0.0.0';
@@ -314,6 +316,20 @@ export class DesktopApp {
     }
     this.view = view;
     this.render();
+    if (view === 'settings') void this.loadConnectionSecurity();
+  }
+
+  /** Asks the host how the connection to the server is protected (TLS pinning, docs/PINNING.md). */
+  private async loadConnectionSecurity(): Promise<void> {
+    const server = this.state.session?.server ?? null;
+    let security: ConnectionSecurity | null = null;
+    try {
+      security = server === null ? null : await this.platform.connectionSecurity(server);
+    } catch {
+      // Unknown: nothing is shown.
+    }
+    this.connectionSecurity = security;
+    if (this.view === 'settings') this.render();
   }
 
   /** Info notice in the status region (optionally with a mascot moment); dismissed after a few seconds. */
@@ -1658,7 +1674,7 @@ export class DesktopApp {
     } catch (error) {
       if (error instanceof ApiError && error.isUnauthorized && this.state.session !== null) {
         await this.signedOut(this.t('sessionExpired'));
-      } else if (error instanceof ApiError && error.isNetwork && this.state.session !== null) {
+      } else if (error instanceof ApiError && error.isNetwork && !isUntrustedCertificate(error) && this.state.session !== null) {
         this.offline = true;
         if (offline !== undefined) await offline();
       } else {
@@ -2726,6 +2742,15 @@ export class DesktopApp {
     );
   }
 
+  /** One line in Settings about TLS pinning of the connected server; nothing for loopback or an unknown state. */
+  private renderConnectionSecurity(): HTMLElement | false {
+    const security = this.connectionSecurity;
+    if (security === null || security.status === 'local') return false;
+    const key: MessageKey = security.status === 'pinned' ? 'connPinned' : security.status === 'expired' ? 'connPinExpired' : 'connNotPinned';
+    const params = { host: hostOf(this.state.session?.server), version: security.pinSetVersion };
+    return h('p', { class: 'muted', id: 'connection-security', attrs: { 'data-status': security.status } }, this.t(key, params));
+  }
+
   private renderSettings(): HTMLElement {
     const t = this.t;
     const shortcut = h('input', { id: 'shortcut', attrs: { type: 'text', spellcheck: 'false', autocomplete: 'off', 'aria-describedby': 'shortcut-help shortcut-message' } });
@@ -2764,6 +2789,7 @@ export class DesktopApp {
       // Store (MSIX) builds cannot register the login item the autostart plugin writes: no switch there.
       this.channel === 'direct' && this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
       h('p', { class: 'muted', id: 'background-note' }, this.t('backgroundNote')),
+      this.renderConnectionSecurity(),
       h('button', { class: 'link', id: 'open-privacy', on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
       h('section', { class: 'about', id: 'about', attrs: { 'aria-labelledby': 'about-title' } },
         moment('about', 'mascot tiny', t),

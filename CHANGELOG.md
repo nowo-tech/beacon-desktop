@@ -117,6 +117,17 @@ Likely 0.5.0.
 
 ### Security
 
+- **TLS public-key pinning for the official Beacon host** (`beacon.nowo.tech`, docs/PINNING.md). Every Beacon request
+  (API calls, update check, updater) now goes through a Rust HTTP client (reqwest + rustls, `src-tauri/src/net.rs`)
+  instead of the Tauri HTTP plugin, which is removed (crate, npm package and `http:default` permission). Validation:
+  WebPKI against the compiled-in Mozilla roots (the OS store is not consulted), then, on the pinned host, a valid
+  chain must contain a pinned CA key (SPKI SHA-256; pin set v1: ISRG Root YR / YE / X1 / X2, Let's Encrypt YR1, and
+  Google Trust Services R1 / R4 as the backup CA; never a leaf key). On mismatch the app fails closed before sending
+  anything: "La conexión con Beacon no es de confianza (certificado inesperado)", no offline queueing, no "continue
+  anyway"; a non-sensitive event (host, pin set version) goes to stderr. Self-hosted servers keep standard WebPKI and
+  Settings says "Connection not pinned"; loopback is never pinned. The pin set (`src-tauri/pins.json`) has a version
+  and an expiry (2028-05-01); past it the app falls back to WebPKI and asks for an update, and CI fails 90 days
+  before. New commands `beacon_fetch` and `connection_security`, granted to `main` only.
 - App commands are ACL-scoped (security review 2026-11-05, FN-L1): `build.rs` declares them in the app manifest
   (`src-tauri/app-commands.rs`) and each capability grants its window only its own (`main`: keychain, tray,
   shortcut, updater, heartbeat, notifications, opening the prompt; `prompt`: `prompt_view`, `prompt_answer`,

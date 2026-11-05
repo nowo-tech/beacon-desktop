@@ -1,15 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: API calls to the user's own server only (HTTPS, or loopback for development), and the app's own commands (keychain, tray, updater, heartbeat, notifications, the prompt window). Each app command is declared in build.rs and granted here per window.",
+  "description": "Main window: API calls to the user's own server through beacon_fetch only (Rust HTTP client with TLS public-key pinning for the official Beacon host, docs/PINNING.md; HTTPS, or loopback for development; no HTTP plugin), and the app's own commands (keychain, tray, updater, heartbeat, notifications, the prompt window). Each app command is declared in build.rs and granted here per window.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-set-theme",
-    {
-      "identifier": "http:default",
-      "allow": [{ "url": "https://*" }, { "url": "https://*:*" }, { "url": "http://localhost:*" }, { "url": "http://127.0.0.1:*" }]
-    },
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "https://*" }, { "url": "http://localhost:*" }, { "url": "http://127.0.0.1:*" }]
@@ -28,6 +24,8 @@
     "allow-set-global-shortcut",
     "allow-check-update",
     "allow-install-update",
+    "allow-beacon-fetch",
+    "allow-connection-security",
     "allow-set-wake-plan",
     "allow-notify-friendly",
     "allow-prompt-open",
