@@ -2,6 +2,13 @@ name: CI
 
 # Runners: LINUX_RUNNER (JSON runs-on value, e.g. ["self-hosted","linux","x64","tauri-build"]) selects a
 # self-hosted runner; unset means GitHub-hosted ubuntu-latest. See release.yml for the same pattern.
+#
+# Path filters: each job's first step runs .github/scripts/ci-changes.sh and the remaining steps only run when
+# that job's inputs changed in the PR (pushes to main always run everything). Skipping steps instead of whole
+# jobs keeps two runner hops per run (no extra "changes" job, ~20-40 s of JIT runner startup each), and a job
+# whose steps were skipped still concludes "success". The rust job runs after web (`needs`) and ends with the
+# "CI gate" step, so "Rust (fmt, clippy, tests) on Linux + CI gate" is the single check to require: it fails
+# when either job failed and passes when a job had nothing to check.
 
 on:
   pull_request:
@@ -22,21 +29,52 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+        with:
+          fetch-depth: 2 # the PR merge commit and its base parent, for the path filter
+      - name: Detect changed inputs
+        id: changes
+        run: .github/scripts/ci-changes.sh "${{ github.event_name }}" | tee -a "$GITHUB_OUTPUT"
+      # pnpm/action-setup (~30 s) and the actions cache for the pnpm store (~3 min to restore) only on GitHub-hosted runners.
+      - if: steps.changes.outputs.web == 'true' && runner.environment == 'github-hosted'
+        uses: pnpm/action-setup@v6
+      - if: steps.changes.outputs.web == 'true'
+        uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test:coverage
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
+      # Self-hosted Linux images ship pnpm through corepack and a persistent pnpm store: use them, check the version
+      # against packageManager, and fall back to a corepack shim in RUNNER_TEMP when the image's pnpm differs.
+      - name: pnpm from the runner image (corepack)
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux' && steps.changes.outputs.web == 'true'
+        shell: bash
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+        run: |
+          want="$(node -p "require('./package.json').packageManager.split('@')[1].split('+')[0]")"
+          have="$(pnpm --version 2>/dev/null || true)"
+          if [ "$have" != "$want" ]; then
+            echo "::notice::runner pnpm '${have:-none}' != packageManager $want, using corepack"
+            corepack enable pnpm --install-directory "$RUNNER_TEMP/corepack-bin"
+            echo "$RUNNER_TEMP/corepack-bin" >> "$GITHUB_PATH"
+            have="$("$RUNNER_TEMP/corepack-bin/pnpm" --version)"
+          fi
+          echo "pnpm $have"
+          [ "$have" = "$want" ]
+      - if: steps.changes.outputs.web == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.changes.outputs.web == 'true'
+        run: pnpm lint
+      - if: steps.changes.outputs.web == 'true'
+        run: pnpm typecheck
+      - if: steps.changes.outputs.web == 'true'
+        run: pnpm test:coverage
       # System libraries come from apt on GitHub-hosted runners; the self-hosted image ships them.
-      - if: runner.environment == 'github-hosted'
+      - if: steps.changes.outputs.web == 'true' && runner.environment == 'github-hosted'
         run: pnpm exec playwright install --with-deps chromium
-      - if: runner.environment == 'self-hosted'
+      - if: steps.changes.outputs.web == 'true' && runner.environment == 'self-hosted'
         run: pnpm exec playwright install chromium
-      - run: pnpm test:e2e
+      - if: steps.changes.outputs.web == 'true'
+        run: pnpm test:e2e
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
@@ -48,31 +86,55 @@ jobs:
         run: rm -rf node_modules test-results playwright-report coverage
 
   rust:
-    name: Rust (fmt, clippy, tests) on Linux
+    name: Rust (fmt, clippy, tests) on Linux + CI gate
+    needs: web
+    # Run even when web failed (independent signal, and the gate below must report it); skip only on cancel.
+    if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2 # the PR merge commit and its base parent, for the path filter
+      - name: Detect changed inputs
+        id: changes
+        run: .github/scripts/ci-changes.sh "${{ github.event_name }}" | tee -a "$GITHUB_OUTPUT"
       - name: System libraries
-        if: runner.environment == 'github-hosted'
+        if: steps.changes.outputs.rust == 'true' && runner.environment == 'github-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
             libssl-dev libxss-dev libx11-dev libdbus-1-dev
-      - uses: dtolnay/rust-toolchain@stable
+      - if: steps.changes.outputs.rust == 'true'
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      # Self-hosted runners use sccache and host-mounted cargo caches; uploading target/ there only costs time.
+      - if: steps.changes.outputs.rust == 'true' && runner.environment == 'github-hosted'
+        uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
       - name: Placeholder frontend (generate_context! needs ../dist)
+        if: steps.changes.outputs.rust == 'true'
         run: mkdir -p dist && echo '<!doctype html><title>TimeTrack</title>' > dist/index.html
-      - run: cargo fmt --check
+      - if: steps.changes.outputs.rust == 'true'
+        run: cargo fmt --check
         working-directory: src-tauri
-      - run: cargo clippy --locked --all-targets -- -D warnings
+      - if: steps.changes.outputs.rust == 'true'
+        run: cargo clippy --locked --all-targets -- -D warnings
         working-directory: src-tauri
-      - run: cargo test --locked
+      - if: steps.changes.outputs.rust == 'true'
+        run: cargo test --locked
         working-directory: src-tauri
       - name: Clean build tree (self-hosted)
         if: always() && runner.environment == 'self-hosted'
         run: rm -rf src-tauri/target dist
+      # Single required check: fail when web failed or was cancelled; a web job whose steps were path-skipped
+      # concludes "success" and passes.
+      - name: CI gate (web ${{ needs.web.result }})
+        if: always()
+        env:
+          WEB_RESULT: ${{ needs.web.result }}
+        run: |
+          echo "web: $WEB_RESULT, rust: ${{ job.status }} (web inputs: ${{ steps.changes.outputs.web }}, rust inputs: ${{ steps.changes.outputs.rust }})"
+          test "$WEB_RESULT" = success
