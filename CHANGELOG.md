@@ -140,6 +140,27 @@ Likely 0.5.0.
   `tests/screenshots/`): placeholder Beacon `https://beacon.example.test` and neutral demo data; new images of the
   Microsoft Store build (Settings → About, update required). The e2e tests no longer write screenshots.
 
+### Fixed
+
+- **Windows: upgrading from 0.1.0.** 0.1.0 was built without `bundle.publisher`, so Tauri registered it under the
+  manufacturer "nowo"; 0.4.0 sets "nowo.tech". The 0.4.0 installer therefore (a) offered *Uninstall before installing*
+  for a 0.1.0 per-user install, read the install folder from the new `HKCU\Software\nowo.tech\TimeTrack` key, found
+  nothing, ran `uninstall.exe _?=` and stopped with "Unable to uninstall!", and (b) never noticed a 0.1.0 `.msi`
+  install (per machine, Program Files), which stayed next to the new per-user one (two *TimeTrack* entries in
+  Settings → Apps). Reproduced on GitHub-hosted Windows runners with the 0.1.0 and 0.4.0 release installers.
+  NSIS installer hooks (`src-tauri/windows/installer-hooks.nsh`, `bundle.windows.nsis.installerHooks`) now, before
+  Tauri's pages: point the new key at a 0.1.0 per-user install, so the upgrade lands in the same folder and the
+  uninstall choice works; and, for a 0.1.0 `.msi`, ask to remove it (`msiexec /x {ProductCode} /passive`, Windows asks
+  for administrator approval; the old copy, tray included, is closed first), with a message saying how to remove it by
+  hand when that fails or is declined. After installing, the stale 0.1.0 key is deleted (unless that `.msi` is still
+  installed) and a *start at login* entry pointing at the removed Program Files copy follows the app. Identifier,
+  publisher and per-user install mode are unchanged (a unit test pins them); the in-app updater route (`/P /UPDATE`)
+  is unchanged. A running app (tray included) is closed by the installer before files are replaced.
+- Manual Windows upgrade test (`.github/workflows/installer-upgrade-test.yml`, `scripts/windows/upgrade-test.ps1`):
+  installs 0.1.0 (MSI, NSIS or both) or the previous release on a clean runner, optionally with the app running,
+  upgrades silently (`/S`), the updater's way (`/P /UPDATE`) or through the installer UI, and checks the exit code, a
+  single Uninstall entry with the new version, no MSI left and that the app starts.
+
 ## [0.4.0] - 2026-11-04
 
 Zero-cost signing and auto-update (owner decision 2026-11-04). Plan, Beacon changes and owner steps:
