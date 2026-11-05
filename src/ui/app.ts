@@ -3,6 +3,7 @@ import type { DeviceCode, Entry, Me, Task, Timer } from '../api/types';
 import { dashboardUrl, myTimeUrl, sameOriginHttps, taskUrl } from '../lib/beacon';
 import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
 import { type ErrorStage, type ErrorView, describeError } from '../lib/errors';
+import { type Card, type Switches, beaconLocale, beaconTimeZone, CATALOG, lineText, messageLocale, MIN_GAP_MINUTES, nextCard, pickIdleLine, visibleCard } from '../lib/friendly';
 import { createTranslator, detectLocale, type Locale, type MessageKey, type Translate } from '../lib/i18n';
 import { type GapChoice, type IdleCheckState, type IdleChoice, WATCHING, decide, decideGap, observeIdle, promptSpan } from '../lib/idleCheck';
 import { preflight } from '../lib/preflight';
@@ -20,7 +21,7 @@ import { withinWorkingHours } from '../lib/workingHours';
 import type { Platform, TrayMenu, UpdateCheck, UpdateProgress } from '../platform';
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
-import { art, ERROR_POSES, moment, variant, type Moment } from './mascot';
+import { art, ERROR_POSES, moment, poseArt, variant, type Moment } from './mascot';
 
 export type View = 'loading' | 'login' | 'device' | 'main' | 'settings' | 'privacy' | 'update-required';
 
@@ -38,6 +39,8 @@ export interface AppDeps {
   channel?: Channel;
   /** Store listing of the app (`https://apps.microsoft.com/detail/<product id>`), store build only. */
   storeUrl?: string;
+  /** Random source of the friendly messages (tests pin it). */
+  random?: () => number;
 }
 
 export type Channel = 'direct' | 'store';
@@ -172,6 +175,7 @@ export class DesktopApp {
   private readonly alert: HTMLElement;
   private readonly body: HTMLElement;
   private readonly now: () => Date;
+  private readonly random: () => number;
   private readonly storage: Storage;
   private readonly timeFormat: Intl.DateTimeFormat;
   private readonly dateFormat: Intl.DateTimeFormat;
@@ -184,6 +188,7 @@ export class DesktopApp {
     this.storage = deps.storage ?? localStorage;
     this.channel = deps.channel ?? 'direct';
     this.now = deps.now ?? (() => new Date());
+    this.random = deps.random ?? Math.random;
     this.locale = deps.locale ?? detectLocale(globalThis.navigator?.language);
     this.t = createTranslator(this.locale);
     // The OS locale when it is a variant of the app's language (en-GB → 24 h), else the app's (es → 24 h, en → 12 h).
@@ -547,6 +552,64 @@ export class DesktopApp {
     this.main?.root.querySelector<HTMLButtonElement>('#stop')?.focus();
   }
 
+  // ---- Friendly messages (local only) -----------------------------------------------------------------------------
+
+  /** Language of the friendly messages: the Beacon user's (`GET me.locale`), else the app's, else English. */
+  messageLocale(): ReturnType<typeof messageLocale> {
+    return messageLocale(beaconLocale(this.me), this.locale);
+  }
+
+  private switches(): Switches {
+    return { fun: this.state.settings.funMessages, wellbeing: this.state.settings.wellbeingReminders };
+  }
+
+  /** The cheer / time-of-day card of the running timer, when one is due (called on every tick). Never takes focus. */
+  checkFriendly(): void {
+    const timer = this.state.activeTimer;
+    if (this.view !== 'main') return;
+    const shown = (this.main?.banners.querySelector('#cheer') ?? null) !== null;
+    const card = this.currentCard();
+    if (timer !== null && card === null && this.state.idleCheck.phase === 'watching' && !this.longRunning()) {
+      const next = nextCard({
+        now: this.now(),
+        startedAt: timer.startedAt,
+        entry: this.entryKey(timer),
+        switches: this.switches(),
+        windows: CATALOG[this.messageLocale()].windows,
+        timeZone: beaconTimeZone(this.me),
+        state: this.state.messages,
+        locale: this.messageLocale(),
+        rng: this.random,
+      });
+      if (next !== null) {
+        this.persist({ messages: next.state });
+        this.render();
+        return;
+      }
+    }
+    if (shown !== (this.currentCard() !== null)) this.render();
+  }
+
+  /** The card to show now: one at a time, not over the "Still there?" prompt or the long-running nudge. */
+  currentCard(): Card | null {
+    const timer = this.state.activeTimer;
+    if (this.state.idleCheck.phase !== 'watching' || this.longRunning()) return null;
+    return visibleCard(this.state.messages, timer !== null ? this.entryKey(timer) : null, this.now(), this.switches());
+  }
+
+  dismissCheer(): void {
+    const card = this.state.messages.card;
+    if (card !== null) this.persist({ messages: { ...this.state.messages, card: { ...card, dismissed: true } } });
+    this.render();
+    this.main?.root.querySelector<HTMLButtonElement>('#stop')?.focus();
+  }
+
+  /** Settings → Friendly messages. */
+  setFriendly(setting: 'funMessages' | 'wellbeingReminders', on: boolean): void {
+    this.persist({ settings: { ...this.state.settings, [setting]: on } });
+    this.render();
+  }
+
   dismissWelcome(): void {
     this.welcome = false;
     this.render();
@@ -777,6 +840,7 @@ export class DesktopApp {
   async tick(): Promise<void> {
     await this.updateTray();
     if (this.view === 'main' && this.longRunning() !== (this.main?.banners.querySelector('#long-running') !== null)) this.render();
+    this.checkFriendly();
     const now = this.now();
     const suspendedSince = this.lastCheck !== null && now.getTime() - this.lastCheck.getTime() > SUSPEND_GAP_MS ? this.lastCheck : null;
     this.lastCheck = now;
@@ -796,7 +860,11 @@ export class DesktopApp {
 
   private setIdleCheck(state: IdleCheckState): void {
     if (state.phase !== 'asking') this.meetingOpen = false;
-    this.persist({ idleCheck: state });
+    const asked = state.phase === 'asking' && this.state.idleCheck.phase !== 'asking';
+    let messages = this.state.messages;
+    if (asked) messages = pickIdleLine(messages, this.messageLocale(), this.random, this.switches());
+    else if (state.phase !== 'asking' && messages.idleLine !== null) messages = { ...messages, idleLine: null };
+    this.persist({ idleCheck: state, messages });
     this.render();
   }
 
@@ -1575,6 +1643,7 @@ export class DesktopApp {
       this.renderUpdateCard(),
       this.welcome && this.error === null && this.renderWelcome(),
       this.longRunning() && this.renderLongRunning(),
+      this.renderCheer(),
       this.updateMessage !== null &&
         h(
           'section',
@@ -1596,10 +1665,14 @@ export class DesktopApp {
 
   /** Calm card with a mascot moment, a heading and its content (welcome, long-running, idle check, update). */
   private momentCard(id: string, name: Moment, title: string, ...children: Child[]): HTMLElement {
+    return this.pictureCard(id, name, moment(name, 'mascot tiny', this.t), title, ...children);
+  }
+
+  private pictureCard(id: string, name: Moment, picture: Element, title: string, ...children: Child[]): HTMLElement {
     return h(
       'section',
       { class: 'card still-there', id, key: id, attrs: { role: 'region', 'aria-labelledby': `${id}-title`, 'data-moment': name } },
-      moment(name, 'mascot tiny', this.t),
+      picture,
       h('div', { class: 'still-there-body' }, h('h2', { id: `${id}-title` }, title), ...children),
     );
   }
@@ -1632,6 +1705,27 @@ export class DesktopApp {
         { class: 'row-actions' },
         h('button', { class: 'secondary small', id: 'long-running-stop', key: 'long-running-stop', attrs: { type: 'button' }, on: { click: () => this.whenIdle(() => this.stop()) } }, icon('stop'), t('longRunningStop')),
         h('button', { class: 'link', id: 'long-running-keep', key: 'long-running-keep', attrs: { type: 'button' }, on: { click: () => this.keepGoing() } }, t('longRunningKeep')),
+      ),
+    );
+  }
+
+  /** A friendly message: smile, cheer or a gentle nudge, in the Beacon user's language. Dismissible, never focused. */
+  private renderCheer(): HTMLElement | null {
+    const card = this.currentCard();
+    const timer = this.state.activeTimer;
+    if (card === null || timer === null) return null;
+    const hours = Math.floor(elapsedSeconds(timer.startedAt, this.now()) / 3600);
+    const line = lineText(card.locale, card.kind, card.line, { hours });
+    if (line === null) return null;
+    return h(
+      'section',
+      { class: 'card still-there cheer-card', id: 'cheer', key: 'cheer', attrs: { role: 'region', 'aria-label': this.t('cheerLabel'), 'data-kind': card.kind } },
+      poseArt(line.pose, 'mascot tiny'),
+      h(
+        'div',
+        { class: 'still-there-body' },
+        h('p', { class: 'cheer-text', id: 'cheer-text', attrs: { lang: card.locale } }, line.text),
+        h('div', { class: 'row-actions' }, h('button', { class: 'link', id: 'cheer-dismiss', key: 'cheer-dismiss', attrs: { type: 'button' }, on: { click: () => this.dismissCheer() } }, this.t('cheerDismiss'))),
       ),
     );
   }
@@ -1861,15 +1955,21 @@ export class DesktopApp {
       const name: Moment = state.phase === 'away' ? 'away' : state.phase === 'gap' ? 'gap' : state.phase === 'resume' ? 'resume' : 'stillThere';
       return this.momentCard(id, name, title, ...children);
     };
+    // The "Still there?" phrasing of this prompt (Fun messages), with its own pose; the facts and buttons stay the same.
+    const locale = this.messageLocale();
+    const quip = state.phase === 'asking' && this.state.settings.funMessages && this.state.messages.idleLine !== null ? lineText(locale, 'idle', this.state.messages.idleLine) : null;
     switch (state.phase) {
       case 'watching':
         return null;
       case 'asking': {
         const span = promptSpan(state, this.now());
         const minutes = this.minutesBetween(state.from, state.returnedAt ?? span.to);
-        return card(
+        return this.pictureCard(
           'idle',
+          'stillThere',
+          quip !== null ? poseArt(quip.pose, 'mascot tiny') : moment('stillThere', 'mascot tiny', t),
           t('stillThereTitle'),
+          quip !== null && h('p', { class: 'idle-quip', id: 'idle-quip', attrs: { lang: locale } }, quip.text),
           h('p', { id: 'idle-text' }, t('stillThereText', { minutes: Math.max(minutes, this.idleSettings().thresholdMinutes), task: state.taskTitle })),
           h('p', { class: 'muted' }, t('stillThereSince', { time: this.time(state.from) })),
           this.meetingOpen
@@ -2117,6 +2217,7 @@ export class DesktopApp {
         ),
       ),
       this.renderIdleSettings(),
+      this.renderFriendlySettings(),
       this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText'),
       // Store (MSIX) builds cannot register the login item the autostart plugin writes: no switch there.
       this.channel === 'direct' && this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
@@ -2145,6 +2246,25 @@ export class DesktopApp {
   }
 
   /** Settings → Appearance: System / Light / Dark (radio group, stored locally, applied at once). */
+  /** Settings → Friendly messages: two switches, both on by default; local only, nothing to consent to. */
+  private renderFriendlySettings(): HTMLElement {
+    const t = this.t;
+    const toggle = (id: string, setting: 'funMessages' | 'wellbeingReminders', label: MessageKey, help: MessageKey) => {
+      const input = h('input', { id, attrs: { type: 'checkbox', 'aria-describedby': `${id}-help` } });
+      input.checked = this.state.settings[setting];
+      input.addEventListener('change', () => this.setFriendly(setting, input.checked));
+      return [h('label', { class: 'switch' }, input, t(label)), h('p', { class: 'help', id: `${id}-help` }, t(help, { minutes: MIN_GAP_MINUTES }))];
+    };
+    return h(
+      'section',
+      { class: 'feature', id: 'friendly-settings' },
+      h('h2', {}, t('friendlyTitle')),
+      ...toggle('fun-messages', 'funMessages', 'funMessages', 'funMessagesHelp'),
+      ...toggle('wellbeing-reminders', 'wellbeingReminders', 'wellbeingReminders', 'wellbeingRemindersHelp'),
+      h('p', { class: 'muted' }, t('friendlyLocal')),
+    );
+  }
+
   private renderAppearance(): HTMLElement {
     const t = this.t;
     const current = this.state.settings.theme;

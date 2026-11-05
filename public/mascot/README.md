@@ -50,6 +50,15 @@ The catalogue is `src/ui/mascot.ts` (`MOMENTS`, `ERROR_POSES`).
 
 Not on purpose: the running timer card, the task rows, Settings (apart from About) and the privacy screen.
 
+## Friendly-message poses (0.5.0)
+
+Every line of the friendly messages (`src/lib/messages/`) names a pose id from `POSE_IDS` (peek, sleepy, wave, think,
+heart, celebrate, thumbs, flag, music, focus, stretch, water, eyes, sunrise, coffee, lunch, moon, friday,
+weekend-start, shades, beach, sofa, park). Its art is `pose-<id>.webp` + `pose-<id>@2x.webp` here, imported from a
+transparent `pose-<id>.png` (for example 1024 × 1024) with `scripts/mascot/import-poses.sh <dir>`: trimmed, 96 / 192 px
+high, WebP quality 80. The script also rewrites `src/ui/pose-art.json`, the list of ids that have their own art. Ids
+without art yet show the closest existing pose (`POSE_FALLBACK` in `src/ui/mascot.ts`).
+
 ## Rules
 
 - Decorative by default: `alt=""` and `aria-hidden="true"`; the heading next to the picture carries the meaning. Only

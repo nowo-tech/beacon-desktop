@@ -21,7 +21,8 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - Server URL, your e-mail, the running timer, queued offline actions (with the time each happened), the tasks you pin
   and the last task you tracked (id and title, to resume it), an unsent "meeting" note, the "Still there?" state (the
   question being asked, if any), the server's feature switches, your settings and the date of each consent decision,
-  in the app's local storage. Signing out deletes the token, the timer, the queue and the idle-check state.
+  and which friendly messages were shown lately (line numbers and times, so they do not repeat), in the app's local
+  storage. Signing out deletes the token, the timer, the queue and the idle-check state.
 - **Clear local data** (Settings → What we collect) signs you out and deletes all of the above, and turns "start at
   login" off.
 - Today / This week totals and recent tasks are computed on this computer from your own entries (`entries:read`, the
@@ -35,6 +36,13 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - Your organisation turns it on or off and sets the wait (TimeTrackBundle 1.10, `GET me`); you can make the wait
   longer in Settings. With a server that does not say (1.9), it is off until you turn it on (dated consent).
 - With no answer, the timer stops at your last input and the app asks you about that time when you are back.
+
+## Friendly messages
+
+- The varied "Still there?" phrasing, the cheers on long stretches and the time-of-day moments (early start, coffee,
+  lunch, late work, Friday afternoon, weekend) are chosen on this computer from the running timer's start and the
+  clock, in your Beacon language and time zone when the server says (`me.locale`, `me.workingHours.timezone`). Nothing
+  about them is sent. Settings → Friendly messages turns them off.
 
 ## Optional features (off by default, dated consent, revocable in Settings)
 

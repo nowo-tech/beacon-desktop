@@ -212,7 +212,7 @@
   "privacySentUpdates": "The app version, platform, architecture and installer kind when it checks for updates.",
   "privacyLocalTitle": "Stays on this computer",
   "privacyLocalToken": "The session token, in the system keychain.",
-  "privacyLocalState": "The server address, your e-mail, the running timer, actions waiting to be sent, pinned tasks, the last task you tracked, an unsent meeting note, and your settings with the date of each consent.",
+  "privacyLocalState": "The server address, your e-mail, the running timer, actions waiting to be sent, pinned tasks, the last task you tracked, an unsent meeting note, your settings with the date of each consent, and which friendly messages were shown lately (so they do not repeat).",
   "privacyLocalIdle": "The \"time since last input\" counter: read from the system every 30 seconds while a timer runs, used only to decide when to ask, never stored, logged or sent.",
   "privacyLocalTotals": "The Today and This week totals, computed here from your own entries.",
   "privacyNeverTitle": "Never collected",
@@ -241,5 +241,13 @@
   "themeSystem": "System",
   "themeLight": "Light",
   "themeDark": "Dark",
-  "themeHelp": "System follows your computer's light or dark setting."
+  "themeHelp": "System follows your computer's light or dark setting.",
+  "friendlyTitle": "Friendly messages",
+  "funMessages": "Fun messages from the robot",
+  "funMessagesHelp": "A smile now and then: different ways of asking \"Still there?\", cheers after long stretches, an early start, Friday afternoon and the weekend.",
+  "wellbeingReminders": "Wellbeing reminders",
+  "wellbeingRemindersHelp": "Gentle nudges for coffee, lunch, a stretch, some water, or calling it a day when it gets late. Never more than one every {minutes} minutes, always easy to dismiss.",
+  "friendlyLocal": "Worked out on this computer from your timer and the time of day, in your Beacon language. Nothing is sent.",
+  "cheerLabel": "A note from the robot",
+  "cheerDismiss": "Thanks!"
 }

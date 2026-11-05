@@ -190,6 +190,12 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 .still-there h2 { margin: 0; font-size: 1rem; }
 .still-there p { margin: 0; }
 .still-there-body > * { min-width: 0; }
+/* Friendly messages (0.5.0): cheer / time-of-day card, same calm card, never focused, dismissible. */
+.cheer-card { align-items: center; animation: cheer-in 0.35s ease-out; }
+.cheer-card .cheer-text { font-weight: 500; }
+.cheer-card .row-actions { justify-content: flex-end; }
+.idle-quip { font-weight: 500; }
+@keyframes cheer-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 /* Update card (0.4.0): the same calm moss / mist card as "Still there?"; release notes as plain text (no HTML). */
 .update-card .row-actions { flex-wrap: wrap; align-items: center; }
 .update-notes { white-space: pre-line; max-height: 10rem; overflow-y: auto; padding: 0.5rem; background: var(--surface); border: 1px solid var(--sand); border-radius: var(--radius-control); font-size: 0.8125rem; }

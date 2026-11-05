@@ -1,5 +1,7 @@
 import type { MessageKey } from '../lib/i18n';
+import type { PoseId } from '../lib/messages/types';
 import { h } from './dom';
+import imported from './pose-art.json';
 
 /**
  * Mascot moments (0.5.0). One pose per situation, the way symfony-beacon uses its robot: friendly empty, waiting, error
@@ -82,17 +84,64 @@ export const ERROR_POSES: Record<string, Pose> = {
 
 /** Image with 1x / 2x sources from `public/mascot/`. An empty `alt` marks it decorative (also hidden from the a11y tree). */
 export function art(pose: Pose, alt: string, className: string): HTMLImageElement {
+  return picture(pose, alt, className, pose);
+}
+
+function picture(file: string, alt: string, className: string, pose: string): HTMLImageElement {
   return h('img', {
     class: className,
     attrs: {
-      src: `mascot/${pose}.webp`,
-      srcset: `mascot/${pose}.webp 1x, mascot/${pose}@2x.webp 2x`,
+      src: `mascot/${file}.webp`,
+      srcset: `mascot/${file}.webp 1x, mascot/${file}@2x.webp 2x`,
       alt,
       'aria-hidden': alt === '' ? 'true' : undefined,
       decoding: 'async',
       'data-pose': pose,
     },
   });
+}
+
+/**
+ * Friendly-message poses (`POSE_IDS`) with their own art in `public/mascot/pose-<id>.webp`: written by
+ * `scripts/mascot/import-poses.sh`, so new art needs no code change.
+ */
+export const POSE_ART: ReadonlySet<string> = new Set(imported as string[]);
+
+/** Closest existing pose for each friendly-message pose whose own art is not imported yet. */
+export const POSE_FALLBACK: Record<PoseId, Pose> = {
+  peek: 'mascot-small',
+  sleepy: 'pose-pause',
+  wave: 'pose-card',
+  think: 'pose-reading',
+  heart: 'mascot-small',
+  celebrate: 'pose-card',
+  thumbs: 'pose-card',
+  flag: 'mascot',
+  music: 'mascot-small',
+  focus: 'pose-reading',
+  stretch: 'mascot',
+  water: 'pose-pause',
+  eyes: 'pose-reading',
+  sunrise: 'mascot',
+  coffee: 'pose-pause',
+  lunch: 'pose-pause',
+  moon: 'pose-hourglass',
+  friday: 'pose-card',
+  'weekend-start': 'pose-card',
+  shades: 'mascot',
+  beach: 'pose-pause',
+  sofa: 'pose-pause',
+  park: 'mascot',
+};
+
+/** File (without extension) drawn for a friendly-message pose: its own art, else the fallback. */
+export function poseFile(id: PoseId, available: ReadonlySet<string> = POSE_ART): string {
+  return available.has(id) ? `pose-${id}` : POSE_FALLBACK[id];
+}
+
+/** Decorative picture of a friendly message (`data-pose` = the message's pose id). */
+export function poseArt(id: PoseId, className: string): HTMLImageElement {
+  return picture(poseFile(id), '', className, id);
 }
 
 /** The picture of a moment, with its translated alt text (or decorative). */

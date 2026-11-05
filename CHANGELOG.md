@@ -22,6 +22,24 @@ Likely 0.5.0.
   `public/mascot/README.md`. Decorative art is `aria-hidden`; only the device-code arcs move, and not with reduced
   motion. English and Spanish.
 - Screenshots of the key screens and moments in light and dark (`tests/screenshots/moments.spec.ts`).
+- **Friendly messages** (`src/lib/friendly.ts`, pools in `src/lib/messages/`): the "Still there?" prompt gets a
+  randomly chosen phrasing under its usual heading (16 per language; facts, buttons and labels unchanged), and a calm,
+  dismissible card cheers on long stretches (2 h, then every 2 h: `CHEER_FIRST_HOURS` / `CHEER_EVERY_HOURS`, 16 lines
+  with a few stretch / water / eye-break nudges) and marks time-of-day moments: early start, mid-morning and
+  mid-afternoon coffee, lunch, late work, Friday afternoon, weekend start and "enjoy the rest of your weekend" (8 lines
+  each). Windows are per-language constants (Spanish lunch 14:00–15:30, German coffee at 15:00, …), read in the Beacon
+  user's time zone (`me.workingHours.timezone`, else `me.timezone`, else the system's). At most one card every
+  50 minutes (`MIN_GAP_MINUTES`; the idle prompt is not counted), each moment once per window per day, no line
+  repeated among the last six of its pool (history in local storage), cards expire after 30 minutes, never over the
+  idle prompt or the 8-hour nudge, never focused, no motion with reduced motion. Native pools in English, Spanish,
+  German, French, Italian, Dutch and Portuguese; the language is the Beacon user's (`GET me.locale` when the server
+  sends it), else the app's UI language, else English. Settings → **Friendly messages**: *Fun messages* and *Wellbeing
+  reminders* (both on by default). Unit tests with an injectable RNG (`AppDeps.random`), time zones, DST and weekend
+  boundaries; e2e with axe in both themes.
+- **Data-driven mascot poses** for the friendly messages: each line names one of 23 pose ids, drawn from
+  `public/mascot/pose-<id>.webp` (+ `@2x`) once imported with `scripts/mascot/import-poses.sh <dir>` (transparent
+  PNG → trimmed WebP 96 / 192 px, cwebp + ImageMagick, in Docker when not installed; updates `src/ui/pose-art.json`),
+  else the closest existing pose (`POSE_FALLBACK`).
 
 ### Changed
 

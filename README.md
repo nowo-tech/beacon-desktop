@@ -78,6 +78,26 @@ task list; which pose goes where, and where the art comes from: [public/mascot/R
 
 <img src="docs/images/desktop-saved-light.png" alt="Saved notice with the mascot after stopping a timer, light theme" width="200"> <img src="docs/images/desktop-no-results-dark.png" alt="No search results with the reading robot, dark theme" width="200"> <img src="docs/images/desktop-offline-light.png" alt="Working offline card, light theme" width="200">
 
+### Friendly messages
+
+A smile now and then, never in the way: the "Still there?" prompt asks in a different way each time (the facts and the
+buttons stay the same), and while a timer runs a small dismissible card cheers you on after 2, 4, 6… hours, greets an
+early start, suggests a coffee, lunch, a stretch or some water, says it is getting late, and has something to say on
+Friday afternoon and at the weekend. At most one card every 50 minutes, each moment at most once a day, never a
+repeated line among the last six, never focused, no motion with reduced motion. Written natively in English, Spanish,
+German, French, Italian, Dutch and Portuguese (the Beacon user's language when the server sends `me.locale`, else the
+app's), with local times per language (lunch at 14:00 in Spanish). Settings → **Friendly messages**: *Fun messages*
+and *Wellbeing reminders*, both on by default. Pools: `src/lib/messages/`; rules: `src/lib/friendly.ts`.
+
+Each line has its own mascot pose (`POSE_IDS`). New art goes in as transparent PNGs named `pose-<id>.png`:
+
+```bash
+scripts/mascot/import-poses.sh <dir>   # → public/mascot/pose-<id>.webp + @2x (96 / 192 px high), src/ui/pose-art.json
+```
+
+It runs cwebp and ImageMagick, in a throwaway Docker container when they are not installed. Until a pose has its art,
+the closest existing pose is shown (`POSE_FALLBACK` in `src/ui/mascot.ts`); no code change is needed.
+
 ### Updates
 
 <img src="docs/images/desktop-update-card-light.png" alt="Update card with What's new, light theme" width="200"> <img src="docs/images/desktop-update-card-dark.png" alt="Update card with What's new, dark theme" width="200"> <img src="docs/images/desktop-update-progress-light.png" alt="Update download progress" width="200">

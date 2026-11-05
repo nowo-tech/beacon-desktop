@@ -212,7 +212,7 @@
   "privacySentUpdates": "La versión de la app, la plataforma, la arquitectura y el tipo de instalador al buscar actualizaciones.",
   "privacyLocalTitle": "Se queda en este ordenador",
   "privacyLocalToken": "El token de sesión, en el llavero del sistema.",
-  "privacyLocalState": "La dirección del servidor, tu correo, el temporizador en marcha, las acciones pendientes de enviar, las tareas fijadas, la última tarea registrada, una nota de reunión sin enviar y tus ajustes con la fecha de cada consentimiento.",
+  "privacyLocalState": "La dirección del servidor, tu correo, el temporizador en marcha, las acciones pendientes de enviar, las tareas fijadas, la última tarea registrada, una nota de reunión sin enviar, tus ajustes con la fecha de cada consentimiento y qué mensajes amistosos se han mostrado últimamente (para no repetirlos).",
   "privacyLocalIdle": "El contador de \"tiempo desde la última pulsación\": se lee del sistema cada 30 segundos mientras hay un temporizador en marcha, solo para decidir cuándo preguntar; nunca se guarda, se registra ni se envía.",
   "privacyLocalTotals": "Los totales de Hoy y Esta semana, calculados aquí a partir de tus propios registros.",
   "privacyNeverTitle": "Nunca se recoge",
@@ -241,5 +241,13 @@
   "themeSystem": "Sistema",
   "themeLight": "Claro",
   "themeDark": "Oscuro",
-  "themeHelp": "Sistema sigue el modo claro u oscuro de tu equipo."
+  "themeHelp": "Sistema sigue el modo claro u oscuro de tu equipo.",
+  "friendlyTitle": "Mensajes amistosos",
+  "funMessages": "Mensajes divertidos del robot",
+  "funMessagesHelp": "Una sonrisa de vez en cuando: distintas formas de preguntar \"¿Sigues ahí?\", ánimos tras muchas horas seguidas, madrugones, viernes por la tarde y fines de semana.",
+  "wellbeingReminders": "Recordatorios de bienestar",
+  "wellbeingRemindersHelp": "Avisos suaves para el café, la comida, estirar, beber agua o dejarlo por hoy cuando se hace tarde. Nunca más de uno cada {minutes} minutos y siempre fáciles de cerrar.",
+  "friendlyLocal": "Se calculan en este equipo a partir de tu temporizador y la hora, en tu idioma de Beacon. No se envía nada.",
+  "cheerLabel": "Una nota del robot",
+  "cheerDismiss": "¡Gracias!"
 }
