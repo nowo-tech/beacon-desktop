@@ -7,9 +7,8 @@ import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
-import { open as openFile } from '@tauri-apps/plugin-dialog';
 import { notificationBody, type NotificationPermission, type Platform, type WindowHost, type PromptClient, type PromptHost, type SessionEvent, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
-import type { BrowserChoice, DetectedBrowser, OpenOutcome } from './lib/links';
+import { type BrowserChoice, type DetectedBrowser, type OpenOutcome, sanitizeBrowser } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 
 const permission = (state: string): NotificationPermission => (state === 'granted' ? 'granted' : state === 'denied' ? 'denied' : 'prompt');
@@ -70,20 +69,16 @@ export function tauriPlatform(): Platform {
     secretSet: (token) => invoke('secret_set', { token }),
     secretDelete: () => invoke('secret_delete'),
     idleSeconds: () => invoke<number>('idle_seconds'),
-    // Every link: the system default (opener plugin, no `with`) or the chosen browser, from Rust (src-tauri/src/browser.rs).
-    openExternal: (url, browser) => invoke<OpenOutcome>('open_external', { url, browser }),
+    // Every link: the system default (opener plugin, no `with`) or the browser Rust keeps for "Open Beacon in"
+    // (src-tauri/src/browser.rs). Only the URL crosses; the browser (and any executable path) never comes from here.
+    openExternal: (url) => invoke<OpenOutcome>('open_external', { url }),
     listBrowsers: () => invoke<DetectedBrowser[]>('list_browsers'),
+    getBrowser: async () => sanitizeBrowser(await invoke<BrowserChoice>('get_browser')),
+    setBrowser: async (choice) => sanitizeBrowser(await invoke<BrowserChoice>('set_browser', { choice })),
+    // The native file dialog is opened by Rust, which checks and keeps the picked file.
     pickBrowser: async () => {
-      const mac = navigator.userAgent.includes('Mac');
-      const windows = navigator.userAgent.includes('Windows');
-      const path = await openFile({
-        multiple: false,
-        directory: false,
-        filters: windows ? [{ name: 'Browser', extensions: ['exe'] }] : mac ? [{ name: 'Browser', extensions: ['app'] }] : [],
-      });
-      if (typeof path !== 'string') return null;
-      const checked = await invoke<DetectedBrowser>('check_browser', { path });
-      return { kind: 'custom', path, name: checked.name } satisfies BrowserChoice;
+      const picked = await invoke<BrowserChoice | null>('pick_browser');
+      return picked === null ? null : sanitizeBrowser(picked);
     },
     onOpenExternal: (handler) => void listen<string>('open-external', (event) => handler(event.payload)),
     // Clipboard manager plugin, write-text permission only (capabilities/default.json).

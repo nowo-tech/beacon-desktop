@@ -1,5 +1,5 @@
 import type { Rect, Screens } from './lib/layout';
-import type { BrowserChoice, DetectedBrowser, OpenOutcome } from './lib/links';
+import type { BrowserChoice, BrowserRequest, DetectedBrowser, OpenOutcome } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 
 /**
@@ -155,8 +155,10 @@ export interface WindowHost {
 
 /** Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME, so the default adds Shift. */
 export const DEFAULT_SHORTCUT = 'CommandOrControl+Alt+Shift+T';
-/** Default "Continue the last task" shortcut (Ctrl+Alt+Space, ⌘⌥Space on macOS). */
-export const DEFAULT_RESUME_SHORTCUT = 'CommandOrControl+Alt+Space';
+/** Default "Continue the last task" shortcut (Ctrl+Alt+T, ⌘⌥T on macOS). */
+export const DEFAULT_RESUME_SHORTCUT = 'CommandOrControl+Alt+T';
+/** The 0.5.0 previews' default (⌘⌥Space is taken by Finder search on macOS); migrated to the new one on load. */
+export const OLD_DEFAULT_RESUME_SHORTCUT = 'CommandOrControl+Alt+Space';
 
 export interface Platform {
   readonly kind: 'tauri' | 'browser';
@@ -169,13 +171,18 @@ export interface Platform {
   /** Seconds since the last input, read locally from the OS. Never sent. */
   idleSeconds(): Promise<number>;
   /**
-   * Opens an https link (already checked by the caller) in the system default browser or the chosen one
-   * (`open_external`); `fallback` when the chosen browser is gone and the default opened it. Rejects when nothing could.
+   * Opens an https link (already checked by the caller) in the browser the host keeps for "Open Beacon in"
+   * (`open_external`, URL only); `fallback` when the chosen browser is gone and the default opened it. Rejects when
+   * nothing could.
    */
-  openExternal(url: string, browser: BrowserChoice): Promise<OpenOutcome>;
+  openExternal(url: string): Promise<OpenOutcome>;
   /** Browsers installed on this computer (Settings → Open Beacon in). */
   listBrowsers(): Promise<DetectedBrowser[]>;
-  /** Settings → Open Beacon in → Custom…: the file picker, checked by the host. `null` = cancelled; rejects when refused. */
+  /** The "Open Beacon in" choice the host keeps (`get_browser`). */
+  getBrowser(): Promise<BrowserChoice>;
+  /** The system default or a detected browser, by id (`set_browser`); the host answers with what it stored. */
+  setBrowser(request: BrowserRequest): Promise<BrowserChoice>;
+  /** Settings → Open Beacon in → Custom…: the host's native file picker, checked and kept by the host. `null` = cancelled; rejects when refused. */
   pickBrowser(): Promise<BrowserChoice | null>;
   /** A link the webview tried to open by itself (`target=_blank`, `window.open`, a navigation): the host refused it. */
   onOpenExternal(handler: (url: string) => void): void;
@@ -224,8 +231,10 @@ export interface Platform {
 export interface BrowserHooks {
   idleSeconds: number;
   opened: string[];
-  /** Browser choice of each opened link (same order as `opened`). */
+  /** Browser choice of each opened link (same order as `opened`), as the fake host had it. */
   openedWith: BrowserChoice[];
+  /** The fake host's "Open Beacon in" choice (`get_browser` / `set_browser` / `pick_browser`). */
+  browserChoice: BrowserChoice;
   /** Fake installed browsers. */
   browsers: DetectedBrowser[];
   /** Ids / paths of chosen browsers that are gone (the link opens in the default: `fallback`). */
@@ -312,6 +321,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     idleSeconds: 0,
     opened: [],
     openedWith: [],
+    browserChoice: { kind: 'system' },
     browsers: [],
     goneBrowsers: [],
     openFails: false,
@@ -378,16 +388,25 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     secretSet: async (token) => void (secret = token),
     secretDelete: async () => void (secret = null),
     idleSeconds: async () => hooks.idleSeconds,
-    openExternal: async (url, browser) => {
+    openExternal: async (url) => {
       if (hooks.openFails) throw new Error('no browser');
+      const browser = hooks.browserChoice;
       hooks.opened.push(url);
       hooks.openedWith.push(browser);
       const gone = browser.kind === 'detected' ? hooks.goneBrowsers.includes(browser.id) || !hooks.browsers.some((item) => item.id === browser.id) : browser.kind === 'custom' && hooks.goneBrowsers.includes(browser.path);
       return gone ? 'fallback' : 'opened';
     },
     listBrowsers: async () => [...hooks.browsers],
+    getBrowser: async () => hooks.browserChoice,
+    setBrowser: async (request) => {
+      if (request.kind === 'system') return (hooks.browserChoice = { kind: 'system' });
+      const found = hooks.browsers.find((item) => item.id === request.id);
+      if (found === undefined) throw new Error('this browser is not installed');
+      return (hooks.browserChoice = { kind: 'detected', id: found.id, name: found.name });
+    },
     pickBrowser: async () => {
       if (hooks.pickError !== null) throw new Error(hooks.pickError);
+      if (hooks.pickResult !== null) hooks.browserChoice = hooks.pickResult;
       return hooks.pickResult;
     },
     onOpenExternal: (handler) => void externalHandlers.push(handler),

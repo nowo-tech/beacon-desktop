@@ -14,7 +14,7 @@ async function control(path: string, body?: unknown) {
 }
 
 type Choice = { kind: string; id?: string; path?: string; name?: string };
-type Hooks = { browsers: { id: string; name: string }[]; opened: string[]; openedWith: Choice[]; copied: string[]; pickResult: Choice | null };
+type Hooks = { browsers: { id: string; name: string }[]; opened: string[]; openedWith: Choice[]; copied: string[]; pickResult: Choice | null; browserChoice: Choice };
 type Tt = { __timeTrack: { app: { tasks: unknown[]; entries: unknown[] | null; state: { pinned: unknown[]; lastTask: unknown }; render(): void }; hooks: Hooks } };
 
 async function signIn(page: Page) {
@@ -56,13 +56,15 @@ test('Settings → Open Beacon in: detected browsers, Custom…, used for every 
   const opened = await page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.openedWith);
   expect(opened).toEqual([{ kind: 'system' }]);
 
-  // Custom… opens the file picker and keeps its result (stored on this computer, survives a reload).
+  // Custom… opens the host's file picker; the host keeps the result (never the window's storage, GC-L1).
   await page.locator('#open-settings').click();
   await select.selectOption('custom');
   await expect(page.locator('#browser-path')).toHaveText('C:\\Tools\\Brave\\brave.exe');
   await expect(select).toHaveValue('custom-current');
-  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('time-track-desktop') ?? '{}').settings.browser);
-  expect(stored).toEqual({ kind: 'custom', path: 'C:\\Tools\\Brave\\brave.exe', name: 'brave' });
+  const kept = await page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.browserChoice);
+  expect(kept).toEqual({ kind: 'custom', path: 'C:\\Tools\\Brave\\brave.exe', name: 'brave' });
+  const stored = await page.evaluate(() => localStorage.getItem('time-track-desktop') ?? '');
+  expect(stored).not.toContain('brave.exe');
 });
 
 test('empty states: one slot, one action each', async ({ page }) => {

@@ -5,11 +5,19 @@
 //!   registry, macOS LaunchServices https handlers, Linux `.desktop` entries handling `x-scheme-handler/https` in the
 //!   XDG data dirs (Flatpak and Snap exports included). The parsers below take their input through small traits, so
 //!   the tests feed them fixtures.
+//! - The choice lives on this side (`BrowserState`, `browser.json` in the app's config folder), never in the webview:
+//!   `set_browser` takes the system default or the id of a detected browser, `pick_browser` opens the native file
+//!   dialog here and keeps what the person picked there, and `open_external` takes only the URL (audit GC-L1). Script
+//!   in the window can never name an executable.
 //! - A chosen browser is launched with an argv array (never a shell); the URL is the only argument that comes from the
 //!   UI and it is checked here again (https, or http to this computer for a development Beacon; no credentials, no
 //!   quote / backtick / dollar / backslash / control characters).
-//! - A custom browser must be an absolute path to an existing file: an `.exe` on Windows, an `.app` bundle on macOS
-//!   (opened with `open -a <app> <url>`).
+//! - A custom browser must be an absolute path to an existing regular file: an `.exe` on Windows (not a Windows system
+//!   binary), an `.app` bundle on macOS (opened with `open -a <app> <url>`), an executable file on Linux; shells,
+//!   interpreters and launchers (`sh`, `env`, `python3`, `cmd.exe`, `powershell.exe`, …) are refused, also behind a
+//!   symbolic link.
+//! - Linux `.desktop` entries whose `Exec` wraps the URL in a shell (`sh -c "browser %u"`, which the Desktop Entry spec
+//!   forbids anyway: field codes must not be quoted) are not offered (audit GC-I1).
 //! - A chosen browser that no longer exists (or fails to start) falls back to the system default; the UI says so.
 
 // The parsers of every OS are compiled (and tested) on all of them; each build only calls its own.
@@ -17,7 +25,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use tauri::AppHandle;
+use std::path::PathBuf;
+use std::sync::Mutex;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 /// One argument of a browser's command line: literal text or the URL (with text around it, `--url=%u`).
@@ -58,13 +68,22 @@ impl Browser {
     }
 }
 
-/// The setting as stored by the UI (local settings of this computer).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// The "Open Beacon in" setting of this computer, kept on this side (`BrowserState`) and shown to the UI as is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Choice {
     System,
+    Detected { id: String, name: String },
+    Custom { path: String, name: String },
+}
+
+/// What the UI may ask `set_browser` for: the system default or a detected browser, by id. A custom browser is only
+/// ever chosen in the native file dialog (`pick_browser`), so no path comes from the webview.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Request {
+    System,
     Detected { id: String },
-    Custom { path: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +109,14 @@ impl Os {
 pub trait Fs {
     fn is_file(&self, path: &str) -> bool;
     fn is_dir(&self, path: &str) -> bool;
+    /// A regular file with an execute bit (Unix); on Windows any regular file.
+    fn is_executable(&self, path: &str) -> bool {
+        self.is_file(path)
+    }
+    /// The path with every symbolic link resolved (`None` when it cannot be resolved).
+    fn resolve(&self, path: &str) -> Option<String> {
+        Some(path.to_string())
+    }
 }
 
 pub struct RealFs;
@@ -100,6 +127,25 @@ impl Fs for RealFs {
     }
     fn is_dir(&self, path: &str) -> bool {
         std::path::Path::new(path).is_dir()
+    }
+    fn is_executable(&self, path: &str) -> bool {
+        let Ok(meta) = std::fs::metadata(path) else {
+            return false;
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            meta.is_file() && meta.permissions().mode() & 0o111 != 0
+        }
+        #[cfg(not(unix))]
+        {
+            meta.is_file()
+        }
+    }
+    fn resolve(&self, path: &str) -> Option<String> {
+        std::fs::canonicalize(path)
+            .ok()
+            .and_then(|p| p.to_str().map(str::to_string))
     }
 }
 
@@ -158,17 +204,141 @@ fn is_absolute(path: &str, os: Os) -> bool {
     }
 }
 
-/// A browser picked by hand: an absolute path to an existing `.exe` (Windows), `.app` bundle (macOS) or file (Linux).
+/// Programs that are never a browser: shells, interpreters, privilege / process launchers and system tools that run
+/// what they are given. Compared with the file name without its extension, lower case (`python3.12` → `python3`).
+const NOT_BROWSERS: &[&str] = &[
+    "sh",
+    "bash",
+    "dash",
+    "zsh",
+    "ksh",
+    "mksh",
+    "csh",
+    "tcsh",
+    "fish",
+    "ash",
+    "busybox",
+    "toybox",
+    "env",
+    "sudo",
+    "doas",
+    "pkexec",
+    "su",
+    "runuser",
+    "nohup",
+    "setsid",
+    "xargs",
+    "timeout",
+    "nice",
+    "stdbuf",
+    "flatpak-spawn",
+    "systemd-run",
+    "awk",
+    "gawk",
+    "mawk",
+    "sed",
+    "osascript",
+    "open",
+    "xdg-open",
+    "gio",
+    "kioclient",
+    "kioclient5",
+    "exo-open",
+    "gnome-open",
+    "cmd",
+    "command",
+    "powershell",
+    "powershell_ise",
+    "pwsh",
+    "wscript",
+    "cscript",
+    "mshta",
+    "rundll32",
+    "regsvr32",
+    "regedit",
+    "reg",
+    "msiexec",
+    "wsl",
+    "wslhost",
+    "conhost",
+    "explorer",
+    "schtasks",
+    "sc",
+    "certutil",
+    "bitsadmin",
+    "curl",
+    "wget",
+    "forfiles",
+    "hh",
+    "installutil",
+    "msbuild",
+    "wmic",
+    "start",
+];
+/// Interpreter families, matched as a prefix (`python3`, `perl5.36`, `ruby3.2`, `node20`, …).
+const INTERPRETERS: &[&str] = &[
+    "python",
+    "pypy",
+    "perl",
+    "ruby",
+    "php",
+    "lua",
+    "node",
+    "deno",
+    "bun",
+    "tclsh",
+    "wish",
+    "java",
+    "jshell",
+    "guile",
+    "racket",
+    "rscript",
+    "julia",
+    "osascript",
+];
+
+fn not_a_browser(path: &str) -> bool {
+    let name = stem(path).to_ascii_lowercase();
+    NOT_BROWSERS.contains(&name.as_str()) || INTERPRETERS.iter().any(|p| name.starts_with(p))
+}
+
+/// `C:\Windows\…` (any drive): system binaries are not offered as a custom browser.
+fn in_windows_dir(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase().replace('/', "\\");
+    // `canonicalize` on Windows answers with the verbatim prefix (`\\?\C:\…`).
+    let lower = lower.strip_prefix("\\\\?\\").unwrap_or(&lower);
+    lower
+        .get(1..)
+        .is_some_and(|rest| rest.starts_with(":\\windows\\"))
+}
+
+/// A browser picked by hand: an absolute path to an existing `.exe` (Windows, outside `C:\Windows`), `.app` bundle
+/// (macOS) or executable file (Linux), never a shell, interpreter or launcher (also checked on the resolved path, so a
+/// link named `brave` that points to `/bin/sh` is refused).
 pub fn custom_browser(path: &str, os: Os, fs: &dyn Fs) -> Result<Browser, String> {
     if path.contains('\0') || path.contains("..") || !is_absolute(path, os) {
         return Err("the browser must be an absolute path".into());
     }
+    let resolved = fs.resolve(path);
+    if not_a_browser(path) || resolved.as_deref().is_some_and(not_a_browser) {
+        return Err("this program is not a browser".into());
+    }
+    if os == Os::Windows
+        && (in_windows_dir(path) || resolved.as_deref().is_some_and(in_windows_dir))
+    {
+        return Err("choose a browser outside the Windows folder".into());
+    }
     let lower = path.to_ascii_lowercase();
+    let app = path.trim_end_matches('/');
     let argv = match os {
         Os::Windows if lower.ends_with(".exe") && fs.is_file(path) => {
             vec![Arg::Lit(path.into()), Arg::url()]
         }
-        Os::Mac if lower.trim_end_matches('/').ends_with(".app") && fs.is_dir(path) => {
+        Os::Mac
+            if lower.trim_end_matches('/').ends_with(".app")
+                && fs.is_dir(path)
+                && fs.is_file(&format!("{app}/Contents/Info.plist")) =>
+        {
             vec![
                 Arg::Lit("/usr/bin/open".into()),
                 Arg::Lit("-a".into()),
@@ -176,10 +346,10 @@ pub fn custom_browser(path: &str, os: Os, fs: &dyn Fs) -> Result<Browser, String
                 Arg::url(),
             ]
         }
-        Os::Linux if fs.is_file(path) => vec![Arg::Lit(path.into()), Arg::url()],
+        Os::Linux if fs.is_executable(path) => vec![Arg::Lit(path.into()), Arg::url()],
         Os::Windows => return Err("choose the browser's .exe file".into()),
         Os::Mac => return Err("choose the browser's .app".into()),
-        Os::Linux => return Err("the browser file does not exist".into()),
+        Os::Linux => return Err("choose the browser's program (an executable file)".into()),
     };
     Ok(Browser {
         id: "custom".into(),
@@ -598,6 +768,28 @@ pub fn parse_exec(exec: &str, name: &str) -> Option<Vec<Arg>> {
     Some(argv)
 }
 
+/// Shells, by file name without extension.
+const SHELLS: &[&str] = &[
+    "sh", "bash", "dash", "zsh", "ksh", "mksh", "csh", "tcsh", "fish", "ash", "busybox",
+];
+
+/// An `Exec` that hands the URL to a shell: a shell with `-c` (`sh -c "browser %u"`, `env A=b bash -lc …`), or the URL
+/// inside a word with spaces around it (a command string). The Desktop Entry spec forbids field codes inside quoted
+/// arguments, and `check_url` keeps quotes, `$`, backticks and spaces out, but not `;`, `|`, `&` or parentheses, so
+/// such an entry is not offered at all (audit GC-I1).
+pub fn shell_wrapped(argv: &[Arg]) -> bool {
+    let with_c = argv.iter().any(|arg| {
+        matches!(arg, Arg::Lit(text) if text.starts_with('-') && !text.starts_with("--") && text.contains('c'))
+    });
+    let shell = argv
+        .iter()
+        .any(|arg| matches!(arg, Arg::Lit(text) if SHELLS.contains(&stem(text).to_ascii_lowercase().as_str())));
+    let url_in_command = argv.iter().any(|arg| {
+        matches!(arg, Arg::Url { prefix, suffix } if prefix.contains(char::is_whitespace) || suffix.contains(char::is_whitespace))
+    });
+    (shell && with_c) || url_in_command
+}
+
 pub fn linux_browsers(files: &dyn DesktopFiles) -> Vec<Browser> {
     let mut seen = HashSet::new();
     let mut found = Vec::new();
@@ -621,7 +813,7 @@ pub fn linux_browsers(files: &dyn DesktopFiles) -> Vec<Browser> {
         } else {
             entry.name.clone()
         };
-        if let Some(argv) = parse_exec(&entry.exec, &name) {
+        if let Some(argv) = parse_exec(&entry.exec, &name).filter(|argv| !shell_wrapped(argv)) {
             found.push(Browser {
                 id: format!("desktop:{id}"),
                 name,
@@ -749,8 +941,8 @@ pub fn plan(
 ) -> Plan {
     let browser = match choice {
         Choice::System => return Plan::System,
-        Choice::Detected { id } => detected().into_iter().find(|b| &b.id == id),
-        Choice::Custom { path } => custom(path).ok(),
+        Choice::Detected { id, .. } => detected().into_iter().find(|b| &b.id == id),
+        Choice::Custom { path, .. } => custom(path).ok(),
     };
     match browser {
         Some(browser) => Plan::Launch(browser.command(url)),
@@ -781,18 +973,107 @@ fn open_default(app: &AppHandle, url: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Opens `url` in the chosen browser: `"opened"`, or `"fallback"` when the chosen one is gone and the system default
-/// was used instead.
+/// The stored choice, as read back from `browser.json`: anything malformed, oversized or of an unknown kind is the
+/// system default (a custom path is checked again by `custom_browser` before each launch).
+pub fn parse_stored(text: &str) -> Choice {
+    let ok = |value: &str, max: usize| !value.trim().is_empty() && value.len() <= max;
+    match serde_json::from_str::<Choice>(text) {
+        Ok(Choice::Detected { id, name }) if ok(&id, 500) && ok(&name, 200) => {
+            Choice::Detected { id, name }
+        }
+        Ok(Choice::Custom { path, name }) if ok(&path, 4096) && ok(&name, 200) => {
+            Choice::Custom { path, name }
+        }
+        _ => Choice::System,
+    }
+}
+
+/// `set_browser`: the system default, or a browser detected on this computer right now (by id).
+pub fn resolve_request(
+    request: &Request,
+    detected: impl FnOnce() -> Vec<Browser>,
+) -> Result<Choice, String> {
+    match request {
+        Request::System => Ok(Choice::System),
+        Request::Detected { id } => detected()
+            .into_iter()
+            .find(|b| &b.id == id)
+            .map(|b| Choice::Detected {
+                id: b.id,
+                name: b.name,
+            })
+            .ok_or_else(|| "this browser is not installed".to_string()),
+    }
+}
+
+/// "Open Beacon in", owned by this side: read from `browser.json` (app config folder) at start, changed only by
+/// `set_browser` / `pick_browser`, read by `open_external`.
+pub struct BrowserState {
+    choice: Mutex<Choice>,
+    file: Option<PathBuf>,
+}
+
+impl BrowserState {
+    pub fn load(file: Option<PathBuf>) -> Self {
+        let choice = file
+            .as_ref()
+            .and_then(|f| std::fs::read_to_string(f).ok())
+            .map(|text| parse_stored(&text))
+            .unwrap_or(Choice::System);
+        Self {
+            choice: Mutex::new(choice),
+            file,
+        }
+    }
+
+    pub fn get(&self) -> Choice {
+        self.choice
+            .lock()
+            .map(|c| c.clone())
+            .unwrap_or(Choice::System)
+    }
+
+    pub fn set(&self, choice: Choice) -> Result<Choice, String> {
+        if let Some(file) = &self.file {
+            if let Some(dir) = file.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            }
+            let json = serde_json::to_string(&choice).map_err(|e| e.to_string())?;
+            let tmp = file.with_extension("json.tmp");
+            std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+            std::fs::rename(&tmp, file).map_err(|e| e.to_string())?;
+        }
+        *self
+            .choice
+            .lock()
+            .map_err(|_| "browser setting unavailable")? = choice.clone();
+        Ok(choice)
+    }
+}
+
+/// Registered in `setup`: the choice stored in the app's config folder.
+pub fn manage(app: &AppHandle) {
+    let file = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("browser.json"));
+    app.manage(BrowserState::load(file));
+}
+
+/// Opens `url` in the browser chosen in Settings (read here, never passed by the webview): `"opened"`, or `"fallback"`
+/// when the chosen one is gone and the system default was used instead.
 #[tauri::command]
 pub async fn open_external(
     app: AppHandle,
     window: tauri::Window,
+    state: tauri::State<'_, BrowserState>,
     url: String,
-    browser: Choice,
 ) -> Result<String, String> {
     crate::only_from(&window, "main")?;
     let url = check_url(&url)?;
-    let outcome = match plan(&browser, &url, detect, |path| {
+    let choice = state.get();
+    let outcome = match plan(&choice, &url, detect, |path| {
         custom_browser(path, Os::current(), &RealFs)
     }) {
         Plan::System => {
@@ -820,11 +1101,65 @@ pub async fn list_browsers(window: tauri::Window) -> Result<Vec<Browser>, String
     Ok(detect())
 }
 
-/// Checks a hand-picked browser (Settings → Custom…) and returns its display name.
+/// The current "Open Beacon in" choice (for Settings and the fallback notice).
 #[tauri::command]
-pub fn check_browser(window: tauri::Window, path: String) -> Result<Browser, String> {
+pub fn get_browser(
+    window: tauri::Window,
+    state: tauri::State<'_, BrowserState>,
+) -> Result<Choice, String> {
     crate::only_from(&window, "main")?;
-    custom_browser(&path, Os::current(), &RealFs)
+    Ok(state.get())
+}
+
+/// Settings → Open Beacon in: the system default or a detected browser (by id, looked up again here).
+#[tauri::command]
+pub async fn set_browser(
+    window: tauri::Window,
+    state: tauri::State<'_, BrowserState>,
+    choice: Request,
+) -> Result<Choice, String> {
+    crate::only_from(&window, "main")?;
+    state.set(resolve_request(&choice, detect)?)
+}
+
+/// Settings → Open Beacon in → Custom…: the native file dialog, opened here; the picked file is checked
+/// (`custom_browser`) and kept. `None` when the person cancelled; an error when the file is not a browser.
+#[tauri::command]
+pub async fn pick_browser(
+    app: AppHandle,
+    window: tauri::Window,
+    state: tauri::State<'_, BrowserState>,
+) -> Result<Option<Choice>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    crate::only_from(&window, "main")?;
+    let os = Os::current();
+    let mut dialog = app.dialog().file();
+    if let Some(main) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&main);
+    }
+    dialog = match os {
+        Os::Windows => dialog.add_filter("Browser", &["exe"]),
+        Os::Mac => dialog.add_filter("Browser", &["app"]),
+        Os::Linux => dialog,
+    };
+    let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_file())
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_string))
+        .ok_or_else(|| "choose a file on this computer".to_string())?;
+    let browser = custom_browser(&path, os, &RealFs)?;
+    state
+        .set(Choice::Custom {
+            path,
+            name: browser.name,
+        })
+        .map(Some)
 }
 
 #[cfg(test)]
@@ -835,6 +1170,10 @@ mod tests {
     struct FakeFs {
         files: Vec<&'static str>,
         dirs: Vec<&'static str>,
+        /// Files without an execute bit.
+        noexec: Vec<&'static str>,
+        /// Symbolic links (path → target).
+        links: Vec<(&'static str, &'static str)>,
     }
 
     impl Fs for FakeFs {
@@ -844,12 +1183,26 @@ mod tests {
         fn is_dir(&self, path: &str) -> bool {
             self.dirs.contains(&path)
         }
+        fn is_executable(&self, path: &str) -> bool {
+            self.is_file(path) && !self.noexec.contains(&path)
+        }
+        fn resolve(&self, path: &str) -> Option<String> {
+            Some(
+                self.links
+                    .iter()
+                    .find(|(link, _)| *link == path)
+                    .map_or(path, |(_, target)| *target)
+                    .to_string(),
+            )
+        }
     }
 
     fn fs(files: &[&'static str], dirs: &[&'static str]) -> FakeFs {
         FakeFs {
             files: files.to_vec(),
             dirs: dirs.to_vec(),
+            noexec: Vec::new(),
+            links: Vec::new(),
         }
     }
 
@@ -899,8 +1252,9 @@ mod tests {
                 r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
                 "/usr/bin/brave-browser",
                 r"C:\tools\run.bat",
+                "/Applications/Brave Browser.app/Contents/Info.plist",
             ],
-            &["/Applications/Brave Browser.app"],
+            &["/Applications/Brave Browser.app", "/Applications/Empty.app"],
         );
         let win = custom_browser(
             r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
@@ -942,6 +1296,92 @@ mod tests {
         assert!(custom_browser("/usr/bin/missing", Os::Linux, &files).is_err());
         assert!(custom_browser("/usr/bin/brave-browser", Os::Mac, &files).is_err());
         assert!(custom_browser("/Applications/Missing.app", Os::Mac, &files).is_err());
+        // A directory named .app without a bundle inside is not an app.
+        assert!(custom_browser("/Applications/Empty.app", Os::Mac, &files).is_err());
+    }
+
+    #[test]
+    fn custom_browser_refuses_shells_interpreters_system_tools_and_non_executables() {
+        let mut files = fs(
+            &[
+                "/bin/sh",
+                "/usr/bin/bash",
+                "/usr/bin/env",
+                "/usr/bin/python3.12",
+                "/usr/bin/perl",
+                "/usr/bin/xdg-open",
+                "/home/ana/bin/brave",
+                "/home/ana/notes.txt",
+                "/opt/brave/brave",
+                r"C:\Windows\System32\cmd.exe",
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                r"C:\Windows\System32\calc.exe",
+                r"D:\tools\pwsh.exe",
+                r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            ],
+            &[],
+        );
+        files.noexec = vec!["/home/ana/notes.txt"];
+        // A link named like a browser that points to a shell.
+        files.links = vec![("/home/ana/bin/brave", "/usr/bin/bash")];
+        for path in [
+            "/bin/sh",
+            "/usr/bin/bash",
+            "/usr/bin/env",
+            "/usr/bin/python3.12",
+            "/usr/bin/perl",
+            "/usr/bin/xdg-open",
+            "/home/ana/bin/brave",
+            "/home/ana/notes.txt",
+        ] {
+            assert!(custom_browser(path, Os::Linux, &files).is_err(), "{path}");
+        }
+        assert!(custom_browser("/opt/brave/brave", Os::Linux, &files).is_ok());
+        for path in [
+            r"C:\Windows\System32\cmd.exe",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            r"C:\Windows\System32\calc.exe",
+            r"D:\tools\pwsh.exe",
+        ] {
+            assert!(custom_browser(path, Os::Windows, &files).is_err(), "{path}");
+        }
+        assert!(custom_browser(
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            Os::Windows,
+            &files
+        )
+        .is_ok());
+        assert!(in_windows_dir(r"\\?\C:\Windows\System32\cmd.exe"));
+        assert!(in_windows_dir("c:/windows/notepad.exe"));
+        assert!(!in_windows_dir(
+            r"C:\Program Files\Windows Media Player\wmplayer.exe"
+        ));
+        assert!(!in_windows_dir("/windows/x"));
+    }
+
+    #[test]
+    fn the_real_fs_needs_an_execute_bit_and_resolves_links() {
+        let root = std::env::temp_dir().join(format!("ttd-exec-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let plain = root.join("plain");
+        std::fs::write(&plain, "x").unwrap();
+        let real = RealFs;
+        let plain = plain.to_str().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert!(!real.is_executable(plain));
+            std::fs::set_permissions(plain, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(real.is_executable(plain));
+            let link = root.join("brave");
+            std::os::unix::fs::symlink("/bin/sh", &link).unwrap();
+            let resolved = real.resolve(link.to_str().unwrap()).unwrap();
+            assert_ne!(stem(&resolved), "brave");
+            assert!(custom_browser(link.to_str().unwrap(), Os::Linux, &real).is_err());
+        }
+        assert!(!real.is_executable(root.to_str().unwrap()));
+        assert!(real.resolve("/nonexistent/browser").is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[derive(Default)]
@@ -1230,6 +1670,24 @@ mod tests {
     const CHROME_DESKTOP: &str = "[Desktop Entry]\nName=Google Chrome\nExec=/usr/bin/google-chrome-stable %U\nType=Application\nMimeType=x-scheme-handler/https;\n";
     const LINK: &str = "[Desktop Entry]\nName=Docs\nType=Link\nURL=https://example.com\nMimeType=x-scheme-handler/https;\n";
     const BROKEN: &str = "[Desktop Entry]\nName=Broken\nExec=\"unterminated %U\nType=Application\nMimeType=x-scheme-handler/https;\n";
+    // The URL inside a shell command string (GC-I1): never offered.
+    const SHELL_WRAPPED: &str = "[Desktop Entry]\nName=Wrapped\nExec=sh -c \"browser %u\"\nType=Application\nMimeType=x-scheme-handler/https;\n";
+    const SHELL_ENV: &str = "[Desktop Entry]\nName=Wrapped too\nExec=env A=b /bin/bash -lc \"exec browser \\\"$1\\\"\" _ %u\nType=Application\nMimeType=x-scheme-handler/https;\n";
+
+    #[test]
+    fn exec_lines_that_hand_the_url_to_a_shell_are_refused() {
+        let wrapped = |exec: &str| shell_wrapped(&parse_exec(exec, "X").unwrap());
+        assert!(wrapped(r#"sh -c "browser %u""#));
+        assert!(wrapped(r#"/bin/bash -c "exec /opt/b/brave %u""#));
+        assert!(wrapped(r#"env A=b /usr/bin/dash -ec 'x' _ %u"#));
+        assert!(wrapped(r#"/opt/run "--open %u now""#));
+        assert!(!wrapped("/usr/bin/brave-browser-stable %U"));
+        assert!(!wrapped("firefox --name \"Fire fox\" %u"));
+        assert!(!wrapped(
+            "env BAMF_DESKTOP_FILE_HINT=/var/lib/snapd/desktop/applications/brave_brave.desktop /snap/bin/brave %U"
+        ));
+        assert!(!wrapped("/usr/bin/chromium --class=Chromium --url=%u"));
+    }
 
     #[test]
     fn linux_desktop_entries_with_https_handlers() {
@@ -1248,6 +1706,8 @@ mod tests {
             ("google-chrome.desktop", CHROME_DESKTOP),
             ("docs.desktop", LINK),
             ("broken.desktop", BROKEN),
+            ("wrapped.desktop", SHELL_WRAPPED),
+            ("wrapped-env.desktop", SHELL_ENV),
         ]);
         let browsers = linux_browsers(&files);
         let ids: Vec<_> = browsers
@@ -1423,7 +1883,8 @@ mod tests {
         assert_eq!(
             plan(
                 &Choice::Detected {
-                    id: brave.id.clone()
+                    id: brave.id.clone(),
+                    name: "Brave".into()
                 },
                 url,
                 list,
@@ -1435,7 +1896,8 @@ mod tests {
         assert_eq!(
             plan(
                 &Choice::Detected {
-                    id: "desktop:gone.desktop".into()
+                    id: "desktop:gone.desktop".into(),
+                    name: "Gone".into()
                 },
                 url,
                 list,
@@ -1448,7 +1910,8 @@ mod tests {
         assert_eq!(
             plan(
                 &Choice::Custom {
-                    path: "/opt/b/brave".into()
+                    path: "/opt/b/brave".into(),
+                    name: "brave".into()
                 },
                 url,
                 Vec::new,
@@ -1459,7 +1922,8 @@ mod tests {
         assert_eq!(
             plan(
                 &Choice::Custom {
-                    path: "/opt/b/gone".into()
+                    path: "/opt/b/gone".into(),
+                    name: "gone".into()
                 },
                 url,
                 Vec::new,
@@ -1470,18 +1934,104 @@ mod tests {
     }
 
     #[test]
-    fn choice_comes_from_the_ui_settings() {
-        let parse = |json: &str| serde_json::from_str::<Choice>(json);
-        assert_eq!(parse(r#"{"kind":"system"}"#).unwrap(), Choice::System);
+    fn the_webview_can_ask_for_the_default_or_a_detected_browser_but_never_a_path() {
+        let parse = |json: &str| serde_json::from_str::<Request>(json);
+        assert_eq!(parse(r#"{"kind":"system"}"#).unwrap(), Request::System);
         assert_eq!(
             parse(r#"{"kind":"detected","id":"x","name":"X"}"#).unwrap(),
-            Choice::Detected { id: "x".into() }
+            Request::Detected { id: "x".into() }
+        );
+        // No custom path (only the native file dialog of `pick_browser` sets one), no other kind.
+        assert!(parse(r#"{"kind":"custom","path":"/bin/sh","name":"b"}"#).is_err());
+        assert!(parse(r#"{"kind":"shell","cmd":"x"}"#).is_err());
+        let list = || {
+            vec![Browser {
+                id: "win:brave".into(),
+                name: "Brave".into(),
+                argv: vec![Arg::Lit(r"C:\b\brave.exe".into()), Arg::url()],
+            }]
+        };
+        assert_eq!(
+            resolve_request(&Request::System, || panic!("no detection")),
+            Ok(Choice::System)
         );
         assert_eq!(
-            parse(r#"{"kind":"custom","path":"/b","name":"b"}"#).unwrap(),
-            Choice::Custom { path: "/b".into() }
+            resolve_request(
+                &Request::Detected {
+                    id: "win:brave".into()
+                },
+                list
+            ),
+            Ok(Choice::Detected {
+                id: "win:brave".into(),
+                name: "Brave".into()
+            })
         );
-        assert!(parse(r#"{"kind":"shell","cmd":"x"}"#).is_err());
+        assert!(resolve_request(
+            &Request::Detected {
+                id: "win:gone".into()
+            },
+            list
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn the_choice_is_kept_on_this_side_and_read_back_sanitised() {
+        assert_eq!(parse_stored(r#"{"kind":"system"}"#), Choice::System);
+        assert_eq!(
+            parse_stored(r#"{"kind":"detected","id":"x","name":"X"}"#),
+            Choice::Detected {
+                id: "x".into(),
+                name: "X".into()
+            }
+        );
+        assert_eq!(
+            parse_stored(r#"{"kind":"custom","path":"/b","name":"b"}"#),
+            Choice::Custom {
+                path: "/b".into(),
+                name: "b".into()
+            }
+        );
+        let long = format!(
+            r#"{{"kind":"custom","path":"/{}","name":"b"}}"#,
+            "x".repeat(5000)
+        );
+        for bad in [
+            "",
+            "not json",
+            r#"{"kind":"shell","cmd":"x"}"#,
+            r#"{"kind":"detected","id":" ","name":"X"}"#,
+            r#"{"kind":"custom","path":"/b"}"#,
+            long.as_str(),
+        ] {
+            assert_eq!(parse_stored(bad), Choice::System, "{bad}");
+        }
+        let root = std::env::temp_dir().join(format!("ttd-browser-{}", std::process::id()));
+        let file = root.join("config").join("browser.json");
+        let state = BrowserState::load(Some(file.clone()));
+        assert_eq!(state.get(), Choice::System);
+        let brave = Choice::Detected {
+            id: "desktop:brave-browser.desktop".into(),
+            name: "Brave".into(),
+        };
+        assert_eq!(state.set(brave.clone()), Ok(brave.clone()));
+        assert_eq!(BrowserState::load(Some(file.clone())).get(), brave);
+        assert_eq!(
+            serde_json::to_string(&brave).unwrap(),
+            r#"{"kind":"detected","id":"desktop:brave-browser.desktop","name":"Brave"}"#
+        );
+        state.set(Choice::System).unwrap();
+        assert_eq!(BrowserState::load(Some(file)).get(), Choice::System);
+        // Without a config folder the choice lives for this run only.
+        let memory = BrowserState::load(None);
+        memory.set(brave.clone()).unwrap();
+        assert_eq!(memory.get(), brave);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn os_detection_and_spawning() {
         assert_eq!(
             Os::current(),
             if cfg!(windows) {

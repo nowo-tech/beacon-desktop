@@ -186,8 +186,9 @@ tasks in Beacon*.
 
 ### Continue, three answers on return, lock pause and "working without a timer?"
 
-- **Continue last**: one click on the stopped timer card, or the global shortcut **Ctrl/Cmd + Alt + Space**
-  (configurable in Settings, works with the window hidden in the tray), starts the last task again as a new entry. The
+- **Continue last**: one click on the stopped timer card, or the global shortcut **Ctrl/Cmd + Alt + T**
+  (configurable in Settings, works with the window hidden in the tray; on Ubuntu / GNOME Ctrl+Alt+T opens a terminal,
+  so choose another one if Settings says it is in use), starts the last task again as a new entry. The
   tray shows the running time on its own (macOS menu-bar title, tooltip on every system), refreshed every minute by the
   Rust heartbeat (`src-tauri/src/tray_clock.rs`).
 - **Three answers on return from idle** (the "Still there?" prompt, its own window or the in-app modal): **Keep** ·
@@ -251,12 +252,14 @@ required" screen send you to the Store listing instead.
   (`tauri_build::AppManifest::commands`, list in `src-tauri/app-commands.rs`), so Tauri only lets a window call the
   commands its capability grants (`allow-<command>`); without a manifest any local window could call any command.
   A Rust test checks the list against `generate_handler!` and that each command is granted to exactly one window.
-- `src-tauri/capabilities/default.json`, window `main`: core defaults, HTTP to your server, `dialog:allow-open` (the
-  *Custom…* browser picker), `clipboard-manager:allow-write-text` (*Copy link*), `notification:default`, autostart enable / disable / is-enabled, process restart, set theme, and the app commands
+- `src-tauri/capabilities/default.json`, window `main`: core defaults, HTTP to your server, `clipboard-manager:allow-write-text` (*Copy link*), `notification:default`, autostart enable / disable / is-enabled, process restart, set theme, and the app commands
   `secret_get` / `secret_set` / `secret_delete`, `idle_seconds`, `set_tray_status`, `set_tray_menu`,
   `set_global_shortcut`, `check_update`, `install_update`, `set_wake_plan`, `notify_friendly`, `prompt_open`,
-  `prompt_focus`, `prompt_close`, `open_external`, `list_browsers`, `check_browser` (every link, in the system default or
-  the chosen browser, launched with an argv array from Rust; no opener permission for the webview). The desktop notifications of the friendly messages go through the app's own
+  `prompt_focus`, `prompt_close`, `open_external`, `list_browsers`, `get_browser`, `set_browser`, `pick_browser` (every
+  link, in the system default or the chosen browser, launched with an argv array from Rust; no opener permission for
+  the webview). The browser choice is kept by Rust (`browser.json`): `open_external` takes only the URL, `set_browser`
+  only the default or a detected browser's id, and a custom browser comes only from the native file dialog Rust opens
+  itself (`pick_browser`, so no `dialog:allow-open` for the webview); shells, interpreters and launchers are refused. The desktop notifications of the friendly messages go through the app's own
   `notify_friendly` command (Rust, `notify-rust` / `tauri-winrt-notification`), not a new plugin permission.
   The working-hours reminders add no command: their *Start* / *Stop* / *Resume* button travels in `notify_friendly`
   (ids allow-listed in Rust, `notify::ACTION_IDS`) and a press comes back as a `notification-action` event emitted

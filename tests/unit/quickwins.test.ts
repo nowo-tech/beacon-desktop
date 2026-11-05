@@ -19,8 +19,8 @@ import {
   workingNow,
 } from '../../src/lib/nudge';
 import { type Week, EMPTY_SCHEDULE, mergeWeek } from '../../src/lib/schedule';
-import { DEFAULT_SETTINGS, loadLocal } from '../../src/lib/settings';
-import { DEFAULT_RESUME_SHORTCUT } from '../../src/platform';
+import { DEFAULT_SETTINGS, loadLocal, migrateResumeShortcut } from '../../src/lib/settings';
+import { DEFAULT_RESUME_SHORTCUT, OLD_DEFAULT_RESUME_SHORTCUT } from '../../src/platform';
 import { shortcutLabel } from '../../src/ui/app';
 
 const T0 = Date.parse('2026-11-03T13:45:00Z');
@@ -238,8 +238,26 @@ describe('settings of the quick wins', () => {
 
   it('defaults: the "Continue last" shortcut, the nudge after 10 minutes and the pause on lock, all on', () => {
     expect(DEFAULT_SETTINGS).toMatchObject({ resumeShortcut: DEFAULT_RESUME_SHORTCUT, nudgeWithoutTimer: true, nudgeMinutes: 10, pauseOnLock: true });
-    expect(DEFAULT_RESUME_SHORTCUT).toBe('CommandOrControl+Alt+Space');
+    // Owner decision 2026-11-05: ⌘⌥Space is Finder search on macOS.
+    expect(DEFAULT_RESUME_SHORTCUT).toBe('CommandOrControl+Alt+T');
+    expect(DEFAULT_RESUME_SHORTCUT).not.toBe(DEFAULT_SETTINGS.shortcut);
     expect(loadLocal(storage({})).nudge).toEqual(EMPTY_NUDGE);
+  });
+
+  it('moves a stored "Continue last" shortcut still on the old default to the new one, keeps custom ones', () => {
+    expect(OLD_DEFAULT_RESUME_SHORTCUT).toBe('CommandOrControl+Alt+Space');
+    for (const old of ['CommandOrControl+Alt+Space', 'commandorcontrol+alt+space', 'CmdOrCtrl+Alt+Space', ' CommandOrControl + Alt + Space ']) {
+      expect(migrateResumeShortcut(old)).toBe('CommandOrControl+Alt+T');
+      expect(loadLocal(storage({ settings: { resumeShortcut: old } })).settings.resumeShortcut).toBe('CommandOrControl+Alt+T');
+    }
+    for (const custom of ['Alt+F9', 'Control+Alt+Space', 'CommandOrControl+Shift+Space', 'CommandOrControl+Alt+T']) {
+      expect(migrateResumeShortcut(custom)).toBe(custom);
+      expect(loadLocal(storage({ settings: { resumeShortcut: custom } })).settings.resumeShortcut).toBe(custom);
+    }
+    expect(migrateResumeShortcut(undefined)).toBe('CommandOrControl+Alt+T');
+    expect(migrateResumeShortcut(42)).toBe('CommandOrControl+Alt+T');
+    // The "open" shortcut is not touched.
+    expect(loadLocal(storage({ settings: { shortcut: 'CommandOrControl+Alt+Space' } })).settings.shortcut).toBe('CommandOrControl+Alt+Space');
   });
 
   it('keeps valid stored values and drops invalid ones', () => {
@@ -253,6 +271,8 @@ describe('settings of the quick wins', () => {
   it('shows shortcuts as people read them', () => {
     expect(shortcutLabel('CommandOrControl+Alt+Space', false)).toBe('Ctrl+Alt+Space');
     expect(shortcutLabel('CommandOrControl+Alt+Space', true)).toBe('⌘⌥Space');
+    expect(shortcutLabel('CommandOrControl+Alt+T', false)).toBe('Ctrl+Alt+T');
+    expect(shortcutLabel('CommandOrControl+Alt+T', true)).toBe('⌘⌥T');
     expect(shortcutLabel('Control+Shift+F9', false)).toBe('Ctrl+Shift+F9');
     expect(shortcutLabel('Super + Option + K', true)).toBe('⌘⌥K');
     expect(shortcutLabel('Cmd+Ctrl+X', false)).toBe('Cmd+Ctrl+X');

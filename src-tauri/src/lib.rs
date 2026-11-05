@@ -35,7 +35,8 @@ const TRAY_ID: &str = "main";
 /// Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME; the UI can change it (Settings).
 const DEFAULT_SHORTCUT: &str = "CommandOrControl+Alt+Shift+T";
 /// Shortcut slots of `set_global_shortcut`: show the window and search, or "Continue the last task" (registered by the
-/// UI at start; default `CommandOrControl+Alt+Space`, Settings can change it).
+/// UI at start; default `CommandOrControl+Alt+T` since 0.5.0 (the previews' `CommandOrControl+Alt+Space` is Finder search
+/// on macOS; the UI migrates it), Settings can change it).
 const SLOT_OPEN: &str = "open";
 const SLOT_RESUME: &str = "resume";
 
@@ -1019,6 +1020,8 @@ pub fn run() {
             app.manage(HeartbeatState(Mutex::new(heartbeat::Heartbeat::new())));
             app.manage(MainFocus::default());
             app.manage(prompt::PromptState::default());
+            // "Open Beacon in" lives on this side (browser.json in the app's config folder), see browser.rs.
+            browser::manage(app.handle());
             create_main_window(app.handle())?;
             build_tray(app)?;
             spawn_heartbeat(app.handle().clone());
@@ -1081,7 +1084,9 @@ pub fn run() {
             prompt::prompt_show_main,
             browser::open_external,
             browser::list_browsers,
-            browser::check_browser
+            browser::get_browser,
+            browser::set_browser,
+            browser::pick_browser
         ])
         .run(tauri::generate_context!())
         .expect("error while running TimeTrack");

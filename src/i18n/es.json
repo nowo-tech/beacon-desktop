@@ -364,7 +364,7 @@
   "reassignSave": "Pasar el tiempo aquí",
   "helpersTitle": "Continuar, avisos y bloqueo",
   "resumeShortcutLabel": "Atajo «Continuar la última»",
-  "resumeShortcutHelp": "Vuelve a iniciar tu última tarea (un registro nuevo) desde cualquier aplicación, aunque TimeTrack esté oculto en la bandeja. Formato: CommandOrControl+Alt+Space.",
+  "resumeShortcutHelp": "Vuelve a iniciar tu última tarea (un registro nuevo) desde cualquier aplicación, aunque TimeTrack esté oculto en la bandeja. Formato: CommandOrControl+Alt+T.",
   "shortcutSame": "«{shortcut}» ya es el otro atajo: elige uno distinto.",
   "nudgeSwitch": "Avisarme si trabajo sin temporizador dentro de mi horario",
   "nudgeMinutes": "Tras (minutos de actividad)",

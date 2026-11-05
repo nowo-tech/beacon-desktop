@@ -253,7 +253,7 @@ describe('picker rendering', () => {
 describe('"Continue last" and its global shortcut', () => {
   it('the timer card button and the shortcut start the last task again as a new entry, window hidden or not', async () => {
     const ui = await signedIn();
-    expect(ui.hooks.resumeShortcut).toBe('CommandOrControl+Alt+Space');
+    expect(ui.hooks.resumeShortcut).toBe('CommandOrControl+Alt+T');
     await ui.app.start({ id: 'T-102', title: 'Review pull request queue' });
     await ui.app.stop();
     expect(ui.$('#resume').textContent).toBe('Continue last');
@@ -297,7 +297,7 @@ describe('"Continue last" and its global shortcut', () => {
     ui.app.show('settings');
     expect(ui.$('#helpers-title').textContent).toBe('Continue, reminders and lock');
     const input = ui.$<HTMLInputElement>('#resume-shortcut');
-    expect(input.value).toBe('CommandOrControl+Alt+Space');
+    expect(input.value).toBe('CommandOrControl+Alt+T');
     input.value = 'CommandOrControl+Alt+Shift+T';
     ui.$<HTMLFormElement>('#resume-shortcut-form').requestSubmit();
     await tick();
@@ -316,7 +316,7 @@ describe('"Continue last" and its global shortcut', () => {
     expect(await ui.app.applyShortcut('alt+f9')).toBe(false);
     ui.click('#resume-shortcut-default');
     await tick();
-    expect(ui.app.state.settings.resumeShortcut).toBe('CommandOrControl+Alt+Space');
+    expect(ui.app.state.settings.resumeShortcut).toBe('CommandOrControl+Alt+T');
     ui.app.destroy();
   });
 });

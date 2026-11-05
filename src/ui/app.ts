@@ -8,7 +8,7 @@ import type { NoticeKind, PoseId, TaskKind } from '../lib/messages/types';
 import { createTranslator, detectLocale, type Locale, type MessageKey, type Translate } from '../lib/i18n';
 import { type GapChoice, type IdleCheckState, type IdleChoice, WATCHING, decide, decideGap, observeIdle, promptSpan } from '../lib/idleCheck';
 import { lockReturn, meetingTask, pickerTasks, reassignMode, reassignWhileAsking } from '../lib/idleChoices';
-import { composeNudge, NUDGE_MINUTES_CHOICES, type NudgeAction, nudgeActionOf, type NudgeNote, observeActivity, watchingActivity, workingNow } from '../lib/nudge';
+import { composeNudge, EMPTY_NUDGE, NUDGE_MINUTES_CHOICES, type NudgeAction, nudgeActionOf, type NudgeNote, observeActivity, watchingActivity, workingNow } from '../lib/nudge';
 import { preflight } from '../lib/preflight';
 import { OfflineQueue } from '../lib/queue';
 import { type ClampNote, type QueuedAction, type SyncResult, applyLocally } from '../lib/replay';
@@ -277,6 +277,8 @@ export class DesktopApp {
   private readonly toastRegion: HTMLElement;
   /** Settings → Open Beacon in: the browsers found on this computer (`null` until asked). */
   browsers: DetectedBrowser[] | null = null;
+  /** "Open Beacon in" as the host keeps it (read at start and when Settings opens; never sent back when opening). */
+  browserChoice: BrowserChoice = SYSTEM_BROWSER;
   /** Settings → Open Beacon in: why the picked browser was refused. */
   browserMessage: string | null = null;
   /** Right-click / long-press menu of a Beacon link (Open / Copy link). */
@@ -381,6 +383,7 @@ export class DesktopApp {
     await this.restoreWindow();
     await this.applyShortcut(this.state.settings.shortcut, false);
     await this.applyShortcut(this.state.settings.resumeShortcut, false, 'resume');
+    await this.loadBrowserChoice();
     this.token = await this.platform.secretGet();
     if (this.state.session === null || this.token === null) {
       this.show('login');
@@ -537,8 +540,23 @@ export class DesktopApp {
     await this.platform.secretDelete();
     this.token = null;
     // The friendly-message history goes too (its slots name the entries, `<task id>@<start>`), and the schedule
-    // (overrides, days off, Beacon's copy) belongs to the person who signs out.
-    this.persist({ session: null, activeTimer: null, idleCheck: WATCHING, pendingNote: null, messages: { ...EMPTY_MESSAGES }, schedule: { ...EMPTY_SCHEDULE }, meeting: { ...NO_MEETING } });
+    // (overrides, days off, Beacon's copy) belongs to the person who signs out. So do the task ids and titles that
+    // notifications and buttons can show (audit GC-L2): the last task ("Continue last", "Back to {task}?", "Start
+    // {task}"), the pinned tasks, the "Working without a timer?" stretch and the generic meeting task — the next
+    // person (maybe on another Beacon) never sees them or starts the previous account's task.
+    this.persist({
+      session: null,
+      activeTimer: null,
+      idleCheck: WATCHING,
+      pendingNote: null,
+      messages: { ...EMPTY_MESSAGES },
+      schedule: { ...EMPTY_SCHEDULE },
+      meeting: { ...NO_MEETING },
+      lastTask: null,
+      pinned: [],
+      nudge: { ...EMPTY_NUDGE },
+      settings: { ...this.state.settings, meetingGeneric: null },
+    });
     this.reminderToast = null;
     this.meetingPicker = null;
     this.queue.clear();
@@ -1935,9 +1953,9 @@ export class DesktopApp {
     this.closeLinkMenu();
     const safe = externalUrl(url, rule);
     if (safe === null) return false;
-    const choice = this.state.settings.browser;
+    const choice = this.browserChoice;
     try {
-      const outcome = await this.platform.openExternal(safe, choice);
+      const outcome = await this.platform.openExternal(safe);
       if (outcome === 'fallback' && choice.kind !== 'system') this.setNotice(this.t('browserFallback', { name: choice.name }));
       return true;
     } catch {
@@ -2070,6 +2088,12 @@ export class DesktopApp {
       // Not available on this system.
     }
     await this.platform.secretDelete();
+    // "Open Beacon in" is kept by the host: back to the system default.
+    try {
+      this.browserChoice = await this.platform.setBrowser({ kind: 'system' });
+    } catch {
+      this.browserChoice = SYSTEM_BROWSER;
+    }
     for (const key of [...LOCAL_KEYS, WINDOW_KEY]) this.storage.removeItem(key);
     this.windowMemory = loadWindowMemory(this.storage);
     this.section = 'tasks';
@@ -4100,7 +4124,7 @@ export class DesktopApp {
   /** Settings → Open Beacon in: system default, a detected browser, or Custom… (this computer only). */
   private renderBrowserSetting(): HTMLElement {
     const t = this.t;
-    const choice = this.state.settings.browser;
+    const choice = this.browserChoice;
     const select = h('select', { id: 'browser', attrs: { 'aria-describedby': 'browser-help' } });
     const option = (value: string, label: string) => select.append(h('option', { attrs: { value } }, label));
     option('system', t('browserSystem'));
@@ -4129,25 +4153,40 @@ export class DesktopApp {
     } catch {
       this.browsers = [];
     }
+    await this.loadBrowserChoice();
     if (this.view === 'settings') this.render();
+  }
+
+  /** The "Open Beacon in" choice the host keeps (the system default when the host cannot say). */
+  async loadBrowserChoice(): Promise<void> {
+    try {
+      this.browserChoice = await this.platform.getBrowser();
+    } catch {
+      this.browserChoice = SYSTEM_BROWSER;
+    }
   }
 
   /** `system`, `detected:<id>`, `custom` (the file picker) or `custom-current` (unchanged). */
   async chooseBrowser(value: string): Promise<void> {
     this.browserMessage = null;
-    let browser: BrowserChoice | null = null;
-    if (value === 'system') browser = SYSTEM_BROWSER;
-    else if (value.startsWith('detected:')) {
-      const found = this.browsers?.find((item) => item.id === value.slice(9));
-      if (found !== undefined) browser = { kind: 'detected', id: found.id, name: found.name };
-    } else if (value === 'custom') {
+    // The host validates and keeps the choice; the UI only shows what it answers.
+    try {
+      if (value === 'system') this.browserChoice = await this.platform.setBrowser({ kind: 'system' });
+      else if (value.startsWith('detected:')) {
+        const found = this.browsers?.find((item) => item.id === value.slice(9));
+        if (found !== undefined) this.browserChoice = await this.platform.setBrowser({ kind: 'detected', id: found.id });
+      }
+    } catch {
+      await this.loadBrowserChoice();
+    }
+    if (value === 'custom') {
       try {
-        browser = await this.platform.pickBrowser();
+        const picked = await this.platform.pickBrowser();
+        if (picked !== null) this.browserChoice = picked;
       } catch {
         this.browserMessage = this.t('browserCustomInvalid');
       }
     }
-    if (browser !== null) this.persist({ settings: { ...this.state.settings, browser } });
     this.render();
   }
 

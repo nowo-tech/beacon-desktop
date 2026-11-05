@@ -5,6 +5,15 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [0.5.0] - 2026-11-05
 
+**Upgrading on Windows from 0.1.0 (`.msi`):** the in-app update installs in passive mode, so it removes a leftover
+0.1.0 `.msi` install **without asking first**; Windows then shows an **administrator (UAC) prompt** in the middle of
+the update (that copy was installed for all users in Program Files). Approve it to remove the old copy, or decline and
+remove *TimeTrack* 0.1.0 later from Settings → Apps. Installing 0.5.0 by hand asks before removing it.
+
+**"Continue last" shortcut:** the default is now **Ctrl+Alt+T** (⌘⌥T on macOS); ⌘⌥Space of the previews is Finder
+search on macOS. A stored shortcut still at the old default moves to the new one, any other is kept. On Ubuntu /
+GNOME Ctrl+Alt+T opens a terminal: if Settings says the shortcut is in use, choose another one there.
+
 ### Added
 
 - **Compact and full window views** (`src/lib/layout.ts`). Below 900 px the window keeps the quick tracker: one
@@ -30,7 +39,7 @@ All notable changes to this project are documented here ([Keep a Changelog](http
   `pnpm screenshots:layout` writes Spanish review screenshots of both views and the width in between. The mock
   server gets `POST /__mock/entries/seed`.
 - **Continue last** (desktop quick win Q1–Q3): the stopped timer card's button now reads *Continue last* and shows the
-  global shortcut; a second global shortcut (`set_global_shortcut` slot `resume`, default `CommandOrControl+Alt+Space`,
+  global shortcut; a second global shortcut (`set_global_shortcut` slot `resume`, default `CommandOrControl+Alt+T`,
   Settings → *Continue, reminders and lock*) starts the last task again as a new entry with the window hidden. The
   tray's elapsed time is refreshed every minute by the Rust heartbeat (`tray_clock.rs`; `set_tray_status` takes an
   optional `clock` with the start and the translated templates): menu-bar title on macOS, tooltip everywhere.
@@ -160,14 +169,14 @@ All notable changes to this project are documented here ([Keep a Changelog](http
   - Mock server: `daysOff` and `locale` on `GET me` (config).
 
 - **Open Beacon in** (Settings): *System default browser* (default), one of the browsers installed on this computer, or
-  *Custom…* (file picker: an `.exe` on Windows, an `.app` on macOS). Every link the app opens goes through one helper
+  *Custom…* (native file dialog opened by the app: an `.exe` on Windows, an `.app` on macOS, an executable on Linux). Every link the app opens goes through one helper
   (`App.openExternal` → Rust `open_external`): Beacon, My time, task links, *Open the page again* and the sign-in page,
   the Apps / Store pages, the tray items, and any `target=_blank` / `window.open` / navigation the webview tries on its
   own (refused by the window and handed to the helper). Detection (`src-tauri/src/browser.rs`): Windows
   `StartMenuInternet` (HKCU / HKLM, incl. `WOW6432Node`) plus `App Paths`; macOS LaunchServices https handlers
   (`LSCopyAllHandlersForURLScheme`); Linux `.desktop` entries with `x-scheme-handler/https` in the XDG data dirs plus
-  the Flatpak and Snap export dirs (Brave, Firefox, Chrome, Chromium, Edge, Vivaldi, Opera, Safari …). Stored per
-  computer (`settings.browser`). A chosen browser that is gone falls back to the system default with a notice, and
+  the Flatpak and Snap export dirs (Brave, Firefox, Chrome, Chromium, Edge, Vivaldi, Opera, Safari …). Kept per
+  computer by the Rust side (`browser.json` in the app's config folder). A chosen browser that is gone falls back to the system default with a notice, and
   Settings marks it *(not found)*.
 - **Copy link** next to My time, the running task's link and *Open the page again*, plus a right-click / long-press
   menu (*Open in the browser* / *Copy link*) on every Beacon link. Copied with the clipboard-manager plugin
@@ -208,10 +217,23 @@ All notable changes to this project are documented here ([Keep a Changelog](http
   the main window. `open_external` (main window only) re-checks the URL (https, or http to this computer; no
   credentials, no quote / `$` / backtick / backslash / control characters), launches a chosen browser with an argv
   array (never a shell; `open -a <app> <url>` on macOS) and resolves a detected browser from the OS again by id, so the
-  webview never supplies a command line. A custom browser must be an absolute path to an existing `.exe` / `.app` /
-  file. New permissions, main window only: `dialog:allow-open`, `clipboard-manager:allow-write-text` and the commands
-  `open_external`, `list_browsers`, `check_browser`; the prompt window gets nothing new and refuses navigation and new
-  windows.
+  webview never supplies a command line. New permissions, main window only: `clipboard-manager:allow-write-text` and
+  the commands `open_external`, `list_browsers`, `get_browser`, `set_browser`, `pick_browser`; the prompt window gets
+  nothing new and refuses navigation and new windows.
+- The browser choice is kept on the Rust side, not taken from the webview (security review 2026-11-05, GC-L1):
+  `open_external` takes only the URL and reads the choice from `BrowserState` (`browser.json` in the app's config
+  folder). `set_browser` accepts only the system default or the id of a browser detected again on this computer;
+  a custom browser is chosen only in the native file dialog that Rust opens itself (`pick_browser`), so the webview has
+  no `dialog:allow-open` permission and never passes a path. A custom browser must be an absolute path to an existing
+  regular file: an `.exe` outside `C:\Windows` on Windows, an `.app` bundle with `Contents/Info.plist` on macOS, a
+  file with an execute bit on Linux; shells, interpreters and launchers (`sh`, `bash`, `env`, `python3`, `perl`,
+  `xdg-open`, `cmd`, `powershell`, `mshta`, `rundll32` …) are refused, also behind a symbolic link. It is checked again
+  before every launch. *Clear local data* resets it to the system default.
+- Linux `.desktop` entries whose `Exec` hands the URL to a shell (`sh -c "browser %u"`, `bash -lc …`, or the URL inside
+  a quoted command string, which the Desktop Entry spec forbids) are not offered as browsers (GC-I1).
+- Signing out also deletes the last task, the pinned tasks, the "Working without a timer?" state and the generic
+  meeting task (GC-L2), so a previous account's task titles never reach the next person's notifications, buttons or
+  "Continue last".
 - App commands are ACL-scoped (security review 2026-11-05, FN-L1): `build.rs` declares them in the app manifest
   (`src-tauri/app-commands.rs`) and each capability grants its window only its own (`main`: keychain, tray,
   shortcut, updater, heartbeat, notifications, opening the prompt; `prompt`: `prompt_view`, `prompt_answer`,

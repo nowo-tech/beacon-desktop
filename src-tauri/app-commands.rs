@@ -20,7 +20,9 @@ pub const MAIN_COMMANDS: &[&str] = &[
     "prompt_close",
     "open_external",
     "list_browsers",
-    "check_browser",
+    "get_browser",
+    "set_browser",
+    "pick_browser",
 ];
 
 /// Commands only the "Still there?" window may call (capabilities/prompt.json).
@@ -46,5 +48,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "prompt_show_main",
     "open_external",
     "list_browsers",
-    "check_browser",
+    "get_browser",
+    "set_browser",
+    "pick_browser",
 ];

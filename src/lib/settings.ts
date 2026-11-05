@@ -1,7 +1,6 @@
 import type { Scope, Task, Timer } from '../api/types';
-import { DEFAULT_RESUME_SHORTCUT, DEFAULT_SHORTCUT } from '../platform';
+import { DEFAULT_RESUME_SHORTCUT, DEFAULT_SHORTCUT, OLD_DEFAULT_RESUME_SHORTCUT } from '../platform';
 import { EMPTY_MESSAGES, type MessageState, sanitizeMessages } from './friendly';
-import { type BrowserChoice, sanitizeBrowser, SYSTEM_BROWSER } from './links';
 import { type IdleCheckState, WATCHING } from './idleCheck';
 import { DEFAULT_NUDGE_MINUTES, EMPTY_NUDGE, NUDGE_MINUTES_CHOICES, type NudgeState, sanitizeNudge } from './nudge';
 import { DEFAULT_MIN_CALL_MINUTES, type MeetingApp, type MeetingState, MIN_CALL_CHOICES, NO_MEETING, sanitizeMeeting, sanitizeMuted, sanitizeTaskRef, type TaskRef } from './meetings';
@@ -48,8 +47,6 @@ export interface Settings {
   scheduleReminders: boolean;
   /** "Shall we start?" this many minutes before the start time (`LEAD_CHOICES`). */
   scheduleLeadMinutes: number;
-  /** "Open Beacon in": the browser for every link the app opens (this computer only). */
-  browser: BrowserChoice;
   /** Global shortcut that starts the last task again, window hidden or not (Tauri accelerator syntax). */
   resumeShortcut: string;
   /** "Working without a timer?" nudge during working hours (on by default). */
@@ -129,7 +126,6 @@ export const DEFAULT_SETTINGS: Settings = {
   nativeIntroSeen: false,
   scheduleReminders: true,
   scheduleLeadMinutes: DEFAULT_LEAD_MINUTES,
-  browser: SYSTEM_BROWSER,
   resumeShortcut: DEFAULT_RESUME_SHORTCUT,
   nudgeWithoutTimer: true,
   nudgeMinutes: DEFAULT_NUDGE_MINUTES,
@@ -161,16 +157,29 @@ export function emptyState(): LocalState {
   };
 }
 
+/**
+ * The stored "Continue last" shortcut: the 0.5.0 previews defaulted to `CommandOrControl+Alt+Space` (Spotlight /
+ * Finder search on macOS), so that value becomes the new default; any other shortcut the person set is kept.
+ */
+export function migrateResumeShortcut(raw: unknown): string {
+  if (typeof raw !== 'string' || raw.trim() === '') return DEFAULT_RESUME_SHORTCUT;
+  const keys = (value: string) => value.toLowerCase().replace(/\s+/g, '').replace(/^cmdorctrl\+/, 'commandorcontrol+');
+  return keys(raw) === keys(OLD_DEFAULT_RESUME_SHORTCUT) ? DEFAULT_RESUME_SHORTCUT : raw;
+}
+
 export function loadLocal(storage: Storage = localStorage): LocalState {
   try {
     const raw = JSON.parse(storage.getItem(KEY) ?? '{}') as Partial<LocalState>;
+    // 0.5.0 previews kept "Open Beacon in" here; the host owns it now (src-tauri/src/browser.rs).
+    const storedSettings: Partial<Settings> & { browser?: unknown } = { ...(raw.settings ?? {}) };
+    delete storedSettings.browser;
     return {
       ...emptyState(),
       ...raw,
       // 0.2 stored the old default (10) for everyone: only a different value was the person's own choice.
       settings: {
         ...DEFAULT_SETTINGS,
-        ...(raw.settings ?? {}),
+        ...storedSettings,
         idleMinutes: typeof raw.settings?.idleMinutes === 'number' && raw.settings.idleMinutes !== 10 ? raw.settings.idleMinutes : null,
         theme: isTheme(raw.settings?.theme) ? raw.settings.theme : DEFAULT_SETTINGS.theme,
         funMessages: typeof raw.settings?.funMessages === 'boolean' ? raw.settings.funMessages : DEFAULT_SETTINGS.funMessages,
@@ -180,8 +189,7 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
         nativeIntroSeen: raw.settings?.nativeIntroSeen === true,
         scheduleReminders: typeof raw.settings?.scheduleReminders === 'boolean' ? raw.settings.scheduleReminders : DEFAULT_SETTINGS.scheduleReminders,
         scheduleLeadMinutes: LEAD_CHOICES.includes(raw.settings?.scheduleLeadMinutes as number) ? (raw.settings?.scheduleLeadMinutes as number) : DEFAULT_SETTINGS.scheduleLeadMinutes,
-        browser: sanitizeBrowser(raw.settings?.browser),
-        resumeShortcut: typeof raw.settings?.resumeShortcut === 'string' && raw.settings.resumeShortcut.trim() !== '' ? raw.settings.resumeShortcut : DEFAULT_SETTINGS.resumeShortcut,
+        resumeShortcut: migrateResumeShortcut(raw.settings?.resumeShortcut),
         nudgeWithoutTimer: typeof raw.settings?.nudgeWithoutTimer === 'boolean' ? raw.settings.nudgeWithoutTimer : DEFAULT_SETTINGS.nudgeWithoutTimer,
         nudgeMinutes: NUDGE_MINUTES_CHOICES.includes(raw.settings?.nudgeMinutes as number) ? (raw.settings?.nudgeMinutes as number) : DEFAULT_SETTINGS.nudgeMinutes,
         pauseOnLock: typeof raw.settings?.pauseOnLock === 'boolean' ? raw.settings.pauseOnLock : DEFAULT_SETTINGS.pauseOnLock,

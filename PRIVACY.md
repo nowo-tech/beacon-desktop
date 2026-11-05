@@ -29,13 +29,15 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
   lately, the time of the last one, the current one with the running entry it belongs to, and the moments and cheers
   already used, and for "Working without a timer?" the start of the current stretch of input, whether the counter
   moved during it, the time of the last reminder and the line numbers shown lately (never the counter's values).
-  Entries are named by their task id and start time (`<task id>@<start>`). All of it is in the app's local storage. Signing out deletes the token, the timer, the queue, the idle-check state and the friendly-message
-  history.
+  Entries are named by their task id and start time (`<task id>@<start>`). All of it is in the app's local storage. Signing out deletes the token, the timer, the queue, the idle-check state, the friendly-message
+  history, the last task, the pinned tasks, the "Working without a timer?" state and the generic meeting task, so the
+  next person never sees your task titles (in the app or in a desktop notification) or starts one of your tasks.
 - **Clear local data** (Settings → What we collect) signs you out and deletes all of the above, and turns "start at
   login" off.
 - "Open Beacon in" (Settings): which browser opens your links, by the id the system gives it, or the path of a browser
-  you picked by hand. Read from the system (installed browsers) when Settings opens; stored only in the app's local
-  storage and never sent. A copied link goes only to your clipboard, without user info or secret-looking parameters.
+  you picked by hand in the file dialog. Read from the system (installed browsers) when Settings opens; kept by the
+  app in `browser.json` in its configuration folder on this computer (not in the window's storage) and never sent.
+  *Clear local data* resets it to the system default. A copied link goes only to your clipboard, without user info or secret-looking parameters.
 - Today / This week totals and recent tasks are computed on this computer from your own entries (`entries:read`, the
   same data Beacon shows you); nothing extra is sent.
 
@@ -80,7 +82,7 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 
 ## "Continue last" shortcut and the tray clock
 
-- The global shortcut (Settings, `Ctrl+Alt+Space` / `⌘⌥Space` by default) is registered with your operating system
+- The global shortcut (Settings, `Ctrl+Alt+T` / `⌘⌥T` by default) is registered with your operating system
   only to know when *you* press it; no other key is read.
 - The tray shows the elapsed time of the running timer (macOS menu bar, tooltip everywhere), refreshed by the app's
   background heartbeat from the start time it already has. Nothing is sent for it.
@@ -123,8 +125,8 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
   calendar entries, audio or its level. The microphone is never opened by the app.
 - **Stored on this computer**: the call in progress (app name, start, when the microphone was released, when the last
   question was asked), the task you chose for it and the one running before (id and title, to offer "Back to …"), your
-  generic meeting task and the apps you said not to ask about. Signing out deletes the call; turning the feature off
-  deletes it too.
+  generic meeting task and the apps you said not to ask about. Signing out deletes the call and the generic meeting
+  task; turning the feature off deletes the call too.
 - **Sent**: nothing about the call. Only what you choose in the question reaches Beacon, as any other timer action
   (`timer/start`, `timer/switch`, `timer/stop`).
 - The questions are desktop notifications like the friendly messages (title, line, pose and one button handed to your

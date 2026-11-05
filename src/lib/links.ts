@@ -3,7 +3,9 @@ import { safeVerificationUri } from './urls';
 
 /**
  * "Open Beacon in" (Settings, this computer only): the system default browser, one of the browsers detected on this
- * computer, or one picked by hand. Every link the app opens goes through `App.openExternal` with this choice.
+ * computer, or one picked by hand in the native file dialog. The host keeps it (src-tauri/src/browser.rs,
+ * `get_browser` / `set_browser` / `pick_browser`); the webview only shows it and never passes it when opening a link
+ * (audit GC-L1).
  */
 export type BrowserChoice =
   | { kind: 'system' }
@@ -23,7 +25,10 @@ export const SYSTEM_BROWSER: BrowserChoice = { kind: 'system' };
 
 const text = (value: unknown, max: number): string | null => (typeof value === 'string' && value.trim() !== '' && value.length <= max ? value : null);
 
-/** The stored choice, or the system default when it is missing or malformed. */
+/** What the UI may ask the host for: the system default or a detected browser (by id). Never a path. */
+export type BrowserRequest = { kind: 'system' } | { kind: 'detected'; id: string };
+
+/** The choice as the host reports it, or the system default when it is missing or malformed. */
 export function sanitizeBrowser(raw: unknown): BrowserChoice {
   if (typeof raw !== 'object' || raw === null) return SYSTEM_BROWSER;
   const value = raw as Record<string, unknown>;

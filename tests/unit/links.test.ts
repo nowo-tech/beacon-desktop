@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { EMPTY_POSES, EMPTY_STATES, EMPTY_TEXTS, PIN_HINT, quickEmptyState } from '../../src/lib/emptyStates';
 import { MESSAGE_LOCALES } from '../../src/lib/friendly';
 import { copyableUrl, externalUrl, sanitizeBrowser, SYSTEM_BROWSER } from '../../src/lib/links';
-import { DEFAULT_SETTINGS, loadLocal, saveLocal, emptyState as emptyLocal } from '../../src/lib/settings';
+import { loadLocal, saveLocal, emptyState as emptyLocal } from '../../src/lib/settings';
 import { tasksPage } from '../../src/lib/urls';
 import { browserPlatform } from '../../src/platform';
 import { DesktopApp } from '../../src/ui/app';
@@ -89,8 +89,7 @@ describe('link rules', () => {
     expect(copyableUrl('https://evil.example/x', { kind: 'beacon', server: BEACON })).toBeNull();
   });
 
-  it('the stored browser choice is sanitised; the default is the system browser', () => {
-    expect(DEFAULT_SETTINGS.browser).toEqual(SYSTEM_BROWSER);
+  it("the host's browser choice is sanitised; the window's storage no longer keeps one (GC-L1)", () => {
     expect(sanitizeBrowser({ kind: 'detected', id: 'win:brave', name: 'Brave' })).toEqual({ kind: 'detected', id: 'win:brave', name: 'Brave' });
     expect(sanitizeBrowser({ kind: 'custom', path: '/opt/b/brave', name: 'brave' })).toEqual({ kind: 'custom', path: '/opt/b/brave', name: 'brave' });
     for (const bad of [null, 'brave', 3, {}, { kind: 'shell', cmd: 'x' }, { kind: 'detected', id: '' , name: 'X' }, { kind: 'detected', id: 'x' }, { kind: 'custom', path: ' ', name: 'b' }, { kind: 'custom', path: 'x'.repeat(5000), name: 'b' }]) {
@@ -98,11 +97,12 @@ describe('link rules', () => {
     }
     const storage = new Map<string, string>();
     const fake = { getItem: (k: string) => storage.get(k) ?? null, setItem: (k: string, v: string) => void storage.set(k, v) } as Storage;
+    // A 0.5.0 preview stored it in the settings: dropped on load (the host owns it now).
     const state = emptyLocal();
-    saveLocal({ ...state, settings: { ...state.settings, browser: { kind: 'detected', id: 'mac:com.brave.browser', name: 'Brave Browser' } } }, fake);
-    expect(loadLocal(fake).settings.browser).toEqual({ kind: 'detected', id: 'mac:com.brave.browser', name: 'Brave Browser' });
-    storage.set('time-track-desktop', JSON.stringify({ settings: { browser: { kind: 'evil' } } }));
-    expect(loadLocal(fake).settings.browser).toEqual(SYSTEM_BROWSER);
+    saveLocal({ ...state, settings: { ...state.settings, browser: { kind: 'custom', path: '/bin/sh', name: 'sh' } } as typeof state.settings }, fake);
+    const loaded = loadLocal(fake);
+    expect('browser' in loaded.settings).toBe(false);
+    expect(JSON.stringify(loaded)).not.toContain('/bin/sh');
   });
 
   it('the tasks page of a server', () => {
@@ -136,7 +136,8 @@ describe('opening links', () => {
   it('every link uses the chosen browser; a browser that is gone falls back to the default with a notice', async () => {
     const ui = await signedIn({ locale: 'es' });
     ui.hooks.browsers = [{ id: 'win:brave', name: 'Brave' }];
-    ui.app.state.settings.browser = { kind: 'detected', id: 'win:brave', name: 'Brave' };
+    ui.hooks.browserChoice = { kind: 'detected', id: 'win:brave', name: 'Brave' };
+    await ui.app.loadBrowserChoice();
     onHttpsBeacon(ui);
     ui.click('#open-beacon');
     ui.app.openApps();
@@ -149,7 +150,8 @@ describe('opening links', () => {
     expect(await ui.app.openExternal(`${BEACON}/dashboard`, { kind: 'beacon', server: BEACON })).toBe(true);
     expect(ui.$('#notice').textContent).toBe('No se encontró Brave, así que el enlace se abrió en el navegador predeterminado del sistema.');
     // A custom browser that was removed.
-    ui.app.state.settings.browser = { kind: 'custom', path: '/opt/gone/brave', name: 'brave' };
+    ui.hooks.browserChoice = { kind: 'custom', path: '/opt/gone/brave', name: 'brave' };
+    await ui.app.loadBrowserChoice();
     ui.hooks.goneBrowsers = ['/opt/gone/brave'];
     await ui.app.openExternal(`${BEACON}/x`, { kind: 'beacon', server: BEACON });
     expect(ui.$('#notice').textContent).toContain('No se encontró brave');
@@ -300,12 +302,14 @@ describe('Settings → Open Beacon in', () => {
     select.value = 'detected:win:brave';
     select.dispatchEvent(new Event('change'));
     await tick();
-    expect(loadLocal(localStorage).settings.browser).toEqual({ kind: 'detected', id: 'win:brave', name: 'Brave' });
+    // Kept by the host, not in the window's storage.
+    expect(ui.hooks.browserChoice).toEqual({ kind: 'detected', id: 'win:brave', name: 'Brave' });
+    expect(localStorage.getItem('time-track-desktop')).not.toContain('win:brave');
     expect(ui.$<HTMLSelectElement>('#browser').value).toBe('detected:win:brave');
 
     // Custom…: cancelled keeps the choice; refused says why; picked shows the path.
     await ui.app.chooseBrowser('custom');
-    expect(ui.app.state.settings.browser).toEqual({ kind: 'detected', id: 'win:brave', name: 'Brave' });
+    expect(ui.app.browserChoice).toEqual({ kind: 'detected', id: 'win:brave', name: 'Brave' });
     ui.hooks.pickError = 'not an exe';
     await ui.app.chooseBrowser('custom');
     expect(ui.$('#browser-message').textContent).toContain('.exe en Windows');
@@ -317,15 +321,58 @@ describe('Settings → Open Beacon in', () => {
     expect(ui.$('#browser-path').textContent).toBe('C:\\Tools\\Brave\\brave.exe');
     await ui.app.chooseBrowser('custom-current');
     await ui.app.chooseBrowser('detected:unknown');
-    expect(ui.app.state.settings.browser.kind).toBe('custom');
+    expect(ui.app.browserChoice.kind).toBe('custom');
+    expect(ui.hooks.browserChoice.kind).toBe('custom');
     await ui.app.chooseBrowser('system');
-    expect(ui.app.state.settings.browser).toEqual(SYSTEM_BROWSER);
+    expect(ui.app.browserChoice).toEqual(SYSTEM_BROWSER);
+    expect(ui.hooks.browserChoice).toEqual(SYSTEM_BROWSER);
+    ui.app.destroy();
+  });
+
+  it('opening a link sends only the URL; the host answers with the browser it keeps (GC-L1)', async () => {
+    const ui = await signedIn();
+    const calls: unknown[][] = [];
+    const open = ui.platform.openExternal.bind(ui.platform);
+    ui.platform.openExternal = (...args: Parameters<typeof open>) => {
+      calls.push(args);
+      return open(...args);
+    };
+    ui.hooks.browserChoice = { kind: 'custom', path: '/opt/b/brave', name: 'brave' };
+    await ui.app.loadBrowserChoice();
+    onHttpsBeacon(ui);
+    expect(await ui.app.openExternal(`${BEACON}/dashboard`, { kind: 'beacon', server: BEACON })).toBe(true);
+    expect(calls).toEqual([[`${BEACON}/dashboard`]]);
+    // A detected browser that is gone is refused by the host and the setting shows what the host still has.
+    ui.hooks.browsers = [];
+    await ui.app.chooseBrowser('detected:win:gone');
+    expect(ui.app.browserChoice).toEqual({ kind: 'custom', path: '/opt/b/brave', name: 'brave' });
+    // Listed in Settings a moment ago, uninstalled since: the host refuses it.
+    ui.app.browsers = [{ id: 'win:gone', name: 'Gone' }];
+    await ui.app.chooseBrowser('detected:win:gone');
+    expect(ui.app.browserChoice).toEqual({ kind: 'custom', path: '/opt/b/brave', name: 'brave' });
+    // A host that cannot say is the system default.
+    ui.platform.getBrowser = async () => {
+      throw new Error('no');
+    };
+    await ui.app.loadBrowserChoice();
+    expect(ui.app.browserChoice).toEqual(SYSTEM_BROWSER);
+    // "Clear local data" resets the host's choice too.
+    ui.hooks.browserChoice = { kind: 'detected', id: 'win:brave', name: 'Brave' };
+    await ui.app.clearLocalData();
+    expect(ui.hooks.browserChoice).toEqual(SYSTEM_BROWSER);
+    ui.platform.setBrowser = async () => {
+      throw new Error('no');
+    };
+    ui.app.browserChoice = { kind: 'detected', id: 'win:brave', name: 'Brave' };
+    await ui.app.clearLocalData();
+    expect(ui.app.browserChoice).toEqual(SYSTEM_BROWSER);
     ui.app.destroy();
   });
 
   it('a chosen browser that is no longer installed is marked, with a small notice', async () => {
     const ui = await signedIn();
-    ui.app.state.settings.browser = { kind: 'detected', id: 'desktop:brave-browser.desktop', name: 'Brave' };
+    ui.hooks.browserChoice = { kind: 'detected', id: 'desktop:brave-browser.desktop', name: 'Brave' };
+    await ui.app.loadBrowserChoice();
     ui.hooks.browsers = [{ id: 'desktop:firefox.desktop', name: 'Firefox' }];
     ui.app.show('settings');
     // Before the list arrives the stored name is shown as is.

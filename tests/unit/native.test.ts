@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Me, Timer } from '../../src/api/types';
+import type { Me, Task, Timer } from '../../src/api/types';
 import { CATALOG, IDLE_COUNTDOWN_MINUTES, MESSAGE_LOCALES, noticeTitle, PAUSE_MINUTES, pauseMessages, pausedAt, resumeMessages, EMPTY_MESSAGES } from '../../src/lib/friendly';
 import { POOL_KINDS } from '../../src/lib/messages/types';
+import { EMPTY_NUDGE } from '../../src/lib/nudge';
 import { loadLocal } from '../../src/lib/settings';
 import { browserPlatform, browserPromptClient, notificationBody, type BrowserPromptHooks } from '../../src/platform';
 import { DesktopApp } from '../../src/ui/app';
@@ -552,6 +553,30 @@ describe('privacy and plain text (security review FN-L2, FN-I4)', () => {
     expect(after.messages).toEqual(EMPTY_MESSAGES);
     expect(JSON.stringify(after)).not.toContain('T-101@');
     expect(ui.app.dailyToast).toBeNull();
+    ui.app.destroy();
+  });
+
+  it('signing out deletes the last task, pinned tasks, nudge state and generic meeting task (GC-L2)', async () => {
+    const ui = await signedIn();
+    const task = { id: 'T-101', title: 'Secret project Falcon' } as Task;
+    ui.app.state = {
+      ...ui.app.state,
+      lastTask: task,
+      pinned: [task, { id: 'T-102', title: 'Payroll review' } as Task],
+      nudge: { activeSince: new Date(NOW).toISOString(), measured: true, lastAt: new Date(NOW).toISOString(), recent: [1, 2] },
+      settings: { ...ui.app.state.settings, meetingGeneric: { id: 'T-103', title: 'Board meeting' }, meetingDetection: true },
+    };
+    await ui.app.logout();
+    const after = loadLocal(localStorage);
+    expect(after.lastTask).toBeNull();
+    expect(after.pinned).toEqual([]);
+    expect(after.nudge).toEqual(EMPTY_NUDGE);
+    expect(after.settings.meetingGeneric).toBeNull();
+    // Other settings of this computer stay.
+    expect(after.settings.meetingDetection).toBe(true);
+    const text = JSON.stringify(after);
+    for (const title of ['Falcon', 'Payroll', 'Board meeting', 'T-101', 'T-102', 'T-103']) expect(text).not.toContain(title);
+    expect(JSON.stringify(ui.app.state)).not.toContain('Falcon');
     ui.app.destroy();
   });
 
