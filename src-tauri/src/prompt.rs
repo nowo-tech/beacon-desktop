@@ -189,7 +189,10 @@ pub fn prompt_open(app: AppHandle, window: tauri::Window, view: Value) -> Result
 
 /// The content of the prompt for its window (asked once it has loaded; updates follow as `prompt-view` events).
 #[tauri::command]
-pub fn prompt_view(app: AppHandle) -> Option<Value> {
+pub fn prompt_view(app: AppHandle, window: tauri::Window) -> Option<Value> {
+    if window.label() != LABEL {
+        return None;
+    }
     app.state::<PromptState>()
         .view
         .lock()
@@ -209,10 +212,20 @@ pub fn prompt_answer(app: AppHandle, window: tauri::Window, answer: Value) -> Re
 
 /// Brings the open prompt forward again ("Show the question" in the main window).
 #[tauri::command]
-pub fn prompt_focus(app: AppHandle) {
-    if let Some(window) = app.get_webview_window(LABEL) {
-        bring_forward(&app, &window);
+pub fn prompt_focus(app: AppHandle, window: tauri::Window) -> Result<(), String> {
+    crate::only_from(&window, "main")?;
+    if let Some(prompt) = app.get_webview_window(LABEL) {
+        bring_forward(&app, &prompt);
     }
+    Ok(())
+}
+
+/// "Open TimeTrack" in the prompt window: brings the main window forward (the prompt stays until it is answered).
+#[tauri::command]
+pub fn prompt_show_main(app: AppHandle, window: tauri::Window) -> Result<(), String> {
+    crate::only_from(&window, LABEL)?;
+    crate::show_main(&app);
+    Ok(())
 }
 
 /// Closes the prompt (answered, or nothing to ask any more).

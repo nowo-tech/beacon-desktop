@@ -270,3 +270,4 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 .prompt-region { min-height: 100vh; display: grid; place-items: center; padding: 1rem; box-sizing: border-box; }
 .prompt-region > .card { width: 100%; max-width: 30rem; margin: 0; box-shadow: none; }
 .prompt-region .mascot.tiny { height: 4.5rem; }
+.prompt-open-app { justify-self: start; font-size: 0.875rem; }

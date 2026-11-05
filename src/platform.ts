@@ -93,6 +93,17 @@ export interface PromptClient {
   view(): Promise<PromptView | null>;
   onView(handler: (view: PromptView) => void): void;
   answer(answer: PromptAnswer): Promise<void>;
+  /** Brings the main window forward. */
+  openMain(): Promise<void>;
+}
+
+/**
+ * Text of a system notification. Linux notification servers that advertise `body-markup` render `<b>`, `<a>` or `<img>`
+ * from the body, and a task title comes from Beacon: there it is escaped to plain text. Other systems show text as is.
+ */
+export function notificationBody(text: string, os: string): string {
+  if (!/linux|x11|freebsd|openbsd/i.test(os)) return text;
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /** Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME, so the default adds Shift. */
@@ -305,6 +316,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
 export interface BrowserPromptHooks {
   view: PromptView | null;
   answers: PromptAnswer[];
+  /** Times "Open TimeTrack" was pressed. */
+  openedMain?: number;
   /** Replaces the content (as the main window's updates do). */
   setView?(view: PromptView): void;
 }
@@ -320,5 +333,6 @@ export function browserPromptClient(hooks: BrowserPromptHooks): PromptClient {
     view: async () => hooks.view,
     onView: (handler) => void handlers.push(handler),
     answer: async (answer) => void hooks.answers.push(answer),
+    openMain: async () => void (hooks.openedMain = (hooks.openedMain ?? 0) + 1),
   };
 }

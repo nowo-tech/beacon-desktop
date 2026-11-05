@@ -102,8 +102,9 @@ default. Pools: `src/lib/messages/`; rules: `src/lib/friendly.ts`.
 while the main window is in the tray (`src-tauri/src/prompt.rs`, `src/ui/prompt.ts`), with a countdown (2 minutes, 10
 during meetings): with no answer the timer stops at the start of the idle time, and the window offers **Resume …
 now** on the same task. There is only ever one; it closes once answered, Esc does not dismiss it, and on Windows it
-flashes in the taskbar when focus-stealing prevention keeps it from taking the focus. Where it cannot open (a plain
-browser), it is a modal inside the main window.
+flashes in the taskbar when focus-stealing prevention keeps it from taking the focus. A small *Open TimeTrack* link in
+it brings the main window forward. It shows the running task's title above every other window, so it is also visible
+to anyone watching a shared screen. Where it cannot open (a plain browser), it is a modal inside the main window.
 
 #### Desktop notifications
 
@@ -146,16 +147,25 @@ required" screen send you to the Store listing instead.
 
 ## Tauri capabilities
 
-- `src-tauri/capabilities/default.json`, window `main`: unchanged by the native shell (core defaults, HTTP to your
-  server, opener, `notification:default`, autostart enable / disable / is-enabled, process restart, set theme). The
-  desktop notifications of the friendly messages go through the app's own `notify_friendly` command (Rust,
-  `notify-rust` / `tauri-winrt-notification`), not a new plugin permission.
-- `src-tauri/capabilities/prompt.json`, window `prompt` (the "Still there?" window): only `core:event:allow-listen` /
-  `allow-unlisten`, to receive its content. No network, opener, notification, window or autostart permission.
-- App commands added: `set_wake_plan`, `notify_friendly`, `prompt_open`, `prompt_view`, `prompt_answer`,
-  `prompt_focus`, `prompt_close`. `prompt_open` / `prompt_close` refuse any window but `main` and `prompt_answer` any
-  window but `prompt`; answers are allow-listed (`{ action, note?, taskId? }`), pose ids are looked up in the
-  compiled-in list (never a path from the webview) and notification texts are capped.
+- **Every app command is ACL-scoped.** `src-tauri/build.rs` declares them in the app manifest
+  (`tauri_build::AppManifest::commands`, list in `src-tauri/app-commands.rs`), so Tauri only lets a window call the
+  commands its capability grants (`allow-<command>`); without a manifest any local window could call any command.
+  A Rust test checks the list against `generate_handler!` and that each command is granted to exactly one window.
+- `src-tauri/capabilities/default.json`, window `main`: core defaults, HTTP to your server, opener,
+  `notification:default`, autostart enable / disable / is-enabled, process restart, set theme, and the app commands
+  `secret_get` / `secret_set` / `secret_delete`, `idle_seconds`, `set_tray_status`, `set_tray_menu`,
+  `set_global_shortcut`, `check_update`, `install_update`, `set_wake_plan`, `notify_friendly`, `prompt_open`,
+  `prompt_focus`, `prompt_close`. The desktop notifications of the friendly messages go through the app's own
+  `notify_friendly` command (Rust, `notify-rust` / `tauri-winrt-notification`), not a new plugin permission.
+- `src-tauri/capabilities/prompt.json`, window `prompt` (the "Still there?" window): `core:event:allow-listen` /
+  `allow-unlisten` (its content) and `prompt_view`, `prompt_answer`, `prompt_show_main` ("Open TimeTrack"). No
+  keychain, updater, tray, network, opener, notification, window or autostart permission.
+- Defence in depth: every command also checks the calling window's label (`main` for the keychain, updater, tray,
+  shortcut, heartbeat, notifications and opening / focusing / closing the prompt; `prompt` for reading its view,
+  answering and "Open TimeTrack"). Answers are allow-listed (`{ action, note?, taskId? }`), pose ids are looked up in
+  the compiled-in list (never a path from the webview) and notification texts are capped. On Linux, notification
+  bodies are escaped to plain text (`<`, `>`, `&`), since servers with `body-markup` would render markup from a task
+  title.
 - `tauri.conf.json`: the main window has `backgroundThrottling: "disabled"` (macOS 14+, where WebKit supports it); the
   heartbeat keeps the checks on time on every OS anyway.
 

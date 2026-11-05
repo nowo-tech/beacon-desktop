@@ -274,5 +274,6 @@
   "friendlyPause": "Pausar 1 h",
   "friendlyResume": "Reanudar ya",
   "friendlyPausedUntil": "En pausa hasta las {time}.",
-  "backgroundNote": "Al cerrar la ventana, TimeTrack sigue funcionando en la bandeja (el área de notificación en Windows, la barra de menús en macOS): el temporizador, la comprobación «¿Sigues ahí?» y los mensajes amistosos continúan. Para salir, usa el menú de la bandeja."
+  "backgroundNote": "Al cerrar la ventana, TimeTrack sigue funcionando en la bandeja (el área de notificación en Windows, la barra de menús en macOS): el temporizador, la comprobación «¿Sigues ahí?» y los mensajes amistosos continúan. Para salir, usa el menú de la bandeja.",
+  "promptOpenApp": "Abrir TimeTrack"
 }

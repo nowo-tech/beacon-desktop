@@ -274,5 +274,6 @@
   "friendlyPause": "Pause for 1 h",
   "friendlyResume": "Resume now",
   "friendlyPausedUntil": "Paused until {time}.",
-  "backgroundNote": "Closing the window keeps TimeTrack running in the tray (the notification area on Windows, the menu bar on macOS): the timer, the \"Still there?\" check and the friendly messages carry on. Quit from the tray menu."
+  "backgroundNote": "Closing the window keeps TimeTrack running in the tray (the notification area on Windows, the menu bar on macOS): the timer, the \"Still there?\" check and the friendly messages carry on. Quit from the tray menu.",
+  "promptOpenApp": "Open TimeTrack"
 }
