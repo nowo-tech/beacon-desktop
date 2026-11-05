@@ -38,5 +38,11 @@ describe('one TimeTrack, one tray icon (0.5.1)', () => {
     // 0.5.0 only moved it when the 0.1.0 copy was gone; both copies then started at login.
     expect(postinstall).not.toMatch(/AndIfNot\} \$\{FileExists\} "\$PROGRAMFILES64/);
     expect(postinstall).toContain('DeleteRegValue HKLM "${TT_RUN_KEY}" "${TT_PRODUCT}"');
+    // Both rules only for the app's own executable in one of its install folders (never another "TimeTrack").
+    expect(postinstall.match(/!insertmacro TT_OUR_COMMAND \$R8 \$R9\n {2}\$\{If\} \$R9 != ""/g)).toHaveLength(2);
+    const macro = hooks.slice(hooks.indexOf('!macro TT_OUR_COMMAND'), hooks.indexOf('!macro NSIS_HOOK_POSTINSTALL'));
+    for (const dir of ['$PROGRAMFILES64', '$LOCALAPPDATA']) {
+      for (const exe of ['time-track-desktop.exe', 'timetrack.exe']) expect(macro).toContain(`"${dir}\\\${TT_PRODUCT}\\${exe}"`);
+    }
   });
 });

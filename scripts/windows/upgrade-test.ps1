@@ -15,6 +15,12 @@
     -AppRunning              start the old app (it stays in the tray) before the upgrade and leave it running
     -OldMsiStays             the old MSI is expected to stay (/S cannot ask for administrator approval): report it,
                              check the rest
+    -Autostart  dupes        (0.5.1+) start-at-login entries seeded before the upgrade: the app's value for the old
+                             copy, a second value "time-track-desktop" and a per-machine value
+                disabled     the app's value plus a "time-track-desktop" value disabled in Task Manager: the one
+                             entry left must be disabled too
+                foreign      the app's value plus another vendor's "TimeTrack" entries (HKCU "TimeTrack Vendor",
+                             HKLM "TimeTrack" for C:\Vendor\TimeTrack): those must stay untouched
 
   Then checks: installer exit code, a single "TimeTrack" entry under the Uninstall keys (HKCU and HKLM, both views)
   carrying the new version, no MSI left behind, the installed executable's version and that the app starts. From
@@ -32,6 +38,7 @@ param(
   [Parameter(Mandatory)] [ValidateSet('silent', 'update', 'interactive')] [string] $Mode,
   [switch] $AppRunning,
   [switch] $OldMsiStays,
+  [ValidateSet('dupes', 'disabled', 'foreign')] [string] $Autostart = 'dupes',
   [string] $OutDir = (Join-Path $PWD 'upgrade-test-out'),
   [string] $Product = 'TimeTrack',
   [int] $TimeoutSeconds = 300
@@ -151,6 +158,39 @@ function Set-RunEntry([string] $Hive, [string] $Name, [string] $Command) {
   $key.Close()
   Log "seeded start-at-login $Hive\$Name = $Command"
 }
+
+$ApprovedKey = 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
+# Task Manager "Disabled" (first byte 3, then the time it was disabled); "Enabled" is 2 followed by zeros.
+$DisabledMarker = [byte[]] (3, 0, 0, 0, 0x10, 0x8e, 0x3c, 0x51, 0x2a, 0x4e, 0xdb, 0x01)
+$Vendor = 'C:\Vendor\TimeTrack'
+
+function Open-Hive([string] $Hive) {
+  $root = if ($Hive -eq 'HKLM') { [Microsoft.Win32.RegistryHive]::LocalMachine } else { [Microsoft.Win32.RegistryHive]::CurrentUser }
+  [Microsoft.Win32.RegistryKey]::OpenBaseKey($root, [Microsoft.Win32.RegistryView]::Registry64)
+}
+
+function Get-RunValue([string] $Hive, [string] $Name) {
+  $key = (Open-Hive $Hive).OpenSubKey($RunKey)
+  if ($null -eq $key) { return $null }
+  $value = $key.GetValue($Name); $key.Close(); return $value
+}
+
+function Set-Approved([string] $Hive, [string] $Name, [byte[]] $Bytes) {
+  $key = (Open-Hive $Hive).CreateSubKey($ApprovedKey)
+  $key.SetValue($Name, $Bytes, [Microsoft.Win32.RegistryValueKind]::Binary)
+  $key.Close()
+  Log "seeded Task Manager state $Hive\$Name = $([BitConverter]::ToString($Bytes))"
+}
+
+function Get-Approved([string] $Hive, [string] $Name) {
+  $key = (Open-Hive $Hive).OpenSubKey($ApprovedKey)
+  if ($null -eq $key) { return $null }
+  $value = $key.GetValue($Name); $key.Close()
+  if ($null -eq $value) { return $null }
+  return , $value
+}
+
+function Test-Disabled($Bytes) { $null -ne $Bytes -and $Bytes.Length -ge 8 -and @($Bytes[($Bytes.Length - 8)..($Bytes.Length - 1)] | Where-Object { $_ -ne 0 }).Count -gt 0 }
 
 # --- Processes ----------------------------------------------------------------------------------------------------
 
@@ -330,9 +370,22 @@ if ($checkInstances) {
   $seedExe = $null
   foreach ($dir in (Get-InstallDirs)) { if (-not $seedExe) { $seedExe = Get-AppExe $dir } }
   if (-not $seedExe) { throw 'no old executable to seed start-at-login entries' }
+  Log "start-at-login scenario: $Autostart"
   Set-RunEntry 'HKCU' $Product "$seedExe --hidden"
-  Set-RunEntry 'HKCU' 'time-track-desktop' "`"$seedExe`" --hidden"
-  Set-RunEntry 'HKLM' $Product "$seedExe --hidden"
+  switch ($Autostart) {
+    'dupes' {
+      Set-RunEntry 'HKCU' 'time-track-desktop' "`"$seedExe`" --hidden"
+      Set-RunEntry 'HKLM' $Product "$seedExe --hidden"
+    }
+    'disabled' {
+      Set-RunEntry 'HKCU' 'time-track-desktop' "`"$seedExe`" --hidden"
+      Set-Approved 'HKCU' 'time-track-desktop' $DisabledMarker
+    }
+    'foreign' {
+      Set-RunEntry 'HKCU' 'TimeTrack Vendor' "$Vendor\TimeTrack.exe"
+      Set-RunEntry 'HKLM' $Product "`"$Vendor\TimeTrackAgent.exe`" --tray"
+    }
+  }
 }
 
 if ($AppRunning) {
@@ -384,13 +437,28 @@ if (-not $newExe) {
     $alive = @(Get-AppProcesses)
     Log "processes after the second launch: $($alive.Count)"
     if ($alive.Count -ne 1) { Fail "$($alive.Count) TimeTrack processes after a second launch (expected 1)" }
-    # Start-at-login: one HKCU "TimeTrack" value for the new executable (the app cleaned up at start).
-    $runs = Get-RunEntries
-    foreach ($r in $runs) { Log ("  start-at-login {0}\{1} = {2}" -f $r.Hive, $r.Name, $r.Command) }
+    # Start-at-login: one HKCU "TimeTrack" value for the new executable, path quoted (the app cleaned up at start).
+    $all = Get-RunEntries
+    foreach ($r in $all) { Log ("  start-at-login {0}\{1} = {2}" -f $r.Hive, $r.Name, $r.Command) }
+    $runs = @($all | Where-Object { -not $_.Command.TrimStart('"').StartsWith($Vendor, [StringComparison]::OrdinalIgnoreCase) })
     if ($runs.Count -ne 1) {
       Fail "$($runs.Count) start-at-login entries for $Product (expected exactly 1)"
-    } elseif ($runs[0].Hive -ne 'HKCU' -or $runs[0].Name -ne $Product -or -not $runs[0].Command.StartsWith($newExe, [StringComparison]::OrdinalIgnoreCase)) {
-      Fail "start-at-login entry is $($runs[0].Hive)\$($runs[0].Name) = $($runs[0].Command) (expected HKCU\$Product = $newExe --hidden)"
+    } elseif ($runs[0].Hive -ne 'HKCU' -or $runs[0].Name -ne $Product -or -not $runs[0].Command.StartsWith("`"$newExe`"", [StringComparison]::OrdinalIgnoreCase)) {
+      Fail "start-at-login entry is $($runs[0].Hive)\$($runs[0].Name) = $($runs[0].Command) (expected HKCU\$Product = `"$newExe`" --hidden)"
+    }
+    $state = Get-Approved 'HKCU' $Product
+    Log ("  Task Manager state HKCU\{0} = {1}" -f $Product, $(if ($null -eq $state) { '(none)' } else { [BitConverter]::ToString($state) }))
+    switch ($Autostart) {
+      'disabled' {
+        if (-not (Test-Disabled $state)) { Fail 'the entry disabled in Task Manager is enabled again after the clean-up' }
+        if ($null -ne (Get-Approved 'HKCU' 'time-track-desktop')) { Fail 'the removed entry left its Task Manager state behind' }
+      }
+      'foreign' {
+        if ((Get-RunValue 'HKCU' 'TimeTrack Vendor') -ne "$Vendor\TimeTrack.exe") { Fail "another vendor's HKCU entry 'TimeTrack Vendor' was changed or removed" }
+        if ((Get-RunValue 'HKLM' $Product) -ne "`"$Vendor\TimeTrackAgent.exe`" --tray") { Fail "another vendor's HKLM entry '$Product' was changed or removed" }
+        if (Test-Disabled $state) { Fail 'start-at-login is disabled, expected enabled' }
+      }
+      default { if (Test-Disabled $state) { Fail 'start-at-login is disabled, expected enabled' } }
     }
   }
   Get-AppProcesses | ForEach-Object { Stop-Process -Id $_.Id -Force }

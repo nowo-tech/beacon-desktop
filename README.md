@@ -46,13 +46,17 @@ Up to 0.5.0 a second launch (Start menu or desktop shortcut while the app was hi
 start-at-login entry left by an older install) started a second copy with its own tray icon. From 0.5.1:
 
 - **One copy per user session.** A second launch exits at once and brings the running window forward (a second start
-  at login, `--hidden`, just exits). Windows: a per-session named mutex; macOS: a local socket; Linux: a D-Bus name on
-  the session bus (without a session bus the app starts unguarded, as before).
-- **One start-at-login entry.** At start the Windows app keeps *Start at login* as a single `HKCU\…\Run` value
-  `TimeTrack` for the running executable and removes other values that start a TimeTrack copy (another name, the
-  0.1.0 `.msi` copy in Program Files, a per-machine `HKLM` value when it may; `src-tauri/src/autostart.rs`). The
-  installer moves a value pointing at the 0.1.0 copy to this install even when that copy is kept, and removes a
-  per-machine value when it runs with administrator rights.
+  at login, `--hidden`, just exits). Windows: a per-session named mutex; macOS: a local socket (in the shared `/tmp`,
+  an upstream limitation: SECURITY.md → *Known limitations*); Linux: a D-Bus name on the session bus (without a
+  session bus the app starts unguarded, as before).
+- **One start-at-login entry.** At start, an installed Windows copy (`%LOCALAPPDATA%\TimeTrack` or
+  `Program Files\TimeTrack`; a copy run from Downloads or elsewhere changes nothing) keeps *Start at login* as a
+  single `HKCU\…\Run` value `TimeTrack` for itself, path quoted, and removes its other entries (`time-track-desktop`,
+  the 0.1.0 `.msi` copy in Program Files, a per-machine `HKLM` value when it may; `src-tauri/src/autostart.rs`). Only
+  the app's own entries count (value name `TimeTrack` / `time-track-desktop`, its executable, an install folder);
+  another product's are never touched. Disabled in Task Manager stays disabled, and an app without any entry is
+  never switched on. The installer moves the app's value pointing at the 0.1.0 copy to this install even when that
+  copy is kept, and removes the app's per-machine value when it runs with administrator rights.
 - **One tray icon per process**: built once in Rust; the webview has no tray permission.
 
 To check by hand (Windows, PowerShell), list what starts at login and what runs:

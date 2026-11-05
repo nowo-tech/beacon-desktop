@@ -114,6 +114,33 @@ Function TTRemoveLegacyMsi
   ${EndIf}
 FunctionEnd
 
+;; OUT = non-empty when the Run command CMD starts one of the app's executables (TimeTrack.exe or
+;; time-track-desktop.exe) in one of its install folders (%LOCALAPPDATA%\TimeTrack, Program Files\TimeTrack), like
+;; is_ours in src-tauri/src/autostart.rs. Another product's entry is never matched. Uses $R6 and $R7 (saved).
+!macro TT_OUR_COMMAND CMD OUT
+  Push $R6
+  Push $R7
+  ${StrCase} ${OUT} "${CMD}" "L"
+  StrCpy $R7 ""
+  ${StrCase} $R6 "$PROGRAMFILES64\${TT_PRODUCT}\time-track-desktop.exe" "L"
+  ${StrLoc} $R7 ${OUT} $R6 ">"
+  ${If} $R7 == ""
+    ${StrCase} $R6 "$PROGRAMFILES64\${TT_PRODUCT}\timetrack.exe" "L"
+    ${StrLoc} $R7 ${OUT} $R6 ">"
+  ${EndIf}
+  ${If} $R7 == ""
+    ${StrCase} $R6 "$LOCALAPPDATA\${TT_PRODUCT}\time-track-desktop.exe" "L"
+    ${StrLoc} $R7 ${OUT} $R6 ">"
+  ${EndIf}
+  ${If} $R7 == ""
+    ${StrCase} $R6 "$LOCALAPPDATA\${TT_PRODUCT}\timetrack.exe" "L"
+    ${StrLoc} $R7 ${OUT} $R6 ">"
+  ${EndIf}
+  StrCpy ${OUT} $R7
+  Pop $R7
+  Pop $R6
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   ; The 0.1.0 NSIS key is stale once this version is installed (its Uninstall entry was rewritten above). A 0.1.0 MSI
   ; that is still installed uses the same key for its shortcut: keep it then, or Windows would "repair" that copy.
@@ -124,21 +151,23 @@ FunctionEnd
   ${EndIf}
   ; Start at login set up by the 0.1.0 MSI copy points at Program Files: follow the app to this install, also when that
   ; copy is kept (0.5.0 left it then, and both copies could start at login: two tray icons). Only this install starts
-  ; at login; the old copy can still be opened by hand.
+  ; at login; the old copy can still be opened by hand. Only a value that starts one of the app's executables is
+  ; changed (another product may use the name "TimeTrack"); its Task Manager state (StartupApproved) is kept. The app
+  ; quotes the path on its next start (src-tauri/src/autostart.rs).
   ReadRegStr $R8 HKCU "${TT_RUN_KEY}" "${TT_PRODUCT}"
-  ${If} $R8 != ""
+  !insertmacro TT_OUR_COMMAND $R8 $R9
+  ${If} $R9 != ""
     nsis_tauri_utils::StrReplace "$R8" "$PROGRAMFILES64\${TT_PRODUCT}\" "$INSTDIR\"
     Pop $R9
     ${If} $R9 != $R8
       WriteRegStr HKCU "${TT_RUN_KEY}" "${TT_PRODUCT}" "$R9"
     ${EndIf}
   ${EndIf}
-  ; A per-machine "TimeTrack" Run value (HKLM, written by an elevated copy) starts a second copy at login. Removing it
-  ; needs administrator rights, so this only works from an elevated installer; otherwise the app reports it at start
-  ; (src-tauri/src/autostart.rs) and README → "Two TimeTrack icons in the tray" says how to remove it.
+  ; A per-machine "TimeTrack" Run value (HKLM, written by an elevated copy) that starts one of the app's executables in
+  ; one of its install folders starts a second copy at login. Removing it needs administrator rights, so this only works from
+  ; an elevated installer; otherwise README → "Two TimeTrack icons in the tray" says how to remove it.
   ReadRegStr $R8 HKLM "${TT_RUN_KEY}" "${TT_PRODUCT}"
-  ${StrCase} $R8 $R8 "L"
-  ${StrLoc} $R9 $R8 "\timetrack\" ">"
+  !insertmacro TT_OUR_COMMAND $R8 $R9
   ${If} $R9 != ""
     ClearErrors
     DeleteRegValue HKLM "${TT_RUN_KEY}" "${TT_PRODUCT}"
@@ -146,6 +175,6 @@ FunctionEnd
       DetailPrint "Removed the per-machine start-at-login entry of ${TT_PRODUCT}"
     ${EndIf}
   ${EndIf}
-  ; Other start-at-login values for this install or the 0.1.0 MSI copy (any name other than "TimeTrack") are removed
-  ; by the app itself on its next start (autostart.rs), which knows every executable name.
+  ; Other start-at-login values for this install or the 0.1.0 MSI copy ("time-track-desktop") are removed by the app
+  ; itself on its next start (autostart.rs).
 !macroend

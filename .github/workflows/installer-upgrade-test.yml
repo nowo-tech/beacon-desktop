@@ -87,6 +87,7 @@ jobs:
             echo "version=$VERSION"
           } | tee -a "$GITHUB_OUTPUT"
           # id: old installers (v01 = old_run_id, v04 = prev_run_id) and which of them, how the new one runs, app running.
+          # autostart (0.5.1+, default dupes): which start-at-login entries are seeded before the upgrade (upgrade-test.ps1).
           # msi_stays: /S shows no page and cannot ask for administrator approval, so a 0.1.0 MSI is left installed
           # (expected; the check reports it instead of failing).
           all='[
@@ -97,7 +98,9 @@ jobs:
             {"id":"msi01-silent","from":"v01","old":"msi","mode":"silent","running":false,"msi_stays":true},
             {"id":"both01-interactive","from":"v01","old":"both","mode":"interactive","running":false},
             {"id":"v04-update-running","from":"v04","old":"nsis","mode":"update","running":true},
-            {"id":"v04-interactive-running","from":"v04","old":"nsis","mode":"interactive","running":true}
+            {"id":"v04-interactive-running","from":"v04","old":"nsis","mode":"interactive","running":true},
+            {"id":"v04-update-autostart-disabled","from":"v04","old":"nsis","mode":"update","running":true,"autostart":"disabled"},
+            {"id":"msi01-interactive-autostart-foreign","from":"v01","old":"msi","mode":"interactive","running":false,"autostart":"foreign"}
           ]'
           if [ "$SCENARIOS" = all ]; then
             matrix="$(jq -c '{include: .}' <<<"$all")"
@@ -195,7 +198,9 @@ jobs:
         run: |
           $running = '${{ matrix.running }}' -eq 'true'
           $msiStays = '${{ matrix.msi_stays }}' -eq 'true'
-          & .\scripts\windows\upgrade-test.ps1 -Old ${{ matrix.old }} -OldDir old -NewDir new -Mode ${{ matrix.mode }} -AppRunning:$running -OldMsiStays:$msiStays -OutDir out
+          $autostart = '${{ matrix.autostart }}'
+          if (-not $autostart) { $autostart = 'dupes' }
+          & .\scripts\windows\upgrade-test.ps1 -Old ${{ matrix.old }} -OldDir old -NewDir new -Mode ${{ matrix.mode }} -AppRunning:$running -OldMsiStays:$msiStays -Autostart $autostart -OutDir out
           exit $LASTEXITCODE
       - if: always()
         uses: actions/upload-artifact@v7
