@@ -80,23 +80,31 @@ task list; which pose goes where, and where the art comes from: [public/mascot/R
 
 ### Friendly messages
 
-A smile now and then, never in the way: the "Still there?" prompt asks in a different way each time (the facts and the
-buttons stay the same), and while a timer runs a small dismissible card cheers you on after 2, 4, 6… hours, greets an
-early start, suggests a coffee, lunch, a stretch or some water, says it is getting late, and has something to say on
-Friday afternoon and at the weekend. At most one card every 50 minutes, each moment at most once a day, never a
-repeated line among the last six, never focused, no motion with reduced motion. Written natively in English, Spanish,
-German, French, Italian, Dutch and Portuguese (the Beacon user's language when the server sends `me.locale`, else the
-app's), with local times per language (lunch at 14:00 in Spanish). Settings → **Friendly messages**: *Fun messages*
-and *Wellbeing reminders*, both on by default. Pools: `src/lib/messages/`; rules: `src/lib/friendly.ts`.
+A smile now and then, never in the way. While a timer runs, small toasts (bottom right, never focused, easy to dismiss)
+cheer you on after 2, 4, 6… hours (a medal at 2 h and 4 h, a gentle "take a real break" from 6 h), greet an early
+start, suggest a coffee, lunch, a stretch or some water, say it is getting late, and have something to say on Friday
+afternoon and at the weekend. They know about meetings: during a daily, a call or a planning (from Beacon's labels or
+the task name) "Still there?" becomes "Still in the meeting?" with a longer countdown, a long meeting is followed by a
+coffee / stretch toast, and a finished daily gets a "let's go!". At most one toast every 50 minutes, each moment at
+most once a day, never a repeated line among the last six. Written natively in English, Spanish, German, French,
+Italian, Dutch and Portuguese (the Beacon user's language when the server sends `me.locale`, else the app's), with
+local times per language. Settings → **Friendly messages**: *Fun messages* and *Wellbeing reminders*, both on by
+default. Pools: `src/lib/messages/`; rules: `src/lib/friendly.ts`.
 
-Each line has its own mascot pose (`POSE_IDS`). New art goes in as transparent PNGs named `pose-<id>.png`:
+"Still there?" itself is a modal with a countdown (2 minutes, 10 during meetings): with no answer the timer stops at
+the start of the idle time, and the modal offers **Resume … now** on the same task.
+
+Each line has its own mascot pose (`POSE_IDS`). New art goes in as transparent PNGs (or on white) named
+`pose-<id>.png`:
 
 ```bash
 scripts/mascot/import-poses.sh <dir>   # → public/mascot/pose-<id>.webp + @2x (96 / 192 px high), src/ui/pose-art.json
+pnpm screenshots:friendly              # every situation in Spanish, light and dark (FRIENDLY_SCREENS=<dir>)
 ```
 
-It runs cwebp and ImageMagick, in a throwaway Docker container when they are not installed. Until a pose has its art,
-the closest existing pose is shown (`POSE_FALLBACK` in `src/ui/mascot.ts`); no code change is needed.
+The script makes a white background transparent, drops stray fragments at the edges, trims and converts with cwebp and
+ImageMagick (in a throwaway Docker container when they are not installed). A pose without art shows its fallback
+(`POSE_FALLBACK` in `src/ui/mascot.ts`); no code change is needed.
 
 ### Updates
 

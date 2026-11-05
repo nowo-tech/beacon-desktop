@@ -182,7 +182,10 @@ describe('desktop app', () => {
     expect(ui.$('#idle-title').textContent).toBe('Still there?');
     expect(ui.$('#idle-text').textContent).toBe('No activity for 10 min on Write onboarding guide.');
     expect(ui.$('#live').textContent).toContain('Still there?');
-    expect(document.activeElement?.closest('#idle')).toBeNull();
+    // A modal: it takes focus (the first answer) and the rest of the window is inert until it is answered.
+    expect(document.activeElement?.closest('#idle')).not.toBeNull();
+    expect(ui.$('#idle').getAttribute('aria-modal')).toBe('true');
+    expect(ui.$('#timer').hasAttribute('inert')).toBe(true);
     // The person is back but has not answered: the prompt stays and nothing is stopped.
     now = new Date(realNow - 60_000);
     ui.platform.hooks.idleSeconds = 1;
@@ -321,7 +324,8 @@ describe('desktop app', () => {
     const minutes = ui.$<HTMLSelectElement>('#idle-minutes');
     minutes.value = '15';
     minutes.dispatchEvent(new Event('change'));
-    expect(ui.app.idleSettings()).toEqual({ thresholdMinutes: 15, answerTimeoutMinutes: 5 });
+    // The countdown is IDLE_COUNTDOWN_MINUTES, never longer than the organisation's answer timeout.
+    expect(ui.app.idleSettings()).toEqual({ thresholdMinutes: 15, answerTimeoutMinutes: 2 });
     ui.click('#back');
     await ui.app.tick();
     expect(ui.app.state.idleCheck.phase).toBe('asking');
@@ -349,7 +353,7 @@ describe('desktop app', () => {
     ui.app.show('settings');
     expect(ui.$('#idle-org').textContent).toContain('after 20 minutes');
     expect([...ui.$<HTMLSelectElement>('#idle-minutes').options].map((o) => o.value)).toEqual(['20', '30', '45', '60']);
-    expect(ui.app.idleSettings()).toEqual({ thresholdMinutes: 20, answerTimeoutMinutes: 3 });
+    expect(ui.app.idleSettings()).toEqual({ thresholdMinutes: 20, answerTimeoutMinutes: 2 });
     const select = ui.$<HTMLSelectElement>('#idle-minutes');
     select.value = '20';
     select.dispatchEvent(new Event('change'));

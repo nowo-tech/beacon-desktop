@@ -67,8 +67,9 @@ test('"Still there?" asks after the threshold and only the decision is sent', as
   await idleTick(page, 617.25);
   await expect(page.locator('#idle')).toContainText('Still there?');
   await expect(page.locator('#idle-text')).toHaveText('No activity for 10 min on Review pull request queue.');
-  // Non-blocking: the list stays usable and focus is not taken.
-  await expect(page.locator('#search')).toBeEnabled();
+  // A modal: it takes focus and the rest of the window is inert until it is answered.
+  await expect(page.locator('#idle-here')).toBeFocused();
+  await expect(page.locator('#timer')).toHaveAttribute('inert', '');
   await page.locator('#idle-here').focus();
   await page.keyboard.press('Tab');
   await expect(page.locator('#idle-meeting')).toBeFocused();
@@ -131,7 +132,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.clock.install({ time: Date.now() - 10 * 60_000 });
     await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
     await idleTick(page, 660);
-    const card = page.getByRole('region', { name: 'Still there?' });
+    const card = page.getByRole('dialog', { name: 'Still there?' });
     await expect(card).toBeVisible();
     await expect(page.locator('#live')).toHaveCount(1);
     await expect(page.locator('#live')).toContainText('Still there?');
@@ -151,7 +152,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.locator('#idle-away')).toBeVisible();
     await axe(page, 'away');
     await idleTick(page, 1);
-    await expect(page.getByRole('region', { name: 'Welcome back' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Welcome back' })).toBeVisible();
     await expect(page.getByLabel('Another task')).toBeVisible();
     await axe(page, 'gap');
     await page.locator('#gap-keep').focus();

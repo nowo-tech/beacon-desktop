@@ -13,6 +13,10 @@ import {
   NO_REPEAT,
   WEEKEND_REST_AFTER_MINUTES,
   WEEKEND_START_MINUTES,
+  MILESTONE_HOURS,
+  MEETING_LONG_MINUTES,
+  OVERTIME_FROM_HOURS,
+  afterStop,
   beaconLocale,
   beaconTimeZone,
   cheerStep,
@@ -23,11 +27,15 @@ import {
   messageLocale,
   nextCard,
   normalizeLocale,
+  pickDailyDone,
   pickIdleLine,
   pickLine,
   planMessage,
   remember,
   sanitizeMessages,
+  stepHours,
+  stretchKind,
+  taskKind,
   visibleCard,
   zonedParts,
   type MessageState,
@@ -51,7 +59,7 @@ const kind = (value: PlanInput) => planMessage(value)?.kind ?? null;
 
 describe('message pools', () => {
   it('every locale has native pools of the same minimum size, every line a known pose and only known placeholders', () => {
-    const minimum: Record<string, number> = { idle: 15, cheer: 15 };
+    const minimum: Record<string, number> = { idle: 15, cheer: 15, milestone: 6, overtime: 6, meetingIdle: 6, meetingAfter: 6, dailyDone: 6 };
     for (const locale of MESSAGE_LOCALES) {
       const { pools } = CATALOG[locale];
       for (const name of POOL_KINDS) {
@@ -70,7 +78,7 @@ describe('message pools', () => {
       expect(wellbeing).toBeGreaterThanOrEqual(3);
       expect(wellbeing).toBeLessThan(pools.cheer.length / 2);
       // Every "Still there?" phrasing is a question.
-      for (const line of pools.idle) expect(line.text, `${locale} idle`).toMatch(/\?/);
+      for (const line of [...pools.idle, ...pools.meetingIdle]) expect(line.text, `${locale} idle`).toMatch(/\?/);
     }
   });
 
@@ -82,11 +90,11 @@ describe('message pools', () => {
     }
   });
 
-  it('every pose id is used and has a fallback; imported art exists as 1x / @2x WebP', () => {
+  it('every pose with art is used, every pose without art has an existing fallback; art is 1x / @2x WebP', () => {
     const used = new Set(MESSAGE_LOCALES.flatMap((locale) => POOL_KINDS.flatMap((name) => CATALOG[locale].pools[name].map((line) => line.pose))));
-    expect([...used].sort()).toEqual([...POSE_IDS].sort());
+    for (const id of POSE_ART) expect(used, id).toContain(id);
     for (const id of POSE_IDS) {
-      expect(existsSync(`public/mascot/${POSE_FALLBACK[id]}.webp`), id).toBe(true);
+      if (!POSE_ART.has(id)) expect(existsSync(`public/mascot/${POSE_FALLBACK[id] ?? 'missing'}.webp`), id).toBe(true);
       if (POSE_ART.has(id)) {
         expect(existsSync(`public/mascot/pose-${id}.webp`)).toBe(true);
         expect(existsSync(`public/mascot/pose-${id}@2x.webp`)).toBe(true);
@@ -111,7 +119,8 @@ describe('message pools', () => {
 
 describe('poses (data-driven art)', () => {
   it('uses its own art once imported, else the closest existing pose', () => {
-    expect(poseFile('coffee', new Set())).toBe(POSE_FALLBACK.coffee);
+    expect(poseFile('beach', new Set())).toBe(POSE_FALLBACK.beach);
+    expect(poseFile('coffee', new Set())).toBe('mascot-small');
     expect(poseFile('coffee', new Set(['coffee']))).toBe('pose-coffee');
   });
 
@@ -252,7 +261,7 @@ describe('thresholds and moments', () => {
     const start = '2026-11-03T12:30:00+01:00';
     expect(kind(input(start, '2026-11-03T14:20:00+01:00'))).toBeNull();
     const first = planMessage(input(start, '2026-11-03T14:31:00+01:00'));
-    expect(first).toEqual({ kind: 'cheer', slot: 'cheer:T-1@x:1' });
+    expect(first).toEqual({ kind: 'milestone', slot: 'cheer:T-1@x:1' });
     expect(planMessage(input(start, '2026-11-03T14:31:00+01:00', { state: { ...EMPTY_MESSAGES, seen: ['cheer:T-1@x:1'] } }))).toBeNull();
     expect(planMessage(input(start, '2026-11-03T16:45:00+01:00', { windows: CATALOG.es.windows, state: { ...EMPTY_MESSAGES, seen: ['cheer:T-1@x:1'] } }))?.slot).toBe('cheer:T-1@x:2');
   });
@@ -358,8 +367,9 @@ describe('cards', () => {
     const care = nextCard({ ...base, now, switches: { fun: false, wellbeing: true }, state: EMPTY_MESSAGES });
     expect(care?.card.kind).toBe('cheer');
     expect(CATALOG.en.pools.cheer[care?.card.line as number]?.wellbeing).toBe(true);
+    // Fun on: 2 h is a milestone (medal, pom-poms).
     const fun = nextCard({ ...base, now, switches: { fun: true, wellbeing: false }, state: EMPTY_MESSAGES });
-    expect(CATALOG.en.pools.cheer[fun?.card.line as number]?.wellbeing).toBeUndefined();
+    expect(fun?.card.kind).toBe('milestone');
   });
 
   it('visible for its entry until dismissed, expired or switched off', () => {
@@ -383,9 +393,98 @@ describe('cards', () => {
     const card = { kind: 'lunch', line: 2, locale: 'es', entry: 'e', shownAt: '2026-11-03T10:00:00Z' };
     expect(
       sanitizeMessages({ recent: { idle: [1, -1, 'x', 2.5, 3], bogus: [1], lunch: 'no' }, idleLine: 4, card, lastShownAt: 'nope', seen: ['a', 3] }),
-    ).toEqual({ recent: { idle: [1, 3] }, idleLine: 4, card: { ...card, dismissed: false }, lastShownAt: null, seen: ['a'] });
+    ).toEqual({ recent: { idle: [1, 3] }, idleLine: 4, card: { ...card, dismissed: false }, lastShownAt: null, seen: ['a'], afterMeeting: null });
+    expect(sanitizeMessages({ afterMeeting: '2026-11-03T10:00:00Z' }).afterMeeting).toBe('2026-11-03T10:00:00Z');
+    expect(sanitizeMessages({ afterMeeting: 'soon', card: { ...card, kind: 'dailyDone' } })).toMatchObject({ afterMeeting: null, card: null });
     expect(sanitizeMessages({ card: { ...card, kind: 'idle' }, idleLine: -2, recent: null }).card).toBeNull();
     expect(sanitizeMessages({ card: { ...card, locale: 'ja' } }).card).toBeNull();
     expect(sanitizeMessages({ card: { ...card, shownAt: 'never' }, lastShownAt: '2026-11-03T10:00:00Z' })).toMatchObject({ card: null, lastShownAt: '2026-11-03T10:00:00Z', idleLine: null });
+  });
+});
+
+describe('stretch thresholds', () => {
+  it(`milestones at ${MILESTONE_HOURS.join(' h and ')} h, "take a real break" from ${OVERTIME_FROM_HOURS} h`, () => {
+    expect([1, 2, 3, 4].map(stepHours)).toEqual([2, 4, 6, 8]);
+    expect([1, 2, 3, 4].map((step) => stretchKind(step, ON))).toEqual(['milestone', 'milestone', 'overtime', 'overtime']);
+    expect([1, 2, 3].map((step) => stretchKind(step, { fun: true, wellbeing: false }))).toEqual(['milestone', 'milestone', 'cheer']);
+    expect([1, 3].map((step) => stretchKind(step, { fun: false, wellbeing: true }))).toEqual(['cheer', 'overtime']);
+  });
+
+  it('no line hard-codes an hour count; {hours} only where the real elapsed time is filled in', () => {
+    const hourWords = /\d+\s*(h|hrs?|hours?|horas?|stunden?|heures?|ore|uur)\b/i;
+    for (const locale of MESSAGE_LOCALES) {
+      for (const name of POOL_KINDS) {
+        for (const line of CATALOG[locale].pools[name]) {
+          expect(line.text, `${locale}.${name}`).not.toMatch(hourWords);
+          if (line.text.includes('{hours}')) expect(['cheer', 'milestone', 'overtime'], `${locale}.${name}`).toContain(name);
+        }
+      }
+    }
+    // Overtime shows the real hours (6 or more), never a smaller milestone number.
+    expect(lineText('es', 'overtime', 0, { hours: 7 })?.text).toContain('7 horas');
+  });
+});
+
+describe('task kind (meetings, dailies)', () => {
+  it('reads the name with the locale table and English, without accents, as whole words', () => {
+    expect(taskKind({ title: 'Daily stand-up' }, 'en')).toBe('daily');
+    expect(taskKind({ taskTitle: 'Reunion con cliente' }, 'es')).toBe('meeting');
+    expect(taskKind({ title: 'Reunión técnica' }, 'es')).toBe('meeting');
+    expect(taskKind({ title: 'Sprint planning' }, 'es')).toBe('technical');
+    expect(taskKind({ title: 'Formación Symfony' }, 'es')).toBe('training');
+    expect(taskKind({ title: '1:1 with Ana' }, 'en')).toBe('meeting');
+    expect(taskKind({ title: 'Besprechung Vertrieb' }, 'de')).toBe('meeting');
+    expect(taskKind({ title: 'Point quotidien' }, 'fr')).toBe('daily');
+    expect(taskKind({ title: 'Riunione settimanale' }, 'it')).toBe('meeting');
+    expect(taskKind({ title: 'Overleg team' }, 'nl')).toBe('meeting');
+    expect(taskKind({ title: 'Reunião de equipa' }, 'pt')).toBe('meeting');
+    // Whole words only: "recall", "reviewer" or "dailymotion" are no meetings.
+    expect(taskKind({ title: 'Fix recall bug' }, 'en')).toBeNull();
+    // A code review is work, not a meeting; a sprint review is a meeting.
+    expect(taskKind({ title: 'Review pull request queue' }, 'en')).toBeNull();
+    expect(taskKind({ title: 'Sprint review' }, 'en')).toBe('technical');
+    expect(taskKind({ title: 'Dailymotion embed' }, 'en')).toBeNull();
+    expect(taskKind({ title: 'Write onboarding guide' }, 'en')).toBeNull();
+    expect(taskKind({ title: '   ' }, 'en')).toBeNull();
+  });
+
+  it('falls back to English words in another locale, but not to other languages', () => {
+    expect(taskKind({ title: 'Weekly meeting' }, 'es')).toBe('meeting');
+    expect(taskKind({ title: 'Besprechung' }, 'es')).toBeNull();
+    expect(taskKind({ title: 'Reunión' }, 'en')).toBeNull();
+  });
+
+  it("prefers Beacon's own type, labels or tags over the name", () => {
+    expect(taskKind({ title: 'Daily stand-up', type: 'training' }, 'en')).toBe('training');
+    expect(taskKind({ title: 'Acme', labels: ['Billing', 'Meeting'] }, 'en')).toBe('meeting');
+    expect(taskKind({ title: 'Acme', tags: [{ name: 'retro' }, 3] }, 'en')).toBe('technical');
+    expect(taskKind({ title: 'Acme', kind: 'daily' }, 'es')).toBe('daily');
+    expect(taskKind({ title: 'Acme', labels: 'urgent' }, 'en')).toBeNull();
+    expect(taskKind(null, 'en')).toBeNull();
+  });
+
+  it('a long meeting earns the next card a coffee / stretch line; short ones or plain tasks do not', () => {
+    const start = '2026-11-03T09:00:00Z';
+    expect(afterStop(EMPTY_MESSAGES, 'meeting', start, new Date('2026-11-03T09:30:00Z'))).toBe(EMPTY_MESSAGES);
+    expect(afterStop(EMPTY_MESSAGES, null, start, new Date('2026-11-03T11:00:00Z'))).toBe(EMPTY_MESSAGES);
+    const after = afterStop(EMPTY_MESSAGES, 'technical', start, new Date(Date.parse(start) + MEETING_LONG_MINUTES * 60_000));
+    expect(after.afterMeeting).toBe(new Date(Date.parse(start) + MEETING_LONG_MINUTES * 60_000).toISOString());
+    const plan = input('2026-11-03T14:00:00+01:00', '2026-11-03T14:05:00+01:00', { state: after });
+    expect(planMessage(plan)?.kind).toBe('meetingAfter');
+    const next = nextCard({ ...plan, locale: 'es', rng: () => 0 });
+    expect(next?.card.kind).toBe('meetingAfter');
+    expect(next?.state.afterMeeting).toBeNull();
+    expect(planMessage({ ...plan, switches: { fun: true, wellbeing: false } })).toBeNull();
+  });
+
+  it('meeting idle phrasing and "daily done" lines, without repeats; none with Fun messages off', () => {
+    const meeting = pickIdleLine(EMPTY_MESSAGES, 'fr', () => 0, ON, true);
+    expect(meeting.recent.meetingIdle).toEqual([0]);
+    expect(lineText('fr', 'meetingIdle', meeting.idleLine as number)?.text).toContain('réunion');
+    const first = pickDailyDone(EMPTY_MESSAGES, 'es', () => 0, ON);
+    expect(first?.line.text).toBe(CATALOG.es.pools.dailyDone[0]?.text);
+    const second = pickDailyDone(first?.state as MessageState, 'es', () => 0, ON);
+    expect(second?.line.text).toBe(CATALOG.es.pools.dailyDone[1]?.text);
+    expect(pickDailyDone(EMPTY_MESSAGES, 'es', () => 0, { fun: false, wellbeing: true })).toBeNull();
   });
 });

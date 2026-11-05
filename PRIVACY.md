@@ -43,6 +43,8 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
   lunch, late work, Friday afternoon, weekend) are chosen on this computer from the running timer's start and the
   clock, in your Beacon language and time zone when the server says (`me.locale`, `me.workingHours.timezone`). Nothing
   about them is sent. Settings → Friendly messages turns them off.
+- To recognise meetings and dailies, the name, type and labels of the running task (as Beacon sent them) are matched
+  against a word list on this computer; nothing extra is stored or sent.
 
 ## Optional features (off by default, dated consent, revocable in Settings)
 

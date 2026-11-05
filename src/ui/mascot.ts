@@ -107,36 +107,19 @@ function picture(file: string, alt: string, className: string, pose: string): HT
  */
 export const POSE_ART: ReadonlySet<string> = new Set(imported as string[]);
 
-/** Closest existing pose for each friendly-message pose whose own art is not imported yet. */
-export const POSE_FALLBACK: Record<PoseId, Pose> = {
-  peek: 'mascot-small',
-  sleepy: 'pose-pause',
-  wave: 'pose-card',
-  think: 'pose-reading',
-  heart: 'mascot-small',
-  celebrate: 'pose-card',
-  thumbs: 'pose-card',
-  flag: 'mascot',
-  music: 'mascot-small',
-  focus: 'pose-reading',
-  stretch: 'mascot',
-  water: 'pose-pause',
-  eyes: 'pose-reading',
-  sunrise: 'mascot',
-  coffee: 'pose-pause',
-  lunch: 'pose-pause',
-  moon: 'pose-hourglass',
-  friday: 'pose-card',
-  'weekend-start': 'pose-card',
-  shades: 'mascot',
-  beach: 'pose-pause',
-  sofa: 'pose-pause',
+/** Closest existing pose for the friendly-message poses whose own art is not imported yet. */
+export const POSE_FALLBACK: Partial<Record<PoseId, Pose>> = {
+  beach: 'mascot',
+  sofa: 'mascot-small',
   park: 'mascot',
 };
 
+/** Shown for a pose with neither art nor a fallback (a new id before its art arrives). */
+const LAST_RESORT: Pose = 'mascot-small';
+
 /** File (without extension) drawn for a friendly-message pose: its own art, else the fallback. */
 export function poseFile(id: PoseId, available: ReadonlySet<string> = POSE_ART): string {
-  return available.has(id) ? `pose-${id}` : POSE_FALLBACK[id];
+  return available.has(id) ? `pose-${id}` : (POSE_FALLBACK[id] ?? LAST_RESORT);
 }
 
 /** Decorative picture of a friendly message (`data-pose` = the message's pose id). */

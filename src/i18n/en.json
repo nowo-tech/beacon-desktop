@@ -249,5 +249,10 @@
   "wellbeingRemindersHelp": "Gentle nudges for coffee, lunch, a stretch, some water, or calling it a day when it gets late. Never more than one every {minutes} minutes, always easy to dismiss.",
   "friendlyLocal": "Worked out on this computer from your timer and the time of day, in your Beacon language. Nothing is sent.",
   "cheerLabel": "A note from the robot",
-  "cheerDismiss": "Thanks!"
+  "cheerDismiss": "Thanks!",
+  "stillInMeetingTitle": "Still in the meeting?",
+  "idleCountdown": "The timer pauses in {time} if there is no answer.",
+  "idleStoppedAt": "I stopped your timer at {time} on {task}.",
+  "resumeNow": "Resume {task} now",
+  "toastDismiss": "Dismiss"
 }

@@ -52,12 +52,25 @@ Not on purpose: the running timer card, the task rows, Settings (apart from Abou
 
 ## Friendly-message poses (0.5.0)
 
-Every line of the friendly messages (`src/lib/messages/`) names a pose id from `POSE_IDS` (peek, sleepy, wave, think,
-heart, celebrate, thumbs, flag, music, focus, stretch, water, eyes, sunrise, coffee, lunch, moon, friday,
-weekend-start, shades, beach, sofa, park). Its art is `pose-<id>.webp` + `pose-<id>@2x.webp` here, imported from a
-transparent `pose-<id>.png` (for example 1024 × 1024) with `scripts/mascot/import-poses.sh <dir>`: trimmed, 96 / 192 px
-high, WebP quality 80. The script also rewrites `src/ui/pose-art.json`, the list of ids that have their own art. Ids
-without art yet show the closest existing pose (`POSE_FALLBACK` in `src/ui/mascot.ts`).
+Every line of the friendly messages (`src/lib/messages/`) names a pose id from `POSE_IDS`. The art is the owner's
+(generated for TimeTrack in the style of the robot above, delivered 2026-11-05): `pose-<id>.webp` + `pose-<id>@2x.webp`
+here, imported from a transparent (or white) `pose-<id>.png`, for example 1024 × 1024, with
+`scripts/mascot/import-poses.sh <dir>`:
+
+1. an opaque white background becomes transparent (flood fill from the corners, 8 % fuzz);
+2. stray fragments are dropped: connected components of the solid pixels more than 64 px (at 1024 px) from the
+   character, with their glow; props close to it (steam, sparkles, a leaf, the antenna arcs) stay;
+3. trimmed, 96 / 192 px high, WebP quality 80.
+
+The script also rewrites `src/ui/pose-art.json`, the list of ids that have their own art (40 today). beach, sofa and
+park have no art yet and show their fallback (`POSE_FALLBACK` in `src/ui/mascot.ts`).
+
+| Use | Poses |
+|---|---|
+| "Still there?" | peek, peek-2, peek-3, peek-4, think, wave, sleepy, heart; teamwork in meetings |
+| Cheers | celebrate, cheer-up, thumbs, flag, music, focus, working, keep-going, progress, achievement (milestones), presentation, task-complete, finished, deadline |
+| Wellbeing | stretch, stretch-legs, water, eyes, mindfulness, rest, overtime ("take a real break") |
+| Moments | early, sunrise, coffee, lunch, moon, late-working, friday, holiday, weekend-start, shades |
 
 ## Rules
 

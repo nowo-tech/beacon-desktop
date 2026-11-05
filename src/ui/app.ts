@@ -3,7 +3,8 @@ import type { DeviceCode, Entry, Me, Task, Timer } from '../api/types';
 import { dashboardUrl, myTimeUrl, sameOriginHttps, taskUrl } from '../lib/beacon';
 import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
 import { type ErrorStage, type ErrorView, describeError } from '../lib/errors';
-import { type Card, type Switches, beaconLocale, beaconTimeZone, CATALOG, lineText, messageLocale, MIN_GAP_MINUTES, nextCard, pickIdleLine, visibleCard } from '../lib/friendly';
+import { type Card, type Switches, afterStop, beaconLocale, beaconTimeZone, CATALOG, DAILY_TOAST_MS, IDLE_COUNTDOWN_MINUTES, lineText, MEETING_COUNTDOWN_MINUTES, messageLocale, MIN_GAP_MINUTES, nextCard, pickDailyDone, pickIdleLine, taskKind, visibleCard } from '../lib/friendly';
+import type { PoseId, TaskKind } from '../lib/messages/types';
 import { createTranslator, detectLocale, type Locale, type MessageKey, type Translate } from '../lib/i18n';
 import { type GapChoice, type IdleCheckState, type IdleChoice, WATCHING, decide, decideGap, observeIdle, promptSpan } from '../lib/idleCheck';
 import { preflight } from '../lib/preflight';
@@ -82,6 +83,8 @@ function countdown(seconds: number): string {
 interface MainRegions {
   root: HTMLElement;
   banners: HTMLElement;
+  /** The "Still there?" modal (forces an answer; everything else is inert while it is open). */
+  modal: HTMLElement;
   timer: HTMLElement;
   totals: HTMLElement;
   search: HTMLInputElement;
@@ -166,6 +169,14 @@ export class DesktopApp {
   private deviceTicker: ReturnType<typeof setInterval> | null = null;
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Wall-clock "Still there?" countdown display (1 s); the stop itself is decided by `tick()` from timestamps. */
+  private countdownTicker: ReturnType<typeof setInterval> | null = null;
+  /** "Daily done" toast after a daily-type timer stops. */
+  dailyToast: { text: string; pose: PoseId; locale: string } | null = null;
+  private dailyTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Toasts last rendered (re-rendered only when they change, so the polite live region speaks once). */
+  private toastKey = '';
+  private readonly toastRegion: HTMLElement;
   private lastTrayMenu = '';
   private main: MainRegions | null = null;
   private readonly header: HTMLElement;
@@ -206,7 +217,8 @@ export class DesktopApp {
     this.alert = h('div', { class: 'messages', id: 'alerts', attrs: { role: 'alert' } });
     this.body = h('div', { class: 'view', id: 'view' });
     this.liveRegion = h('p', { class: 'sr-only', id: 'live', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
-    this.root.replaceChildren(this.header, this.status, this.alert, this.liveRegion, this.body);
+    this.toastRegion = h('div', { class: 'toasts', id: 'toasts', attrs: { 'aria-live': 'polite', 'aria-relevant': 'additions' } });
+    this.root.replaceChildren(this.header, this.status, this.alert, this.liveRegion, this.body, this.toastRegion);
     document.addEventListener('keydown', (event) => this.onKey(event));
   }
 
@@ -230,7 +242,8 @@ export class DesktopApp {
   destroy(): void {
     this.abort?.abort();
     for (const timer of [this.ticker, this.deviceTicker]) if (timer !== null) clearInterval(timer);
-    for (const timer of [this.searchTimer, this.noticeTimer]) if (timer !== null) clearTimeout(timer);
+    for (const timer of [this.searchTimer, this.noticeTimer, this.dailyTimer]) if (timer !== null) clearTimeout(timer);
+    if (this.countdownTicker !== null) clearInterval(this.countdownTicker);
   }
 
   private api(): TimeTrackApi {
@@ -482,6 +495,7 @@ export class DesktopApp {
   async start(task: Task): Promise<void> {
     const running = this.state.activeTimer;
     this.welcome = false;
+    if (running !== null) this.persist({ messages: afterStop(this.state.messages, this.timerKind(running), running.startedAt, this.now()) });
     this.persist({ lastTask: this.taskRef(task) });
     await this.guard(
       async () => {
@@ -532,6 +546,34 @@ export class DesktopApp {
   private saved(timer: Timer, queued: boolean): void {
     const params = { time: formatHoursMinutes(elapsedSeconds(timer.startedAt, this.now())), task: timer.taskTitle };
     this.setNotice(queued ? this.t('savedOffline', params) : this.t(variant(SAVED_VARIANTS, this.saves++), params), 'saved');
+    const kind = this.timerKind(timer);
+    let messages = afterStop(this.state.messages, kind, timer.startedAt, this.now());
+    const daily = kind === 'daily' ? pickDailyDone(messages, this.messageLocale(), this.random, this.switches()) : null;
+    if (daily !== null) {
+      messages = daily.state;
+      this.showDailyToast({ text: daily.line.text, pose: daily.line.pose, locale: this.messageLocale() });
+    }
+    this.persist({ messages });
+  }
+
+  private showDailyToast(toast: { text: string; pose: PoseId; locale: string } | null): void {
+    this.dailyToast = toast;
+    if (this.dailyTimer !== null) clearTimeout(this.dailyTimer);
+    this.dailyTimer = toast === null ? null : setTimeout(() => this.showDailyToast(null), DAILY_TOAST_MS);
+    this.render();
+  }
+
+  /** Meeting-like kind of a timer's task (daily, meeting, technical session, training), from Beacon's data or its name. */
+  timerKind(timer: Pick<Timer, 'taskId' | 'taskTitle'>): TaskKind | null {
+    return taskKind({ ...(this.findTask(timer.taskId) ?? {}), taskTitle: timer.taskTitle }, this.messageLocale());
+  }
+
+  /** Whether a meeting-like task is running (softer "Still in the meeting?", longer countdown). */
+  inMeeting(): boolean {
+    const timer = this.state.activeTimer;
+    const state = this.state.idleCheck;
+    if (timer !== null) return this.timerKind(timer) !== null;
+    return state.phase !== 'watching' && this.timerKind({ taskId: state.taskId, taskTitle: state.taskTitle }) !== null;
   }
 
   /** The running entry has been on the clock for `LONG_RUNNING_HOURS` or more and nobody said "Keep going". */
@@ -567,7 +609,7 @@ export class DesktopApp {
   checkFriendly(): void {
     const timer = this.state.activeTimer;
     if (this.view !== 'main') return;
-    const shown = (this.main?.banners.querySelector('#cheer') ?? null) !== null;
+    const shown = this.toastRegion.querySelector('#cheer') !== null;
     const card = this.currentCard();
     if (timer !== null && card === null && this.state.idleCheck.phase === 'watching' && !this.longRunning()) {
       const next = nextCard({
@@ -828,16 +870,34 @@ export class DesktopApp {
     return features.idleCheck && (!features.userCanDisable || this.state.consents.idleDetection?.granted !== false);
   }
 
+  /**
+   * Threshold and the "Still there?" countdown: `IDLE_COUNTDOWN_MINUTES` (never longer than the organisation's answer
+   * timeout), or `MEETING_COUNTDOWN_MINUTES` while a meeting-like task runs (never shorter than the organisation's).
+   */
   idleSettings(): { thresholdMinutes: number; answerTimeoutMinutes: number } {
     const features = this.features();
-    return { thresholdMinutes: effectiveThreshold(features, this.state.settings.idleMinutes), answerTimeoutMinutes: features.answerTimeoutMinutes };
+    const org = features.answerTimeoutMinutes;
+    return {
+      thresholdMinutes: effectiveThreshold(features, this.state.settings.idleMinutes),
+      answerTimeoutMinutes: this.inMeeting() ? Math.max(org, MEETING_COUNTDOWN_MINUTES) : Math.min(org, IDLE_COUNTDOWN_MINUTES),
+    };
   }
 
   /**
    * Called every 30 s: tray refresh and the "Still there?" check. The OS "seconds since last input" value is read
    * here and used only for this decision: it is not stored, logged or sent.
    */
-  async tick(): Promise<void> {
+  tick(): Promise<void> {
+    // One check at a time (the 30 s ticker, the countdown reaching 0 and a wake-up may overlap): each runs after the
+    // previous one, so a stop in flight is never mistaken for a timer started meanwhile.
+    const run = this.ticking.then(() => this.check());
+    this.ticking = run.catch(() => undefined);
+    return run;
+  }
+
+  private ticking: Promise<void> = Promise.resolve();
+
+  private async check(): Promise<void> {
     await this.updateTray();
     if (this.view === 'main' && this.longRunning() !== (this.main?.banners.querySelector('#long-running') !== null)) this.render();
     this.checkFriendly();
@@ -851,8 +911,14 @@ export class DesktopApp {
     }
     const timer = this.state.activeTimer;
     if (timer === null && current.phase === 'watching') return;
-    const lastInputAt = new Date(now.getTime() - (await this.platform.idleSeconds()) * 1000);
-    const step = observeIdle(current, timer, { now, lastInputAt, suspendedSince }, this.idleSettings());
+    let lastInputAt = new Date(now.getTime() - (await this.platform.idleSeconds()) * 1000);
+    // The countdown runs on the wall clock: when it ran out while the window was hidden or the computer slept, the
+    // timer pauses at the start of the idle time even if an input woke it up (the countdown was already over).
+    const settings = this.idleSettings();
+    if (current.phase === 'asking' && current.returnedAt === null && now.getTime() - Date.parse(current.askedAt) >= settings.answerTimeoutMinutes * 60_000) {
+      lastInputAt = new Date(current.from);
+    }
+    const step = observeIdle(current, timer, { now, lastInputAt, suspendedSince }, settings);
     if (step.state !== current) this.setIdleCheck(step.state);
     if (step.effect === 'autoStop') await this.runActions(step.actions);
     if (step.effect === 'ask' || step.effect === 'askGap' || (step.effect === 'autoStop' && step.state.phase === 'gap')) await this.promptShown(step.state);
@@ -862,7 +928,7 @@ export class DesktopApp {
     if (state.phase !== 'asking') this.meetingOpen = false;
     const asked = state.phase === 'asking' && this.state.idleCheck.phase !== 'asking';
     let messages = this.state.messages;
-    if (asked) messages = pickIdleLine(messages, this.messageLocale(), this.random, this.switches());
+    if (asked) messages = pickIdleLine(messages, this.messageLocale(), this.random, this.switches(), this.inMeeting());
     else if (state.phase !== 'asking' && messages.idleLine !== null) messages = { ...messages, idleLine: null };
     this.persist({ idleCheck: state, messages });
     this.render();
@@ -873,9 +939,12 @@ export class DesktopApp {
     if (state.phase !== 'asking' && state.phase !== 'gap') return;
     const minutes = state.phase === 'asking' ? this.idleSettings().thresholdMinutes : this.minutesBetween(state.from, state.to);
     const text = state.phase === 'asking' ? this.t('stillThereText', { minutes, task: state.taskTitle }) : this.t('gapTitle');
-    this.announce(`${this.t('stillThereTitle')} ${text}`);
+    const title = this.t(this.inMeeting() ? 'stillInMeetingTitle' : 'stillThereTitle');
+    // Once, politely: the countdown itself is not read out every second.
+    const countdown = state.phase === 'asking' ? ` ${this.t('stillThereTimeout', { minutes: this.idleSettings().answerTimeoutMinutes })}` : '';
+    this.announce(`${title} ${text}${countdown}`);
     if (hasConsent(this.state, 'notifications') && withinWorkingHours(this.me?.workingHours, this.now())) {
-      await this.platform.notify(this.t('stillThereTitle'), text);
+      await this.platform.notify(title, text);
     }
   }
 
@@ -910,6 +979,14 @@ export class DesktopApp {
     if (state.phase !== 'resume') return;
     this.setIdleCheck(WATCHING);
     if (resume) await this.start(this.findTask(state.taskId) ?? { id: state.taskId, title: state.taskTitle });
+  }
+
+  /** "Resume … now" in the paused modal: a new entry on the same task from now (the time away stays out). */
+  async resumeNow(): Promise<void> {
+    const state = this.state.idleCheck;
+    if (state.phase !== 'away' && state.phase !== 'gap') return;
+    this.setIdleCheck(WATCHING);
+    await this.start(this.findTask(state.taskId) ?? { id: state.taskId, title: state.taskTitle });
   }
 
   dismissClamps(): void {
@@ -1338,8 +1415,13 @@ export class DesktopApp {
       clearInterval(this.deviceTicker);
       this.deviceTicker = null;
     }
+    if (this.countdownTicker !== null) {
+      clearInterval(this.countdownTicker);
+      this.countdownTicker = null;
+    }
     this.renderHeader();
     this.renderMessages();
+    this.renderToasts();
     if (this.view === 'main') {
       this.renderMain();
     } else {
@@ -1587,6 +1669,47 @@ export class DesktopApp {
     this.renderTotals(main.totals);
     this.renderLists(main);
     patch(main.footer, [h('span', {}, this.t('signedInAs', { name: this.state.session?.displayName ?? this.state.session?.identifier ?? '' }))]);
+    this.renderModal(main);
+  }
+
+  /** "Still there?" and what follows it, as a modal: the rest of the app is inert until it is answered. */
+  private renderModal(main: MainRegions): void {
+    const card = this.renderIdleCheck();
+    const wasOpen = !main.modal.hidden;
+    if (card !== null) {
+      card.setAttribute('role', 'dialog');
+      card.setAttribute('aria-modal', 'true');
+    }
+    patch(main.modal, [card]);
+    const open = card !== null;
+    main.modal.hidden = !open;
+    for (const child of [this.header, ...Array.from(main.root.children)]) {
+      if (child !== main.modal) child.toggleAttribute('inert', open);
+    }
+    const active = document.activeElement;
+    if (open && (!wasOpen || active === null || !main.modal.contains(active))) {
+      main.modal.querySelector<HTMLElement>('button, select, input, textarea')?.focus();
+    }
+  }
+
+  /** Cheers, moments and "daily done" as toasts (bottom right, never focused, announced once). */
+  private renderToasts(): void {
+    const card = this.view === 'main' ? this.currentCard() : null;
+    const daily = this.view === 'main' ? this.dailyToast : null;
+    const key = `${card === null ? '' : `${card.kind}:${card.line}:${card.shownAt}`}|${daily?.text ?? ''}`;
+    if (key === this.toastKey) return;
+    this.toastKey = key;
+    patch(this.toastRegion, [card !== null && this.renderCheer(), daily !== null && this.toast('daily-toast', daily.pose, daily.text, daily.locale, () => this.showDailyToast(null))]);
+  }
+
+  private toast(id: string, pose: PoseId, text: string, locale: string, dismiss: () => void, kind?: string): HTMLElement {
+    return h(
+      'section',
+      { class: 'toast', id, key: id, attrs: { 'aria-label': this.t('cheerLabel'), 'data-kind': kind } },
+      poseArt(pose, 'toast-art'),
+      h('p', { class: 'toast-text', id: `${id}-text`, attrs: { lang: locale } }, text),
+      h('button', { class: 'icon-button toast-close', id: `${id}-dismiss`, key: `${id}-dismiss`, attrs: { type: 'button', 'aria-label': this.t('toastDismiss'), title: this.t('toastDismiss') }, on: { click: dismiss } }, icon('close')),
+    );
   }
 
   private buildMain(): MainRegions {
@@ -1620,9 +1743,10 @@ export class DesktopApp {
       quick: h('section', { class: 'list-section', id: 'quick-section' }),
       list: h('section', { class: 'list-section', id: 'list-section' }),
       footer: h('footer', { class: 'footer' }),
+      modal: h('div', { class: 'idle-modal', id: 'idle-modal', attrs: { hidden: true } }),
     };
     regions.root.addEventListener('keydown', (event) => {
-      if (event.target !== search) this.onListKey(event);
+      if (event.target !== search && !regions.modal.contains(event.target as Node)) this.onListKey(event);
     });
     regions.root.append(
       regions.banners,
@@ -1633,6 +1757,7 @@ export class DesktopApp {
       regions.quick,
       regions.list,
       regions.footer,
+      regions.modal,
     );
     return regions;
   }
@@ -1643,7 +1768,6 @@ export class DesktopApp {
       this.renderUpdateCard(),
       this.welcome && this.error === null && this.renderWelcome(),
       this.longRunning() && this.renderLongRunning(),
-      this.renderCheer(),
       this.updateMessage !== null &&
         h(
           'section',
@@ -1651,7 +1775,6 @@ export class DesktopApp {
           h('span', {}, this.updateMessage),
           h('button', { class: 'secondary small', id: 'download-beacon', on: { click: () => this.openApps() } }, t('downloadFromBeacon')),
         ),
-      this.renderIdleCheck(),
       this.clampNotes.length > 0 && this.renderClamps(),
       this.offline &&
         h(
@@ -1709,7 +1832,7 @@ export class DesktopApp {
     );
   }
 
-  /** A friendly message: smile, cheer or a gentle nudge, in the Beacon user's language. Dismissible, never focused. */
+  /** A friendly message: smile, cheer or a gentle nudge, in the Beacon user's language. A toast, never focused. */
   private renderCheer(): HTMLElement | null {
     const card = this.currentCard();
     const timer = this.state.activeTimer;
@@ -1717,17 +1840,7 @@ export class DesktopApp {
     const hours = Math.floor(elapsedSeconds(timer.startedAt, this.now()) / 3600);
     const line = lineText(card.locale, card.kind, card.line, { hours });
     if (line === null) return null;
-    return h(
-      'section',
-      { class: 'card still-there cheer-card', id: 'cheer', key: 'cheer', attrs: { role: 'region', 'aria-label': this.t('cheerLabel'), 'data-kind': card.kind } },
-      poseArt(line.pose, 'mascot tiny'),
-      h(
-        'div',
-        { class: 'still-there-body' },
-        h('p', { class: 'cheer-text', id: 'cheer-text', attrs: { lang: card.locale } }, line.text),
-        h('div', { class: 'row-actions' }, h('button', { class: 'link', id: 'cheer-dismiss', key: 'cheer-dismiss', attrs: { type: 'button' }, on: { click: () => this.dismissCheer() } }, this.t('cheerDismiss'))),
-      ),
-    );
+    return this.toast('cheer', line.pose, line.text, card.locale, () => this.dismissCheer(), card.kind);
   }
 
   /**
@@ -1947,7 +2060,33 @@ export class DesktopApp {
     return this.timeFormat.format(typeof iso === 'string' ? new Date(iso) : iso);
   }
 
-  /** The "Still there?" prompt, the "welcome back" gap question and the Resume offer (calm, never blocking). */
+  /**
+   * Time left before the timer pauses: text and a bar, from wall-clock timestamps (a hidden window, a throttled timer or
+   * a sleep do not skew it). Updated every second without re-rendering; at 0 the regular check runs at once.
+   */
+  private renderCountdown(askedAt: string): HTMLElement {
+    const total = this.idleSettings().answerTimeoutMinutes * 60;
+    const text = h('p', { class: 'muted', id: 'idle-countdown-text' });
+    const fill = h('span', { class: 'countdown-fill', id: 'idle-countdown-fill' });
+    const bar = h('div', { class: 'countdown-track', attrs: { role: 'progressbar', 'aria-labelledby': 'idle-countdown-text', 'aria-valuemin': '0', 'aria-valuemax': String(total) } }, fill);
+    const update = (): number => {
+      const left = Math.max(0, Math.ceil((Date.parse(askedAt) + total * 1000 - this.now().getTime()) / 1000));
+      text.textContent = this.t('idleCountdown', { time: `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` });
+      bar.setAttribute('aria-valuenow', String(left));
+      fill.style.transform = `scaleX(${total > 0 ? left / total : 0})`;
+      return left;
+    };
+    update();
+    this.countdownTicker = setInterval(() => {
+      if (update() > 0) return;
+      if (this.countdownTicker !== null) clearInterval(this.countdownTicker);
+      this.countdownTicker = null;
+      void this.tick();
+    }, 1000);
+    return h('div', { class: 'idle-countdown', id: 'idle-countdown' }, text, bar);
+  }
+
+  /** The "Still there?" prompt, the "welcome back" gap question and the Resume offer (a modal: it needs an answer). */
   private renderIdleCheck(): HTMLElement | null {
     const t = this.t;
     const state = this.state.idleCheck;
@@ -1956,8 +2095,12 @@ export class DesktopApp {
       return this.momentCard(id, name, title, ...children);
     };
     // The "Still there?" phrasing of this prompt (Fun messages), with its own pose; the facts and buttons stay the same.
+    // During a meeting-like task: the softer "Still in the meeting?" and the teamwork pose.
     const locale = this.messageLocale();
-    const quip = state.phase === 'asking' && this.state.settings.funMessages && this.state.messages.idleLine !== null ? lineText(locale, 'idle', this.state.messages.idleLine) : null;
+    const meeting = state.phase !== 'watching' && this.inMeeting();
+    const quip = state.phase === 'asking' && this.state.settings.funMessages && this.state.messages.idleLine !== null ? lineText(locale, meeting ? 'meetingIdle' : 'idle', this.state.messages.idleLine) : null;
+    const resumeNow = (taskTitle: string) =>
+      h('button', { class: 'primary', id: 'idle-resume-now', key: 'idle-resume-now', attrs: { type: 'button' }, on: { click: () => void this.resumeNow() } }, icon('play'), t('resumeNow', { task: taskTitle }));
     switch (state.phase) {
       case 'watching':
         return null;
@@ -1967,8 +2110,8 @@ export class DesktopApp {
         return this.pictureCard(
           'idle',
           'stillThere',
-          quip !== null ? poseArt(quip.pose, 'mascot tiny') : moment('stillThere', 'mascot tiny', t),
-          t('stillThereTitle'),
+          quip !== null ? poseArt(quip.pose, 'mascot tiny') : meeting ? poseArt('teamwork', 'mascot tiny') : moment('stillThere', 'mascot tiny', t),
+          t(meeting ? 'stillInMeetingTitle' : 'stillThereTitle'),
           quip !== null && h('p', { class: 'idle-quip', id: 'idle-quip', attrs: { lang: locale } }, quip.text),
           h('p', { id: 'idle-text' }, t('stillThereText', { minutes: Math.max(minutes, this.idleSettings().thresholdMinutes), task: state.taskTitle })),
           h('p', { class: 'muted' }, t('stillThereSince', { time: this.time(state.from) })),
@@ -1982,11 +2125,17 @@ export class DesktopApp {
                 h('button', { class: 'secondary', id: 'idle-discard', key: 'idle-discard', attrs: { type: 'button' }, on: { click: () => void this.answerIdle({ kind: 'discard' }) } }, t('idleDiscardMinutes', { minutes })),
                 h('button', { class: 'secondary', id: 'idle-pause', key: 'idle-pause', attrs: { type: 'button' }, on: { click: () => void this.answerIdle({ kind: 'pause' }) } }, t('idlePause', { time: this.time(state.from) })),
               ),
-          h('p', { class: 'muted small-print' }, t('stillThereTimeout', { minutes: this.idleSettings().answerTimeoutMinutes })),
+          state.returnedAt === null ? this.renderCountdown(state.askedAt) : h('p', { class: 'muted small-print' }, t('stillThereTimeout', { minutes: this.idleSettings().answerTimeoutMinutes })),
         );
       }
       case 'away':
-        return card('idle-away', t('awayTitle'), h('p', {}, t('awayText', { time: this.time(state.from), task: state.taskTitle })));
+        return card(
+          'idle-away',
+          t('awayTitle'),
+          h('p', { id: 'idle-away-text' }, t('idleStoppedAt', { time: this.time(state.from), task: state.taskTitle })),
+          h('div', { class: 'choice-list' }, resumeNow(state.taskTitle)),
+          h('p', { class: 'muted small-print' }, t('awayText', { time: this.time(state.from), task: state.taskTitle })),
+        );
       case 'gap': {
         const minutes = this.minutesBetween(state.from, state.to);
         const features = this.features();
@@ -2001,7 +2150,8 @@ export class DesktopApp {
             ? h(
                 'div',
                 { class: 'choice-list', attrs: { role: 'group', 'aria-labelledby': 'gap-title' } },
-                h('button', { class: 'primary', id: 'gap-keep', key: 'gap-keep', attrs: { type: 'button' }, on: { click: () => void this.answerGap({ kind: 'keep' }) } }, t('gapKeep', { task: state.taskTitle })),
+                resumeNow(state.taskTitle),
+                h('button', { class: 'secondary', id: 'gap-keep', key: 'gap-keep', attrs: { type: 'button' }, on: { click: () => void this.answerGap({ kind: 'keep' }) } }, t('gapKeep', { task: state.taskTitle })),
                 select.options.length > 0 &&
                   h(
                     'div',
@@ -2027,6 +2177,7 @@ export class DesktopApp {
                 'div',
                 { class: 'choice-list' },
                 h('p', { class: 'muted', id: 'gap-unsupported' }, t('gapUnsupported')),
+                resumeNow(state.taskTitle),
                 h('button', { class: 'secondary', id: 'gap-discard', key: 'gap-discard', attrs: { type: 'button' }, on: { click: () => void this.answerGap({ kind: 'discard' }) } }, t('gapOk')),
               ),
         );
@@ -2151,7 +2302,7 @@ export class DesktopApp {
     }
     minutes.addEventListener('change', () => this.setIdleMinutes(Number(minutes.value) === features.thresholdMinutes ? null : Number(minutes.value)));
     const wait = h('label', { class: 'inline' }, t('idleMinutes'), minutes);
-    const timeout = h('p', { class: 'muted', id: 'idle-timeout-text' }, t('stillThereTimeout', { minutes: features.answerTimeoutMinutes }));
+    const timeout = h('p', { class: 'muted', id: 'idle-timeout-text' }, t('stillThereTimeout', { minutes: Math.min(features.answerTimeoutMinutes, IDLE_COUNTDOWN_MINUTES) }));
     if (features.idleCheck === null) {
       return this.renderFeature('idleDetection', 'featureIdle', 'featureIdleText', h('div', {}, wait, timeout));
     }

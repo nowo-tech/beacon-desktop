@@ -5,7 +5,7 @@ import * as fr from './messages/fr';
 import * as it from './messages/it';
 import * as nl from './messages/nl';
 import * as pt from './messages/pt';
-import { type Line, POOL_KINDS, type PoolKind, type Pools, type Windows } from './messages/types';
+import { type Keywords, type Line, POOL_KINDS, type PoolKind, type Pools, TASK_KINDS, type TaskKind, type Windows } from './messages/types';
 
 /**
  * Friendly messages (0.5.0): a varied "Still there?" phrasing, cheers on long stretches and time-of-day moments
@@ -20,7 +20,7 @@ import { type Line, POOL_KINDS, type PoolKind, type Pools, type Windows } from '
 export const MESSAGE_LOCALES = ['en', 'es', 'de', 'fr', 'it', 'nl', 'pt'] as const;
 export type MessageLocale = (typeof MESSAGE_LOCALES)[number];
 
-export const CATALOG: Record<MessageLocale, { pools: Pools; windows: Windows }> = { en, es, de, fr, it, nl, pt };
+export const CATALOG: Record<MessageLocale, { pools: Pools; windows: Windows; keywords: Keywords }> = { en, es, de, fr, it, nl, pt };
 
 /** First cheer after this many hours of one running timer, then one every `CHEER_EVERY_HOURS`. */
 export const CHEER_FIRST_HOURS = 2;
@@ -34,12 +34,25 @@ export const NO_REPEAT = 6;
 /** Weekend: the playful greeting within this long after the timer starts; the "enjoy your day" nudge after this long. */
 export const WEEKEND_START_MINUTES = 60;
 export const WEEKEND_REST_AFTER_MINUTES = 90;
+/** "Still there?" countdown before the timer pauses (minutes; never longer than the organisation's answer timeout). */
+export const IDLE_COUNTDOWN_MINUTES = 2;
+/** The same during a meeting-like task (people listen without typing): never shorter than the organisation's. */
+export const MEETING_COUNTDOWN_MINUTES = 10;
+/** How long the "daily done" toast stays. */
+export const DAILY_TOAST_MS = 12_000;
+/** A meeting-like task running at least this long makes the next card a coffee / stretch line (`meetingAfter`). */
+export const MEETING_LONG_MINUTES = 60;
 /** Remembered "already shown" slots. */
 const SEEN_LIMIT = 40;
 
 /** Which switch each pool follows (`cheer` lines follow their own `wellbeing` mark). */
 export const KIND_GROUP: Record<Exclude<PoolKind, 'cheer'>, 'fun' | 'wellbeing'> = {
   idle: 'fun',
+  milestone: 'fun',
+  meetingIdle: 'fun',
+  dailyDone: 'fun',
+  overtime: 'wellbeing',
+  meetingAfter: 'wellbeing',
   earlyBird: 'fun',
   friday: 'fun',
   weekend: 'fun',
@@ -49,7 +62,9 @@ export const KIND_GROUP: Record<Exclude<PoolKind, 'cheer'>, 'fun' | 'wellbeing'>
   weekendRest: 'wellbeing',
 };
 
-export type CardKind = Exclude<PoolKind, 'idle'>;
+/** Pools shown in the card (the others go with the idle prompt or the saved notice). */
+export type CardKind = Exclude<PoolKind, 'idle' | 'meetingIdle' | 'dailyDone'>;
+const NOT_CARDS: readonly string[] = ['idle', 'meetingIdle', 'dailyDone'];
 
 export interface Card {
   kind: CardKind;
@@ -72,9 +87,11 @@ export interface MessageState {
   lastShownAt: string | null;
   /** Slots already used (`lunch:2026-11-05`, `cheer:<entry>:2` …), newest last. */
   seen: string[];
+  /** End of a long meeting-like entry whose coffee / stretch card is still due (ISO), if any. */
+  afterMeeting: string | null;
 }
 
-export const EMPTY_MESSAGES: MessageState = { recent: {}, idleLine: null, card: null, lastShownAt: null, seen: [] };
+export const EMPTY_MESSAGES: MessageState = { recent: {}, idleLine: null, card: null, lastShownAt: null, seen: [], afterMeeting: null };
 
 export interface Switches {
   fun: boolean;
@@ -145,6 +162,56 @@ export function inWindow(minute: number, [from, to]: readonly [number, number]):
   return from <= to ? minute >= from && minute < to : minute >= from || minute < to;
 }
 
+// ---- Task kind ------------------------------------------------------------------------------------------------
+
+/** Lower case, no accents, so "Reunión" matches "reunion". */
+const fold = (value: string) => value.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+
+const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The first task kind whose keyword appears as a whole word in `text` (daily before meeting, a daily is one too). */
+function kindIn(text: string, tables: readonly Keywords[]): TaskKind | null {
+  const folded = fold(text);
+  if (folded.trim() === '') return null;
+  for (const kind of TASK_KINDS) {
+    if (fold(kind) === folded.trim()) return kind;
+    for (const table of tables) {
+      for (const word of table[kind]) {
+        if (new RegExp(`(^|[^\\p{L}\\p{N}])${escape(fold(word))}($|[^\\p{L}\\p{N}])`, 'u').test(folded)) return kind;
+      }
+    }
+  }
+  return null;
+}
+
+const strings = (value: unknown): string[] => {
+  if (typeof value === 'string') return [value];
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => (typeof item === 'string' ? [item] : typeof field(item, 'name') === 'string' ? [field(item, 'name') as string] : []));
+};
+
+/**
+ * Meeting-like kind of a task (daily, meeting, technical session, training), or null. The task's own `type` / `kind`,
+ * `labels` or `tags` (when Beacon sends them) win over its name; words come from the locale's table and English.
+ */
+export function taskKind(task: unknown, locale: MessageLocale): TaskKind | null {
+  const tables = locale === 'en' ? [CATALOG.en.keywords] : [CATALOG[locale].keywords, CATALOG.en.keywords];
+  for (const name of ['type', 'kind', 'labels', 'tags']) {
+    for (const value of strings(field(task, name))) {
+      const kind = kindIn(value, tables);
+      if (kind !== null) return kind;
+    }
+  }
+  for (const name of ['title', 'taskTitle']) {
+    const value = field(task, name);
+    if (typeof value === 'string') {
+      const kind = kindIn(value, tables);
+      if (kind !== null) return kind;
+    }
+  }
+  return null;
+}
+
 // ---- Choosing ----------------------------------------------------------------------------------------------------
 
 /** 0 before `CHEER_FIRST_HOURS`, then 1, 2, 3 … every `CHEER_EVERY_HOURS`. */
@@ -165,6 +232,22 @@ export interface PlanInput {
   state: MessageState;
 }
 
+/** Hours of one running timer celebrated with a milestone (medal, pom-poms) instead of a plain cheer. */
+export const MILESTONE_HOURS: readonly number[] = [2, 4];
+/** From this many hours of one running timer the stretch card says "take a real break" (`overtime`). */
+export const OVERTIME_FROM_HOURS = 6;
+
+/** Hours of the timer at cheer step `step` (1 = `CHEER_FIRST_HOURS`). */
+export const stepHours = (step: number): number => CHEER_FIRST_HOURS + (step - 1) * CHEER_EVERY_HOURS;
+
+/** The card for a long stretch: milestones at 2 h and 4 h, "take a break" from 6 h, a plain cheer otherwise. */
+export function stretchKind(step: number, switches: Switches): CardKind {
+  const hours = stepHours(step);
+  if (hours >= OVERTIME_FROM_HOURS && switches.wellbeing) return 'overtime';
+  if (MILESTONE_HOURS.includes(hours) && switches.fun) return 'milestone';
+  return 'cheer';
+}
+
 /** Which card is due now (and the slot that marks it used), or null. */
 export function planMessage(input: PlanInput): { kind: CardKind; slot: string } | null {
   const { now, switches, windows, timeZone, state } = input;
@@ -180,6 +263,7 @@ export function planMessage(input: PlanInput): { kind: CardKind; slot: string } 
   const evening = zonedParts(new Date(now.getTime() - windows.lateUntil * 60_000), timeZone).date;
   const step = cheerStep(elapsed);
   const candidates: [CardKind, string, boolean][] = [
+    ['meetingAfter', `meetingAfter:${state.afterMeeting ?? ''}`, switches.wellbeing && state.afterMeeting !== null],
     ['earlyBird', `earlyBird:${today.date}`, switches.fun && started.date === today.date && started.minute >= windows.lateUntil && started.minute < windows.earlyBefore && today.minute < windows.earlyUntil],
     ['weekend', `weekend:${today.date}`, switches.fun && weekend && elapsed < WEEKEND_START_MINUTES],
     ['lateWork', `lateWork:${evening}`, switches.wellbeing && late],
@@ -188,7 +272,7 @@ export function planMessage(input: PlanInput): { kind: CardKind; slot: string } 
     ['coffee', `coffeeAm:${today.date}`, switches.wellbeing && inWindow(today.minute, windows.coffeeAm)],
     ['coffee', `coffeePm:${today.date}`, switches.wellbeing && inWindow(today.minute, windows.coffeePm)],
     ['friday', `friday:${today.date}`, switches.fun && today.day === 5 && today.minute >= windows.fridayFrom && !late],
-    ['cheer', `cheer:${input.entry}:${step}`, step > 0],
+    [stretchKind(step, switches), `cheer:${input.entry}:${step}`, step > 0],
   ];
   for (const [kind, slot, due] of candidates) {
     if (due && !state.seen.includes(slot)) return { kind, slot };
@@ -237,14 +321,33 @@ export function nextCard(input: NextInput): { state: MessageState; card: Card } 
   // Nothing allowed in that pool (cheer with only one switch on, every line of the other kind): mark the slot used.
   if (line === null) return nextCard({ ...input, state: { ...state, seen } });
   const card: Card = { kind: plan.kind, line, locale: input.locale, entry: input.entry, shownAt: input.now.toISOString(), dismissed: false };
-  return { card, state: { ...state, card, seen, lastShownAt: card.shownAt, recent: { ...state.recent, [plan.kind]: remember(state.recent[plan.kind], line) } } };
+  const afterMeeting = plan.kind === 'meetingAfter' ? null : state.afterMeeting;
+  return { card, state: { ...state, card, seen, afterMeeting, lastShownAt: card.shownAt, recent: { ...state.recent, [plan.kind]: remember(state.recent[plan.kind], line) } } };
 }
 
-/** Picks the phrasing of a new "Still there?" prompt (none with "Fun messages" off). */
-export function pickIdleLine(state: MessageState, locale: MessageLocale, rng: () => number, switches: Switches): MessageState {
+/**
+ * Picks the phrasing of a new "Still there?" prompt (none with "Fun messages" off): from `meetingIdle` while a
+ * meeting-like task runs ("Still in the meeting?"), else from `idle`.
+ */
+export function pickIdleLine(state: MessageState, locale: MessageLocale, rng: () => number, switches: Switches, meeting = false): MessageState {
   if (!switches.fun) return { ...state, idleLine: null };
-  const line = pickLine(CATALOG[locale].pools.idle, state.recent.idle ?? [], rng);
-  return line === null ? { ...state, idleLine: null } : { ...state, idleLine: line, recent: { ...state.recent, idle: remember(state.recent.idle, line) } };
+  const pool = meeting ? 'meetingIdle' : 'idle';
+  const line = pickLine(CATALOG[locale].pools[pool], state.recent[pool] ?? [], rng) as number;
+  return { ...state, idleLine: line, recent: { ...state.recent, [pool]: remember(state.recent[pool], line) } };
+}
+
+/** A "daily done" line for the saved notice (Fun messages), with the updated history; null when off. */
+export function pickDailyDone(state: MessageState, locale: MessageLocale, rng: () => number, switches: Switches): { state: MessageState; line: Line } | null {
+  if (!switches.fun) return null;
+  const lines = CATALOG[locale].pools.dailyDone;
+  const index = pickLine(lines, state.recent.dailyDone ?? [], rng) as number;
+  return { line: lines[index] as Line, state: { ...state, recent: { ...state.recent, dailyDone: remember(state.recent.dailyDone, index) } } };
+}
+
+/** After a stop: whether the entry was a meeting-like task long enough to earn a coffee / stretch card next. */
+export function afterStop(state: MessageState, kind: TaskKind | null, startedAt: string, stoppedAt: Date): MessageState {
+  if (kind === null || stoppedAt.getTime() - Date.parse(startedAt) < MEETING_LONG_MINUTES * 60_000) return state;
+  return { ...state, afterMeeting: stoppedAt.toISOString() };
 }
 
 /** The line, with `{hours}` filled in, or null when the index no longer exists. */
@@ -280,7 +383,7 @@ export function sanitizeMessages(raw: unknown): MessageState {
     typeof card === 'object' &&
     card !== null &&
     typeof card.kind === 'string' &&
-    (card.kind as string) !== 'idle' &&
+    !NOT_CARDS.includes(card.kind) &&
     (POOL_KINDS as readonly string[]).includes(card.kind) &&
     normalizeLocale(card.locale) === card.locale &&
     Number.isInteger(card.line) &&
@@ -293,5 +396,6 @@ export function sanitizeMessages(raw: unknown): MessageState {
     card: validCard ? ({ ...(card as Card), dismissed: card.dismissed === true } as Card) : null,
     lastShownAt: typeof value.lastShownAt === 'string' && !Number.isNaN(Date.parse(value.lastShownAt)) ? value.lastShownAt : null,
     seen: Array.isArray(value.seen) ? value.seen.filter((slot): slot is string => typeof slot === 'string').slice(-SEEN_LIMIT) : [],
+    afterMeeting: typeof value.afterMeeting === 'string' && !Number.isNaN(Date.parse(value.afterMeeting)) ? value.afterMeeting : null,
   };
 }

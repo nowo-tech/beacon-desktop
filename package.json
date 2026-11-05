@@ -19,6 +19,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "screenshots": "playwright test -c playwright.screenshots.config.ts",
+    "screenshots:friendly": "FRIENDLY_SCREENS=${FRIENDLY_SCREENS:-out/friendly-screens} playwright test -c playwright.screenshots.config.ts --project=direct tests/screenshots/friendly.spec.ts",
     "mock": "node mock-server/server.mjs",
     "release:check": "node scripts/release/check-updater-key.mjs",
     "store:manifest": "node scripts/store/msix-manifest.mjs"

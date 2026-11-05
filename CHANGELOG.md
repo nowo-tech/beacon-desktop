@@ -22,24 +22,42 @@ Likely 0.5.0.
   `public/mascot/README.md`. Decorative art is `aria-hidden`; only the device-code arcs move, and not with reduced
   motion. English and Spanish.
 - Screenshots of the key screens and moments in light and dark (`tests/screenshots/moments.spec.ts`).
-- **Friendly messages** (`src/lib/friendly.ts`, pools in `src/lib/messages/`): the "Still there?" prompt gets a
-  randomly chosen phrasing under its usual heading (16 per language; facts, buttons and labels unchanged), and a calm,
-  dismissible card cheers on long stretches (2 h, then every 2 h: `CHEER_FIRST_HOURS` / `CHEER_EVERY_HOURS`, 16 lines
-  with a few stretch / water / eye-break nudges) and marks time-of-day moments: early start, mid-morning and
-  mid-afternoon coffee, lunch, late work, Friday afternoon, weekend start and "enjoy the rest of your weekend" (8 lines
-  each). Windows are per-language constants (Spanish lunch 14:00–15:30, German coffee at 15:00, …), read in the Beacon
-  user's time zone (`me.workingHours.timezone`, else `me.timezone`, else the system's). At most one card every
-  50 minutes (`MIN_GAP_MINUTES`; the idle prompt is not counted), each moment once per window per day, no line
-  repeated among the last six of its pool (history in local storage), cards expire after 30 minutes, never over the
-  idle prompt or the 8-hour nudge, never focused, no motion with reduced motion. Native pools in English, Spanish,
-  German, French, Italian, Dutch and Portuguese; the language is the Beacon user's (`GET me.locale` when the server
-  sends it), else the app's UI language, else English. Settings → **Friendly messages**: *Fun messages* and *Wellbeing
-  reminders* (both on by default). Unit tests with an injectable RNG (`AppDeps.random`), time zones, DST and weekend
-  boundaries; e2e with axe in both themes.
-- **Data-driven mascot poses** for the friendly messages: each line names one of 23 pose ids, drawn from
-  `public/mascot/pose-<id>.webp` (+ `@2x`) once imported with `scripts/mascot/import-poses.sh <dir>` (transparent
-  PNG → trimmed WebP 96 / 192 px, cwebp + ImageMagick, in Docker when not installed; updates `src/ui/pose-art.json`),
-  else the closest existing pose (`POSE_FALLBACK`).
+- **Friendly messages** (`src/lib/friendly.ts`, pools in `src/lib/messages/`), native in English, Spanish, German,
+  French, Italian, Dutch and Portuguese. The language is the Beacon user's (`GET me.locale` when the server sends it),
+  else the UI language, else English; times are read in the Beacon user's time zone (`me.workingHours.timezone`, else
+  `me.timezone`, else the system's).
+  - **"Still there?"** gets a random phrasing under its heading (16 per language); facts, buttons and labels unchanged.
+  - **Toasts** (bottom right, 72 px pose, one or two lines, × to dismiss, `aria-live="polite"`, never focused):
+    cheers on long stretches (2 h, then every 2 h; milestones with a medal / pom-poms at 2 h and 4 h,
+    `MILESTONE_HOURS`; "take a real break" from 6 h, `OVERTIME_FROM_HOURS`, with the real elapsed hours), a few
+    stretch / water / eye-break / breathing nudges, and time-of-day moments: early start, mid-morning and mid-afternoon
+    coffee, lunch, late work, Friday afternoon (and holiday eve art), weekend start and "enjoy the rest of your
+    weekend". Windows are per-language constants (Spanish lunch 14:00–15:30, German coffee at 15:00, …).
+  - **Meetings and dailies**: the task kind (daily, meeting, technical session such as planning / retro / demo /
+    sprint review, training) comes from Beacon's `type` / `kind` / `labels` / `tags` when present, else from words in
+    the task name (per-language tables plus English, whole words, accents ignored; a plain "review" is work, not a
+    meeting). While such a task runs the prompt is the softer "Still in the meeting?" with the teamwork pose and a
+    longer countdown; a meeting of 60 min or more makes the next toast a coffee / stretch line; stopping a daily shows
+    a short "daily done, let's go!" toast.
+  - Rules: at most one toast every 50 minutes (`MIN_GAP_MINUTES`; the idle prompt and the daily toast are not counted),
+    each moment once per window per day, no line repeated among the last six of its pool (history in local storage),
+    toasts expire after 30 minutes and never show over the idle prompt or the 8-hour nudge.
+  - Settings → **Friendly messages**: *Fun messages* and *Wellbeing reminders*, both on by default.
+- **"Still there?" is a modal with a countdown**: the prompt now needs an answer (focus moves to it, the rest of the
+  window is inert) and shows the time left as text and a bar (announced once, no motion with reduced motion). The
+  countdown is `IDLE_COUNTDOWN_MINUTES` (2, never longer than the organisation's answer timeout) or
+  `MEETING_COUNTDOWN_MINUTES` (10, never shorter) during meetings, on the wall clock: when it ran out while the window
+  was hidden or the computer slept, the timer still stops at the start of the idle time. After the stop the modal says
+  "I stopped your timer at …" with **Resume … now** (a new entry on the same task from now) next to the existing
+  keep / reassign / discard options. Checks are serialised, so a stop in flight is never mistaken for a new timer.
+- **Mascot art for the friendly messages**: 40 poses (`POSE_IDS`) from the owner's art in `public/mascot/pose-<id>.webp`
+  (+ `@2x`), listed in `src/ui/pose-art.json`; beach, sofa and park keep a fallback until their art exists
+  (`POSE_FALLBACK`). `scripts/mascot/import-poses.sh <dir>` imports `pose-<id>.png`: an opaque white background becomes
+  transparent (flood fill from the corners), disconnected fragments far from the character are dropped (connected
+  components; props near it such as steam, sparkles or a leaf stay) with their glow, then trim and WebP 96 / 192 px
+  (cwebp + ImageMagick, in Docker when not installed).
+- `pnpm screenshots:friendly` (`FRIENDLY_SCREENS=<dir>`): every friendly situation in Spanish, light and dark, with an
+  overview sheet, for review (not documentation).
 
 ### Changed
 

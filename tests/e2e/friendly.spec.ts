@@ -9,7 +9,7 @@ async function control(path: string, body?: unknown) {
   return res.status === 204 ? null : res.json();
 }
 
-type Tt = { __timeTrack: { app: { tick(): Promise<void>; refresh(): Promise<void> } } };
+type Tt = { __timeTrack: { app: { tick(): Promise<void>; refresh(): Promise<void> }; hooks: { idleSeconds: number } } };
 
 async function signIn(page: Page) {
   await page.goto('/');
@@ -50,5 +50,33 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.getByLabel('Wellbeing reminders')).toBeChecked();
     await page.getByLabel('Fun messages from the robot').uncheck();
     await expect(page.getByLabel('Fun messages from the robot')).not.toBeChecked();
+  });
+}
+
+for (const motion of ['reduce', 'no-preference'] as const) {
+  test(`"Still there?" modal with countdown (${motion} motion): takes focus, the rest is inert, axe clean`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: motion });
+    await signIn(page);
+    await page.locator('[data-task="T-101"] .row-action').click();
+    await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
+    await control('timer/backdate', { seconds: 3600 });
+    await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
+    await page.evaluate(async () => {
+      const tt = (window as unknown as Tt).__timeTrack;
+      tt.hooks.idleSeconds = 660;
+      await tt.app.tick();
+    });
+    const dialog = page.getByRole('dialog', { name: 'Still there?' });
+    await expect(dialog).toBeVisible();
+    await expect(page.locator('#idle-here')).toBeFocused();
+    await expect(page.locator('#idle-countdown-text')).toContainText(/The timer pauses in [0-2]:\d\d/);
+    await expect(page.locator('#timer')).toHaveAttribute('inert', '');
+    const duration = await page.locator('#idle-countdown-fill').evaluate((element) => getComputedStyle(element).transitionDuration);
+    expect(duration === '0s').toBe(motion === 'reduce');
+    const { violations } = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+    expect(violations.map((v) => `${v.id} ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+    await page.locator('#idle-here').click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator('#timer')).not.toHaveAttribute('inert', '');
   });
 }

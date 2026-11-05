@@ -249,5 +249,10 @@
   "wellbeingRemindersHelp": "Avisos suaves para el café, la comida, estirar, beber agua o dejarlo por hoy cuando se hace tarde. Nunca más de uno cada {minutes} minutos y siempre fáciles de cerrar.",
   "friendlyLocal": "Se calculan en este equipo a partir de tu temporizador y la hora, en tu idioma de Beacon. No se envía nada.",
   "cheerLabel": "Una nota del robot",
-  "cheerDismiss": "¡Gracias!"
+  "cheerDismiss": "¡Gracias!",
+  "stillInMeetingTitle": "¿Sigues en la reunión?",
+  "idleCountdown": "El temporizador se pausa en {time} si no hay respuesta.",
+  "idleStoppedAt": "He parado tu temporizador a las {time} en {task}.",
+  "resumeNow": "Reanudar {task} ahora",
+  "toastDismiss": "Cerrar"
 }
