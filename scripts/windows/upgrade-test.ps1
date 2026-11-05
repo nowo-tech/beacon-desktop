@@ -13,6 +13,8 @@
                interactive  new-setup.exe with its UI, driven through UI Automation like a user who accepts every
                             default (Next, Install, OK, Yes, Finish); every dialog's text is logged
     -AppRunning              start the old app (it stays in the tray) before the upgrade and leave it running
+    -OldMsiStays             the old MSI is expected to stay (/S cannot ask for administrator approval): report it,
+                             check the rest
 
   Then checks: installer exit code, a single "TimeTrack" entry under the Uninstall keys (HKCU and HKLM, both views)
   carrying the new version, no MSI left behind, the installed executable's version and that the app starts. Writes
@@ -25,6 +27,7 @@ param(
   [Parameter(Mandatory)] [string] $NewDir,
   [Parameter(Mandatory)] [ValidateSet('silent', 'update', 'interactive')] [string] $Mode,
   [switch] $AppRunning,
+  [switch] $OldMsiStays,
   [string] $OutDir = (Join-Path $PWD 'upgrade-test-out'),
   [string] $Product = 'TimeTrack',
   [int] $TimeoutSeconds = 300
@@ -302,10 +305,15 @@ $after = Show-State 'after the upgrade'
 # --- Checks -------------------------------------------------------------------------------------------------------
 
 if ($exitCode -ne 0) { Fail "new installer exit code $exitCode (expected 0)" }
-if ($after.Count -ne 1) { Fail "$($after.Count) Uninstall entries for $Product (expected exactly 1)" }
 $msiLeft = @($after | Where-Object { $_.UninstallString -match 'msiexec' })
-if ($msiLeft.Count -gt 0) { Fail "old MSI install still registered: $($msiLeft[0].DisplayVersion) under $($msiLeft[0].Hive)" }
-if (($Old -in 'msi', 'both') -and (Test-Path (Join-Path $env:ProgramFiles $Product))) { Fail "$env:ProgramFiles\$Product still exists" }
+if ($OldMsiStays) {
+  Log "expected: the old MSI stays with /S ($($msiLeft.Count) MSI entry left)"
+  if (@($after | Where-Object { $_.UninstallString -notmatch 'msiexec' }).Count -ne 1) { Fail 'expected exactly 1 per-user Uninstall entry' }
+} else {
+  if ($after.Count -ne 1) { Fail "$($after.Count) Uninstall entries for $Product (expected exactly 1)" }
+  if ($msiLeft.Count -gt 0) { Fail "old MSI install still registered: $($msiLeft[0].DisplayVersion) under $($msiLeft[0].Hive)" }
+  if (($Old -in 'msi', 'both') -and (Test-Path (Join-Path $env:ProgramFiles $Product))) { Fail "$env:ProgramFiles\$Product still exists" }
+}
 $current = @($after | Where-Object { $_.DisplayVersion -eq $newVersion })
 if ($current.Count -ne 1) { Fail "no single Uninstall entry with version $newVersion" }
 $newExe = Get-AppExe (Join-Path $env:LOCALAPPDATA $Product)

@@ -80,12 +80,14 @@ jobs:
             echo "version=$VERSION"
           } | tee -a "$GITHUB_OUTPUT"
           # id: old installers (v01 = old_run_id, v04 = prev_run_id) and which of them, how the new one runs, app running.
+          # msi_stays: /S shows no page and cannot ask for administrator approval, so a 0.1.0 MSI is left installed
+          # (expected; the check reports it instead of failing).
           all='[
             {"id":"nsis01-interactive-running","from":"v01","old":"nsis","mode":"interactive","running":true},
             {"id":"nsis01-silent","from":"v01","old":"nsis","mode":"silent","running":false},
             {"id":"nsis01-update-running","from":"v01","old":"nsis","mode":"update","running":true},
             {"id":"msi01-interactive-running","from":"v01","old":"msi","mode":"interactive","running":true},
-            {"id":"msi01-silent","from":"v01","old":"msi","mode":"silent","running":false},
+            {"id":"msi01-silent","from":"v01","old":"msi","mode":"silent","running":false,"msi_stays":true},
             {"id":"both01-interactive","from":"v01","old":"both","mode":"interactive","running":false},
             {"id":"v04-update-running","from":"v04","old":"nsis","mode":"update","running":true},
             {"id":"v04-interactive-running","from":"v04","old":"nsis","mode":"interactive","running":true}
@@ -169,11 +171,12 @@ jobs:
         with:
           name: new-installer
           path: new
-      - name: New installer (release run)
+      - name: New installer (another run, release or this workflow)
         if: needs.plan.outputs.new_run_id != ''
         uses: actions/download-artifact@v7
         with:
-          name: desktop-windows
+          pattern: '{desktop-windows,new-installer}'
+          merge-multiple: true
           path: new
           run-id: ${{ needs.plan.outputs.new_run_id }}
           github-token: ${{ github.token }}
@@ -181,7 +184,8 @@ jobs:
         shell: powershell
         run: |
           $running = '${{ matrix.running }}' -eq 'true'
-          & .\scripts\windows\upgrade-test.ps1 -Old ${{ matrix.old }} -OldDir old -NewDir new -Mode ${{ matrix.mode }} -AppRunning:$running -OutDir out
+          $msiStays = '${{ matrix.msi_stays }}' -eq 'true'
+          & .\scripts\windows\upgrade-test.ps1 -Old ${{ matrix.old }} -OldDir old -NewDir new -Mode ${{ matrix.mode }} -AppRunning:$running -OldMsiStays:$msiStays -OutDir out
           exit $LASTEXITCODE
       - if: always()
         uses: actions/upload-artifact@v7
