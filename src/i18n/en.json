@@ -11,6 +11,7 @@
   "cancel": "Cancel",
   "deviceScope": "The server refused the requested permissions.",
   "sessionExpired": "Your session ended. Sign in again.",
+  "signInWait": "Sign-in was cancelled a moment ago. Wait a little and try again.",
   "signedOutRevoke": "Signed out on this computer: the saved server did not match the stored session. If this device is still listed in Beacon (Account → Security → Time tracking apps), you can revoke it there.",
   "tracking": "Tracking",
   "stop": "Stop",

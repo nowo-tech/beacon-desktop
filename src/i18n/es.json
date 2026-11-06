@@ -11,6 +11,7 @@
   "cancel": "Cancelar",
   "deviceScope": "El servidor ha rechazado los permisos solicitados.",
   "sessionExpired": "Tu sesión ha terminado. Vuelve a iniciar sesión.",
+  "signInWait": "Se canceló el inicio de sesión hace un momento. Espera un poco y vuelve a intentarlo.",
   "signedOutRevoke": "Se ha cerrado la sesión en este equipo: el servidor guardado no coincidía con la sesión. Si este dispositivo sigue en Beacon (Cuenta → Seguridad → Apps de registro de tiempo), puedes revocarlo allí.",
   "tracking": "Registrando",
   "stop": "Parar",

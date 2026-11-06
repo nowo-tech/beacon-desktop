@@ -18,6 +18,14 @@ export const SESSION_HANDLE = 'stored-in-os-keychain';
 /** What `sign_in_begin` rejects with when the person declines the native "Sign in to …?" confirmation (Rust `secret::SIGN_IN_DECLINED`). */
 export const SIGN_IN_DECLINED = 'sign_in_declined';
 
+/** What `sign_in_begin` rejects with, without a dialog, during the pause after a decline (Rust `secret::SIGN_IN_WAIT`). */
+export const SIGN_IN_WAIT = 'sign_in_wait';
+
+/** `sign_in_begin` refused because a sign-in was declined moments ago: no dialog was shown. */
+export function isSignInWait(error: unknown): boolean {
+  return (error instanceof Error ? error.message : String(error)) === SIGN_IN_WAIT;
+}
+
 /** The person declined the native sign-in confirmation: back to the sign-in view, no error. */
 export function isSignInDeclined(error: unknown): boolean {
   return (error instanceof Error ? error.message : String(error)) === SIGN_IN_DECLINED;

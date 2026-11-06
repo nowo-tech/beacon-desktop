@@ -140,6 +140,11 @@ impl PinSet {
     }
 
     /// True when `host` is one of the pinned hosts (exact name, case-insensitive, trailing dot ignored).
+    /// The official Beacon host of this build (the first pinned host), for the sign-in confirmation.
+    pub fn official_host(&self) -> Option<&str> {
+        self.hosts.first().map(String::as_str)
+    }
+
     pub fn covers(&self, host: &str) -> bool {
         let host = host.trim_end_matches('.').to_ascii_lowercase();
         self.hosts.contains(&host)

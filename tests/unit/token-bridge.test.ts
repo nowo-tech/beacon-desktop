@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TimeTrackApi } from '../../src/api/client';
 import { runDeviceFlow } from '../../src/lib/deviceFlow';
-import { isSignInDeclined, type NativeRequest, type NativeResponse, SESSION_HANDLE, SIGN_IN_DECLINED } from '../../src/lib/nativeFetch';
+import { isSignInDeclined, isSignInWait, type NativeRequest, type NativeResponse, SESSION_HANDLE, SIGN_IN_DECLINED, SIGN_IN_WAIT } from '../../src/lib/nativeFetch';
 import { nodeFetch, startMock } from './helpers';
 
 const calls: { command: string; args: unknown }[] = [];
@@ -108,6 +108,8 @@ describe('Tauri bridge: the session token never reaches the webview', () => {
     expect(isSignInDeclined(error)).toBe(true);
     expect(isSignInDeclined(new Error(SIGN_IN_DECLINED))).toBe(true);
     expect(isSignInDeclined('already signed in: sign out first')).toBe(false);
+    expect(isSignInWait(SIGN_IN_WAIT)).toBe(true);
+    expect(isSignInDeclined(SIGN_IN_WAIT)).toBe(false);
     expect(calls).toEqual([{ command: 'sign_in_begin', args: { server: 'https://beacon.nowo.tech', locale: null } }]);
   });
 

@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ApiError, TimeTrackApi } from '../../src/api/client';
 import { describeError, isUntrustedCertificate, UNTRUSTED_CERTIFICATE } from '../../src/lib/errors';
-import { type NativeRequest, type NativeResponse, nativeFetch } from '../../src/lib/nativeFetch';
+import { type NativeRequest, type NativeResponse, nativeFetch, SIGN_IN_WAIT } from '../../src/lib/nativeFetch';
 import { browserPlatform } from '../../src/platform';
 import { DesktopApp } from '../../src/ui/app';
 import en from '../../src/i18n/en.json';
@@ -242,6 +242,20 @@ describe('app: pin mismatch and the Settings line', () => {
     expect(root.querySelector('#error-title')).toBeNull();
     expect(platform.hooks.boundServer).toBeNull();
     expect(await platform.secretGet()).toBeNull();
+    app.destroy();
+  });
+
+  it('right after a decline the host shows no dialog: the app says to wait (GM-D2-1)', async () => {
+    const platform = browserPlatform('0.5.0', nodeFetch);
+    platform.beginSignIn = () => Promise.reject(SIGN_IN_WAIT);
+    const root = document.createElement('div');
+    document.body.replaceChildren(root);
+    const app = new DesktopApp(root, platform, { storage: localStorage, locale: 'es', sleep: () => Promise.resolve(), searchDelayMs: 5 });
+    await app.init();
+    await app.connect(env.url);
+    expect(app.view).toBe('login');
+    expect(root.querySelector('#error-title')).toBeNull();
+    expect(root.querySelector('#notice')?.textContent).toContain('Espera un poco');
     app.destroy();
   });
 

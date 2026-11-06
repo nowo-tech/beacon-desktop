@@ -24,13 +24,17 @@ Only the latest release receives fixes. The server can force an update with `min
     of the first start-up after the upgrade (trust on first use, the trust 0.5.1 already gave it).
   - Rust keeps a token only from the `device/token` answer of a sign-in the person confirmed: `sign_in_begin` (signed
     out only) shows a native dialog, "Sign in to <host>?" with the full host (IDN hosts as `xn--…`), that the webview
-    cannot answer; only after **Sign in** is the answer stored, for that server, within 30 minutes, and every stored
+    cannot answer. **Cancel** is the first, default button (Enter declines; Esc and closing decline too), any host
+    other than the official one gets the line "This is not beacon.nowo.tech", the dialog is only shown while the main
+    window is focused and there was keyboard or mouse input in the last 30 seconds, and after a decline it is not
+    shown again for 10 seconds, doubling up to 5 minutes (sign-out does not reset that). Only after **Sign in** is the
+    answer stored, for that server, within 30 minutes, and every stored
     sign-in is announced by an OS notification from Rust. A stored token is never replaced. The app signs in with the
     device flow only, so the password route (`…/login`) is never stored. The UI gets a fixed handle in place of the
     token. The sign-in route is matched on the decoded path, and paths that escape unreserved characters are refused.
   - Token fields (`token`, `access_token` / `accessToken`, `refresh_token`, `session_token`, `id_token`, `bearer`,
     any case) are removed from every JSON answer (a UTF-8 BOM included), at any depth and on any status, before the
-    webview sees it, and only the response headers the UI reads (`Content-Type`, `Content-Length`,
+    webview sees it, and only the response headers the UI reads (`Content-Type`,
     `Content-Disposition`, `Retry-After`, `X-Min-Supported-Version`) reach it. An `Authorization` header from the
     webview is dropped. Error texts never quote the token. Keychain calls and the dialog run off the UI thread and the
     async workers.

@@ -81,13 +81,18 @@ and GM) and the backlog fixes. Not released yet (release freeze).
     with the new command `sign_in_begin` (signed out only, that server only, 30 minutes) and never replaces a stored
     token (GM-L2). `sign_in_begin` first shows a native dialog the webview cannot answer, "Sign in to <host>?" /
     "¿Iniciar sesión en <host>?" with the full host; **Cancel** refuses the sign-in and the app goes back to the
-    sign-in view. Every stored sign-in is announced by an OS notification from Rust naming the server. The password
+    sign-in view. Cancel is the first, default button, so a stray Enter declines (three buttons: *Cancel*, *Sign in*,
+    *Not now*; the dialog plugin cannot make Cancel the default of two); a host other than the official one adds
+    "This is not beacon.nowo.tech" / "Este servidor no es beacon.nowo.tech"; the dialog is shown only while the main
+    window is focused with input in the last 30 seconds; after a decline `sign_in_begin` refuses (`sign_in_wait`, no
+    dialog) for 10 seconds, doubling up to 5 minutes, and sign-out does not reset it (GM-D2-1, GM-D2-2). Every stored sign-in is announced by an OS notification from Rust naming the server. The password
     route (`…/login`) is no longer captured: the app is device-flow only (GM-D-1). The UI gets the answer with the
     token replaced by a fixed handle (`stored-in-os-keychain`). The sign-in route is matched on the percent-decoded
     path, and paths escaping unreserved characters (`to%6Ben`) are refused (GM-L1).
   - Token fields (`token`, `access_token` / `accessToken`, `refresh_token` / `refreshToken`, `session_token` /
     `sessionToken`, `id_token`, `bearer`, any case) are scrubbed from every JSON answer, a UTF-8 BOM included, at any
-    depth and on any status; only the response headers the UI reads reach the webview (GM-I1, GM-D-3).
+    depth and on any status; only the response headers the UI reads reach the webview (`Content-Type`, `Content-Disposition`,
+    `Retry-After`, `X-Min-Supported-Version`) (GM-I1, GM-D-3, GM-D2-3).
   - When the saved server does not match the stored session at start-up, the app signs out locally and says the old
     device can be revoked in Beacon (Account → Security → Time tracking apps) (GM-D-2).
   - Keychain calls and the sign-in dialog run with `spawn_blocking`, off the async workers and the main thread; the

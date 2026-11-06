@@ -200,7 +200,7 @@ fn idle_seconds(window: tauri::Window) -> Result<u64, String> {
 }
 
 /// The OS idle counter (also read by the heartbeat thread).
-fn read_idle_seconds() -> u64 {
+pub(crate) fn read_idle_seconds() -> u64 {
     user_idle::UserIdle::get_time()
         .map(|idle| idle.as_seconds())
         .unwrap_or(0)

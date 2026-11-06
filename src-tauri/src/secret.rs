@@ -262,7 +262,6 @@ pub fn scrub(body: Vec<u8>) -> Vec<u8> {
 /// Response headers handed to the webview; any other (a `Set-Cookie`, an `X-Auth-Token` …) is dropped (GM-D-3).
 pub const RESPONSE_HEADERS: &[&str] = &[
     "content-type",
-    "content-length",
     "content-disposition",
     "retry-after",
     "x-min-supported-version",
@@ -276,30 +275,82 @@ pub const SIGN_IN_DECLINED: &str = "sign_in_declined";
 pub struct SignInTexts {
     pub title: String,
     pub body: String,
-    pub ok: String,
+    /// The first, default button (Enter, a stray key press): declines (GM-D2-1).
+    pub stay_out: String,
+    /// The only button that confirms; never the default.
+    pub sign_in: String,
+    /// The third button (and Esc / closing): declines.
     pub cancel: String,
+}
+
+impl SignInTexts {
+    /// Whether the dialog's answer is the "Sign in" button. The default button, Esc, closing the dialog and anything
+    /// unknown decline. The dialog has three buttons because the plugin cannot make Cancel the default of two, and
+    /// swapping the meaning of OK / Cancel would make Esc (reported as the second button on Linux) confirm.
+    pub fn confirmed(&self, answer: &tauri_plugin_dialog::MessageDialogResult) -> bool {
+        use tauri_plugin_dialog::MessageDialogResult;
+        match answer {
+            MessageDialogResult::Custom(label) => {
+                *label == self.sign_in && self.sign_in != self.stay_out
+            }
+            // The second slot of Yes / No / Cancel is "Sign in" on every backend.
+            MessageDialogResult::No => true,
+            _ => false,
+        }
+    }
+}
+
+/// Base and cap of the pause after a declined sign-in (GM-D2-1): 10 s, doubling, at most 5 minutes.
+pub const DECLINE_PAUSE: Duration = Duration::from_secs(10);
+pub const DECLINE_PAUSE_MAX: Duration = Duration::from_secs(5 * 60);
+
+/// Refusal of `sign_in_begin` while that pause runs (no dialog is shown).
+pub const SIGN_IN_WAIT: &str = "sign_in_wait";
+
+/// The sign-in dialog is only shown for a person at the app: the main window focused and some keyboard or mouse input
+/// in the last [`RECENT_INPUT_SECS`] seconds (an OS that cannot tell reports 0). Otherwise it is declined unseen.
+pub const RECENT_INPUT_SECS: u64 = 30;
+
+pub fn person_at_the_app(focused: bool, idle_seconds: u64) -> bool {
+    focused && idle_seconds <= RECENT_INPUT_SECS
 }
 
 fn spanish(locale: Option<&str>) -> bool {
     locale.is_some_and(|lang| lang.to_ascii_lowercase().starts_with("es"))
 }
 
-pub fn confirm_texts(server: &url::Url, locale: Option<&str>) -> SignInTexts {
+/// The dialog texts for `server`. `official` is the official Beacon host of this build (the first host of the shipped
+/// pin set): any other host gets a "This is not <official>" line (GM-D2-2), against look-alikes such as
+/// `beacon.nowo.tech.example`.
+pub fn confirm_texts(
+    server: &url::Url,
+    locale: Option<&str>,
+    official: Option<&str>,
+) -> SignInTexts {
     let host = server.host_str().unwrap_or_default();
     let origin = server.origin().ascii_serialization();
+    let other = official.filter(|official| !host.eq_ignore_ascii_case(official));
     if spanish(locale) {
+        let warning = other
+            .map(|official| format!("\n\nEste servidor no es {official}."))
+            .unwrap_or_default();
         SignInTexts {
             title: format!("¿Iniciar sesión en {host}?"),
-            body: format!("TimeTrack va a iniciar sesión en {origin} y guardará la sesión en el llavero de este equipo.\n\nSi no acabas de pedir iniciar sesión en este servidor, elige Cancelar."),
-            ok: "Iniciar sesión".into(),
-            cancel: "Cancelar".into(),
+            body: format!("TimeTrack va a iniciar sesión en {origin} y guardará la sesión en el llavero de este equipo.{warning}\n\nSi no acabas de pedir iniciar sesión en este servidor, elige Cancelar."),
+            stay_out: "Cancelar".into(),
+            sign_in: "Iniciar sesión".into(),
+            cancel: "Ahora no".into(),
         }
     } else {
+        let warning = other
+            .map(|official| format!("\n\nThis is not {official}."))
+            .unwrap_or_default();
         SignInTexts {
             title: format!("Sign in to {host}?"),
-            body: format!("TimeTrack is about to sign in to {origin} and keep the session in this computer's keychain.\n\nIf you did not just ask to sign in to this server, choose Cancel."),
-            ok: "Sign in".into(),
-            cancel: "Cancel".into(),
+            body: format!("TimeTrack is about to sign in to {origin} and keep the session in this computer's keychain.{warning}\n\nIf you did not just ask to sign in to this server, choose Cancel."),
+            stay_out: "Cancel".into(),
+            sign_in: "Sign in".into(),
+            cancel: "Not now".into(),
         }
     }
 }
@@ -344,6 +395,23 @@ pub struct Session {
     io: Mutex<()>,
     state: Mutex<State>,
     sign_in_window: Duration,
+    /// Declines in a row and when the next dialog may be shown (GM-D2-1). Kept apart from `state`, so sign-out (which
+    /// a script can call) never resets it.
+    declines: Mutex<Declines>,
+    decline_pause: Duration,
+}
+
+#[derive(Default)]
+struct Declines {
+    count: u32,
+    until: Option<Instant>,
+}
+
+/// The pause after the `count`-th decline in a row: `base`, doubling, at most [`DECLINE_PAUSE_MAX`] scaled like `base`.
+pub fn decline_pause(base: Duration, count: u32) -> Duration {
+    let cap = base * (DECLINE_PAUSE_MAX.as_secs() / DECLINE_PAUSE.as_secs()) as u32;
+    base.saturating_mul(1u32 << count.saturating_sub(1).min(16))
+        .min(cap)
 }
 
 /// What an authenticated request gets.
@@ -368,11 +436,21 @@ impl Session {
     }
 
     pub fn with_window(store: Box<dyn TokenStore>, sign_in_window: Duration) -> Self {
+        Self::with_timing(store, sign_in_window, DECLINE_PAUSE)
+    }
+
+    pub fn with_timing(
+        store: Box<dyn TokenStore>,
+        sign_in_window: Duration,
+        decline_pause: Duration,
+    ) -> Self {
         Self {
             store,
             io: Mutex::new(()),
             state: Mutex::new(State::default()),
             sign_in_window,
+            declines: Mutex::new(Declines::default()),
+            decline_pause,
         }
     }
 
@@ -459,7 +537,25 @@ impl Session {
         if self.current()?.is_some() {
             return Err(ALREADY_SIGNED_IN.into());
         }
-        if !confirm() {
+        // Declined recently: no dialog until the pause ends (a script cannot re-raise it in a loop).
+        {
+            let declines = self.declines.lock().map_err(|_| UNAVAILABLE.to_string())?;
+            if declines.until.is_some_and(|until| Instant::now() < until) {
+                return Err(SIGN_IN_WAIT.into());
+            }
+        }
+        let confirmed = confirm();
+        {
+            let mut declines = self.declines.lock().map_err(|_| UNAVAILABLE.to_string())?;
+            if confirmed {
+                *declines = Declines::default();
+            } else {
+                declines.count += 1;
+                declines.until =
+                    Some(Instant::now() + decline_pause(self.decline_pause, declines.count));
+            }
+        }
+        if !confirmed {
             return Err(SIGN_IN_DECLINED.into());
         }
         let _io = self.io()?;
@@ -600,19 +696,33 @@ pub async fn sign_in_begin(
     crate::only_from(&window, "main")?;
     let url = crate::net::validate_url(&server)?;
     let session = Arc::clone(&session);
-    let texts = confirm_texts(&url, locale.as_deref());
+    let pins = crate::pinning::PinSet::shipped();
+    let texts = confirm_texts(&url, locale.as_deref(), pins.official_host());
+    // Only for a person at the app (GM-D2-1): read here, in Rust, never from the webview.
+    let present = person_at_the_app(
+        window.is_focused().unwrap_or(false),
+        crate::read_idle_seconds(),
+    );
     blocking(move || {
         session.begin_sign_in(&url, locale.as_deref(), || {
+            if !present {
+                return false;
+            }
             let mut dialog = app
                 .dialog()
-                .message(texts.body)
-                .title(texts.title)
+                .message(texts.body.clone())
+                .title(texts.title.clone())
                 .kind(MessageDialogKind::Warning)
-                .buttons(MessageDialogButtons::OkCancelCustom(texts.ok, texts.cancel));
+                // "Cancel" first: the default button (Enter) declines; only "Sign in" confirms.
+                .buttons(MessageDialogButtons::YesNoCancelCustom(
+                    texts.stay_out.clone(),
+                    texts.sign_in.clone(),
+                    texts.cancel.clone(),
+                ));
             if let Some(main) = app.get_webview_window("main") {
                 dialog = dialog.parent(&main);
             }
-            dialog.blocking_show()
+            texts.confirmed(&dialog.blocking_show_with_result())
         })
     })
     .await
@@ -698,9 +808,13 @@ pub mod tests {
         }
     }
 
-    /// A session over `store` (sharing its value).
+    /// A session over `store` (sharing its value), without the pause after a decline (tested on its own).
     pub fn session(store: &MemoryStore) -> Arc<Session> {
-        Arc::new(Session::new(Box::new(store.clone())))
+        Arc::new(Session::with_timing(
+            Box::new(store.clone()),
+            SIGN_IN_WINDOW,
+            Duration::ZERO,
+        ))
     }
 
     /// `begin_sign_in` with the person pressing "Sign in".
@@ -975,18 +1089,31 @@ pub mod tests {
 
     #[test]
     fn the_confirmation_and_the_notification_show_the_host_in_full() {
-        let texts = confirm_texts(&url("https://beacon.nowo.tech:8443/x"), Some("en-GB"));
+        let official = Some("beacon.nowo.tech");
+        let texts = confirm_texts(
+            &url("https://beacon.nowo.tech:8443/x"),
+            Some("en-GB"),
+            official,
+        );
         assert_eq!(texts.title, "Sign in to beacon.nowo.tech?");
         assert!(texts.body.contains("https://beacon.nowo.tech:8443"));
+        assert!(!texts.body.contains("This is not"), "{}", texts.body);
         assert_eq!(
-            (texts.ok.as_str(), texts.cancel.as_str()),
-            ("Sign in", "Cancel")
+            (
+                texts.stay_out.as_str(),
+                texts.sign_in.as_str(),
+                texts.cancel.as_str()
+            ),
+            ("Cancel", "Sign in", "Not now")
         );
-        let es = confirm_texts(&url("https://beacon.nowo.tech"), Some("es"));
+        let es = confirm_texts(&url("https://beacon.nowo.tech"), Some("es"), official);
         assert_eq!(es.title, "¿Iniciar sesión en beacon.nowo.tech?");
-        assert_eq!(es.cancel, "Cancelar");
+        assert_eq!(
+            (es.stay_out.as_str(), es.sign_in.as_str()),
+            ("Cancelar", "Iniciar sesión")
+        );
         // A look-alike (IDN) host is shown as ASCII.
-        let idn = confirm_texts(&url("https://bеacon.nowo.tech"), None);
+        let idn = confirm_texts(&url("https://bеacon.nowo.tech"), None, official);
         assert!(idn.title.contains("xn--"), "{}", idn.title);
         let (title, body) = signed_in_notice("https://beacon.nowo.tech", false);
         assert_eq!(title, "TimeTrack signed in");
@@ -994,6 +1121,143 @@ pub mod tests {
         assert!(signed_in_notice("https://b.example", true)
             .1
             .contains("revoca"));
+    }
+
+    // GM-D2-2
+    #[test]
+    fn another_host_than_the_official_one_is_named_as_such() {
+        let official = PinSetHost::shipped();
+        assert_eq!(official.as_deref(), Some("beacon.nowo.tech"));
+        let official = official.as_deref();
+        for host in [
+            "https://beacon.nowo.tech.session-renew.example",
+            "https://beacon-nowo.tech",
+            "https://self-hosted.example",
+        ] {
+            let en = confirm_texts(&url(host), None, official);
+            assert!(
+                en.body.contains("This is not beacon.nowo.tech."),
+                "{}",
+                en.body
+            );
+            let es = confirm_texts(&url(host), Some("es"), official);
+            assert!(
+                es.body.contains("Este servidor no es beacon.nowo.tech."),
+                "{}",
+                es.body
+            );
+        }
+        assert!(
+            !confirm_texts(&url("https://BEACON.nowo.tech"), None, official)
+                .body
+                .contains("This is not")
+        );
+        // A build without pins says nothing.
+        assert!(!confirm_texts(&url("https://x.example"), None, None)
+            .body
+            .contains("This is not"));
+    }
+
+    /// The official host of the shipped pin set.
+    struct PinSetHost;
+
+    impl PinSetHost {
+        fn shipped() -> Option<String> {
+            crate::pinning::PinSet::shipped()
+                .official_host()
+                .map(str::to_string)
+        }
+    }
+
+    // GM-D2-1
+    #[test]
+    fn only_the_sign_in_button_confirms() {
+        use tauri_plugin_dialog::MessageDialogResult;
+        let texts = confirm_texts(&url(A), None, None);
+        assert!(texts.confirmed(&MessageDialogResult::Custom("Sign in".into())));
+        assert!(texts.confirmed(&MessageDialogResult::No), "second slot");
+        for declined in [
+            MessageDialogResult::Custom("Cancel".into()),
+            MessageDialogResult::Custom("Not now".into()),
+            MessageDialogResult::Custom("anything".into()),
+            MessageDialogResult::Yes,
+            MessageDialogResult::Ok,
+            MessageDialogResult::Cancel,
+        ] {
+            assert!(!texts.confirmed(&declined), "{declined:?}");
+        }
+        // The default (first) button is never the confirming one.
+        assert_ne!(texts.stay_out, texts.sign_in);
+    }
+
+    #[test]
+    fn the_dialog_is_shown_only_to_a_person_at_the_app() {
+        assert!(person_at_the_app(true, 0));
+        assert!(person_at_the_app(true, RECENT_INPUT_SECS));
+        assert!(!person_at_the_app(true, RECENT_INPUT_SECS + 1));
+        assert!(!person_at_the_app(false, 0));
+    }
+
+    #[test]
+    fn declines_pause_the_dialog_doubling_up_to_five_minutes() {
+        let base = DECLINE_PAUSE;
+        let pauses: Vec<u64> = (1..=8).map(|n| decline_pause(base, n).as_secs()).collect();
+        assert_eq!(pauses, [10, 20, 40, 80, 160, 300, 300, 300]);
+        assert_eq!(decline_pause(base, 1000), DECLINE_PAUSE_MAX);
+        let store = MemoryStore::default();
+        let session = Session::with_timing(
+            Box::new(store.clone()),
+            SIGN_IN_WINDOW,
+            Duration::from_millis(40),
+        );
+        let mut shown = 0;
+        assert_eq!(
+            session
+                .begin_sign_in(&url(A), None, || {
+                    shown += 1;
+                    false
+                })
+                .unwrap_err(),
+            SIGN_IN_DECLINED
+        );
+        // Raised again at once (a script after `secret_delete`): refused, no dialog. Sign-out does not reset it.
+        session.sign_out().unwrap();
+        assert_eq!(
+            session
+                .begin_sign_in(&url(A), None, || {
+                    shown += 1;
+                    true
+                })
+                .unwrap_err(),
+            SIGN_IN_WAIT
+        );
+        assert_eq!(shown, 1);
+        std::thread::sleep(Duration::from_millis(60));
+        // Second decline: twice as long.
+        assert_eq!(
+            session
+                .begin_sign_in(&url(A), None, || {
+                    shown += 1;
+                    false
+                })
+                .unwrap_err(),
+            SIGN_IN_DECLINED
+        );
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(
+            session.begin_sign_in(&url(A), None, || true).unwrap_err(),
+            SIGN_IN_WAIT
+        );
+        std::thread::sleep(Duration::from_millis(40));
+        // Confirmed: allowed, and the count starts again.
+        session
+            .begin_sign_in(&url(A), None, || {
+                shown += 1;
+                true
+            })
+            .unwrap();
+        assert_eq!(shown, 3);
+        assert_eq!(session.declines.lock().unwrap().count, 0);
     }
 
     // GM-L3

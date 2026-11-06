@@ -10,7 +10,7 @@ import { type GapChoice, type IdleCheckState, type IdleChoice, WATCHING, decide,
 import { lockReturn, meetingTask, pickerTasks, reassignMode, reassignWhileAsking } from '../lib/idleChoices';
 import { composeNudge, EMPTY_NUDGE, NUDGE_MINUTES_CHOICES, type NudgeAction, nudgeActionOf, type NudgeNote, observeActivity, watchingActivity, workingNow } from '../lib/nudge';
 import { preflight } from '../lib/preflight';
-import { isSignInDeclined } from '../lib/nativeFetch';
+import { isSignInDeclined, isSignInWait } from '../lib/nativeFetch';
 import { OfflineQueue } from '../lib/queue';
 import { type ClampNote, type QueuedAction, type SyncResult, applyLocally } from '../lib/replay';
 import { type ServerFeatures, effectiveThreshold, serverFeatures, thresholdChoices } from '../lib/serverFeatures';
@@ -622,10 +622,13 @@ export class DesktopApp {
           try {
             await this.platform.beginSignIn(server);
           } catch (error) {
-            if (!isSignInDeclined(error)) throw error;
+            const wait = isSignInWait(error);
+            if (!wait && !isSignInDeclined(error)) throw error;
             this.device = null;
             // A declined re-sign-in (meeting reminders) leaves the person signed out, as the card said.
             if (!(await this.endReconsent())) this.view = 'login';
+            // Declined moments ago: the host shows no dialog for a while (audit GM-D2-1).
+            if (wait) this.setNotice(this.t('signInWait'));
             return;
           }
           await preflight(this.platform.fetch, server);
