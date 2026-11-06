@@ -48,6 +48,24 @@ All notable changes to this project are documented here ([Keep a Changelog](http
   - Still possible for a script in the main webview: authenticated requests to the signed-in server while the app
     runs, sending data it read elsewhere (for example through `open_external`), and signing you out and asking you,
     in the native dialog, to sign in to another server. SECURITY.md lists it.
+### Fixed
+
+- **Dark theme: the antenna arcs of the "nothing pinned yet" robot are visible again.** Its white outline filled the
+  gaps between the arcs, so they blurred into one pale shape; the arcs now sit on the dark background (at least 6:1,
+  WCAG 1.4.11 asks for 3:1) and the rest of the outline is unchanged.
+
+### Added
+
+- **The last three mascot poses**: beach (deck chair under a parasol), sofa (with the remote) and park (walking with a
+  balloon), in the app's messages and in the native notifications, instead of the standing robot they borrowed.
+
+### Security
+
+- **Weekly live pin check** (audit FY-D-3): `pins.yml` also connects to the official host and fails when no CA key of
+  the served chain is in `pins.json` (`scripts/release/check-pin-chain.mjs`), a second signal next to Beacon's
+  pinned SSL monitor.
+- Dependabot waits seven days before proposing a new GitHub Actions release; the `dtolnay/rust-toolchain` pin comment
+  names its commit date and the manual refresh (audit FY-D-4).
 
 ## [0.5.1] - 2026-11-06
 

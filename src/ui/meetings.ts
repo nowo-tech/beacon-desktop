@@ -6,6 +6,7 @@ import type { MessageLocale } from '../lib/friendly';
 import { h } from './dom';
 import { icon } from './icons';
 import { poseArt } from './mascot';
+import { toastAction, toastActions } from './toast';
 
 /** "Choose task" inside the question: for this meeting (`task`) or to set the generic meeting once (`generic`). */
 export type PickerMode = 'task' | 'generic';
@@ -31,22 +32,17 @@ export interface MeetingToastProps {
  */
 export function renderMeetingToast(props: MeetingToastProps): HTMLElement {
   const { t, note } = props;
-  const actions = h(
-    'div',
-    { class: 'toast-actions', id: 'meeting-actions' },
-    ...note.actions.map((action, index) =>
-      h(
-        'button',
-        {
-          class: index === 0 ? 'secondary small toast-action' : 'link toast-link',
-          id: `meeting-${action}`,
-          key: `meeting-${action}`,
-          attrs: { type: 'button', lang: note.locale, 'data-action': action, 'aria-expanded': action === 'choose' ? String(props.picker === 'task') : undefined },
-          on: { click: () => props.onAction(action) },
-        },
-        note.labels[action],
-      ),
-    ),
+  const actions = toastActions(
+    'meeting-actions',
+    ...note.actions.map((action, index) => {
+      const id = `meeting-${action}`;
+      const attrs = { 'data-action': action, 'aria-expanded': action === 'choose' ? String(props.picker === 'task') : undefined };
+      const click = () => props.onAction(action);
+      // The first answer is the toast's button; the others are links next to it.
+      return index === 0
+        ? toastAction(id, note.labels[action], note.locale, click, attrs)
+        : h('button', { class: 'link toast-link', id, key: id, attrs: { type: 'button', lang: note.locale, ...attrs }, on: { click } }, note.labels[action]);
+    }),
   );
   return h(
     'section',

@@ -122,7 +122,13 @@ describe('message pools', () => {
 
 describe('poses (data-driven art)', () => {
   it('uses its own art once imported, else the closest existing pose', () => {
-    expect(poseFile('beach', new Set())).toBe(POSE_FALLBACK.beach);
+    expect(poseFile('empty-pinned', new Set())).toBe(POSE_FALLBACK['empty-pinned']);
+    expect(poseFile('beach')).toBe('pose-beach');
+    // beach, sofa and park have their own art (owner, 2026-11-06): no fallback left for them.
+    for (const id of ['beach', 'sofa', 'park'] as const) {
+      expect(POSE_ART.has(id), id).toBe(true);
+      expect(POSE_FALLBACK[id], id).toBeUndefined();
+    }
     expect(poseFile('coffee', new Set())).toBe('mascot-small');
     expect(poseFile('coffee', new Set(['coffee']))).toBe('pose-coffee');
   });

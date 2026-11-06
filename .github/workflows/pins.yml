@@ -2,7 +2,9 @@ name: Pin set expiry
 
 # Weekly tripwire for the TLS pin set (src-tauri/pins.json, docs/PINNING.md, audit FY-L2): fails when it expires within
 # 90 days, so the rotation starts in time even when no pull request touches the Rust crate (ci.yml runs the Rust test
-# only then). release.yml runs the same check with 180 days before building.
+# only then). release.yml runs the same check with 180 days before building. The second job hashes the chain the
+# official host serves and fails when no CA key in it is pinned (audit FY-D-3): a signal independent of Beacon's S18
+# monitor that the pinned apps would refuse the server.
 
 on:
   schedule:
@@ -23,3 +25,14 @@ jobs:
         with:
           node-version: 24
       - run: node scripts/release/check-pin-expiry.mjs --min-days 90
+
+  chain:
+    name: The served chain contains a pinned CA key
+    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: node scripts/release/check-pin-chain.mjs

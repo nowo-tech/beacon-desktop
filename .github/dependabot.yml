@@ -15,7 +15,12 @@ updates:
       # Keep @types/node on the Node major used in CI.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+  # Actions are pinned by commit SHA with the tag in a comment; Dependabot updates both. A release must be a week old
+  # before it is proposed (audit FY-D-4: a two-day-old tag was pinned once). dtolnay/rust-toolchain is pinned to the
+  # head of its `stable` branch, which Dependabot cannot follow: refresh it by hand (CONTRIBUTING.md).
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7

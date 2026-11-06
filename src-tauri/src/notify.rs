@@ -361,7 +361,7 @@ mod tests {
         for id in [
             "",
             "../etc/passwd",
-            "beach",
+            "sea",
             "PEEK",
             "peek.png",
             "empty-tasks",

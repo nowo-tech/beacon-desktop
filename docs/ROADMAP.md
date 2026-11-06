@@ -79,6 +79,12 @@ when unknown (contract v0.4, announced in `GET me.features.task_effort`):
 - Through `TaskReference` / `TaskProviderInterface` (new optional properties, `null` by default, so other providers keep
   working) and `ClientTaskPresenter::task()` / `timer()`; `features.task_effort = true` when the provider fills them.
 
+### Security hardening (desktop)
+
+| Item | Status | Owner |
+|---|---|---|
+| **Session token out of the webview**: Rust keeps the token in the OS keychain with the origin that issued it, and `beacon_fetch` / the updater add `Authorization` themselves; `secret_get` / `secret_set` are gone, sign-in answers are captured in Rust only after a native confirmation, and token fields are scrubbed from every answer (audits FN-L1, FY-D-2, GM; SECURITY.md, *Credentials*) | Done (0.6.0) | desktop |
+
 ## 2. Considered, not scheduled
 
 From the same analysis; kept as ideas, with no date.

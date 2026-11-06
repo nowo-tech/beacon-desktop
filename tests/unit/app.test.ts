@@ -1,16 +1,35 @@
 // @vitest-environment happy-dom
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { browserPlatform } from '../../src/platform';
 import { DesktopApp } from '../../src/ui/app';
 import { nodeFetch, startMock } from './helpers';
 
 let env: Awaited<ReturnType<typeof startMock>>;
-const tick = () => new Promise((resolve) => setTimeout(resolve, 40));
+// These tests drive the UI against the in-process mock Beacon: a click resolves after an unknown number of HTTP round
+// trips. They wait for the state they assert (`until`), never for a fixed time, so a loaded machine only makes them
+// slower (a fixed 40 ms sleep failed under load average ~5). The per-test timeout leaves room for that.
+vi.setConfig({ testTimeout: 30_000 });
+
+/** Polls the event loop until `ready()` holds (it may ask the mock server); fails with `what` after `timeoutMs`. */
+async function until(ready: () => boolean | Promise<boolean>, what: string, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await ready())) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 beforeAll(async () => {
   env = await startMock();
 });
 afterAll(() => env.mock.close());
+
+// Every app of a test is destroyed after it (also when the test fails), so no interval, debounce or notice timer of
+// one test keeps writing localStorage or calling the mock server while the next one runs.
+const mounted: DesktopApp[] = [];
+afterEach(() => {
+  for (const app of mounted.splice(0)) app.destroy();
+});
 
 function mount(options: { locale?: 'en' | 'es'; fetchImpl?: typeof fetch; now?: () => Date } = {}) {
   document.body.replaceChildren();
@@ -25,6 +44,7 @@ function mount(options: { locale?: 'en' | 'es'; fetchImpl?: typeof fetch; now?: 
     searchDelayMs: 1,
     now: options.now,
   });
+  mounted.push(app);
   const $ = <T extends Element = HTMLElement>(selector: string) => root.querySelector(selector) as T;
   return { app, platform, root, $, click: (selector: string) => $(selector).click() };
 }
@@ -33,8 +53,8 @@ async function signedIn(options: Parameters<typeof mount>[0] = {}, server = env.
   const ui = mount(options);
   await ui.app.init();
   const done = ui.app.connect(server);
-  // The code screen appears after preflight and the device-code request: wait for it (slow CI runners).
-  for (let waited = 0; ui.$('#user-code') === null && waited < 3000; waited += 40) await tick();
+  // The code screen appears after preflight and the device-code request.
+  await until(() => ui.$('#user-code') !== null, 'the device code');
   const code = ui.$('#user-code').textContent ?? '';
   await env.control('device/approve', { userCode: code });
   await done;
@@ -56,7 +76,7 @@ describe('desktop app', () => {
     expect(ui.$<HTMLInputElement>('#server').value).toBe('https://beacon.example.com');
     ui.$<HTMLInputElement>('#server').value = env.url;
     ui.$<HTMLFormElement>('#login-form').dispatchEvent(new Event('submit', { cancelable: true }));
-    await tick();
+    await until(() => ui.$('#user-code') !== null && ui.platform.hooks.opened.length > 0, 'the device code and the verification page');
     expect(ui.app.view).toBe('device');
     const code = ui.$('#user-code').textContent ?? '';
     expect(code).toMatch(/^[A-Z]{4}-[A-Z]{4}$/);
@@ -64,7 +84,7 @@ describe('desktop app', () => {
     ui.click('#open-again');
     expect(ui.platform.hooks.opened).toHaveLength(2);
     await env.control('device/approve', { userCode: code });
-    for (let i = 0; i < 50 && ui.app.view !== 'main'; i++) await tick();
+    await until(() => ui.app.view === 'main' && ui.root.querySelectorAll('#tasks li').length === 8, 'the main view with the tasks');
     expect(ui.app.view).toBe('main');
     expect(await ui.platform.secretGet()).toHaveLength(43);
     expect(localStorage.getItem('time-track-desktop')).not.toContain((await ui.platform.secretGet()) ?? 'x');
@@ -79,14 +99,14 @@ describe('desktop app', () => {
     expect(ui.$<HTMLInputElement>('#server').value).toBe('http://insecure.example.com');
     expect(ui.$('#server').getAttribute('aria-invalid')).toBe('true');
     const denied = ui.app.connect(env.url);
-    await tick();
+    await until(() => ui.$('#user-code') !== null, 'the device code');
     await env.control('device/approve', { userCode: ui.$('#user-code').textContent, approve: false });
     await denied;
     expect(ui.app.view).toBe('device');
     expect(ui.$('#device-state').textContent).toBe('The connection was declined in Beacon');
     ui.click('#cancel-device');
     const cancelled = ui.app.connect(env.url);
-    await tick();
+    await until(() => ui.$('#cancel-device') !== null, 'the device code screen');
     ui.click('#cancel-device');
     await cancelled;
     expect(ui.app.view).toBe('login');
@@ -101,8 +121,7 @@ describe('desktop app', () => {
   it('starts, switches and stops; tray follows; tray stop works', async () => {
     const ui = await signedIn();
     ui.root.querySelector<HTMLElement>('[data-task="T-101"] .row-action')?.click();
-    await tick();
-    expect(ui.$('#timer-task').textContent).toBe('Write onboarding guide');
+    await until(() => ui.$('#timer-task')?.textContent === 'Write onboarding guide' && ui.platform.hooks.tray.running, 'the running timer');
     expect(ui.platform.hooks.tray).toEqual({
       title: '0:00 Write onboarding gu…',
       tooltip: 'TimeTrack — Tracking “Write onboarding guide” · 0:00 · Today 0:00',
@@ -116,10 +135,9 @@ describe('desktop app', () => {
     // The running task is not repeated in the lists.
     expect(ui.root.querySelector('#tasks [data-task="T-101"]')).toBeNull();
     ui.root.querySelector<HTMLElement>('[data-task="T-102"] .row-action')?.click();
-    await tick();
-    expect(ui.app.state.activeTimer?.taskId).toBe('T-102');
+    await until(() => ui.app.state.activeTimer?.taskId === 'T-102', 'the switch to T-102');
     await ui.app.trayAction('stop');
-    await tick();
+    await until(() => ui.app.state.activeTimer === null, 'the stop');
     expect(ui.app.state.activeTimer).toBeNull();
     expect(ui.platform.hooks.tray.running).toBe(false);
     await ui.app.stop();
@@ -127,7 +145,7 @@ describe('desktop app', () => {
     search.value = 'invoice';
     search.dispatchEvent(new Event('input'));
     search.dispatchEvent(new Event('input'));
-    await tick();
+    await until(() => ui.root.querySelectorAll('#tasks li').length === 1, 'the search results');
     expect(ui.root.querySelectorAll('#tasks li')).toHaveLength(1);
     await ui.app.search('zzz');
     expect(ui.$('#tasks-empty').textContent).toBe('Nothing matches “zzz”, and the robot read the list twice. Only tasks you can track time on appear.');
@@ -203,8 +221,7 @@ describe('desktop app', () => {
     ui.$<HTMLInputElement>('#idle-note').value = 'Acme call';
     ui.$<HTMLSelectElement>('#idle-target').value = 'T-103';
     ui.$<HTMLFormElement>('#idle-meeting-form').dispatchEvent(new Event('submit', { cancelable: true }));
-    for (let i = 0; i < 20 && ui.app.state.idleCheck.phase !== 'watching'; i++) await tick();
-    await tick();
+    await until(() => ui.app.state.idleCheck.phase === 'watching' && ui.$('#notice') !== null, 'the answer to be sent');
     expect(ui.app.state.idleCheck.phase).toBe('watching');
     expect(ui.$('#notice').textContent).toBe('Got it, the time is kept.');
     const state = (await env.control('state')) as { idleDecisions: { action: string; taskId: string; note: string }[]; requests: { path: string; body: string }[] };
@@ -248,16 +265,17 @@ describe('desktop app', () => {
     expect(ui.$('#gap-text').textContent).toContain('Write onboarding guide');
     expect(ui.$('#idle-reassign').textContent).toBe('Reassign to another task…');
     ui.click('#gap-keep');
-    for (let i = 0; i < 20 && ui.app.state.idleCheck.phase !== 'resume'; i++) await tick();
-    await tick();
+    type Entries = { entries: Record<string, { taskId: string; startedAt: string; endedAt: string }[]> };
+    const serverEntries = async () => Object.values(((await env.control('state')) as Entries).entries).flat();
+    await until(async () => ui.app.state.idleCheck.phase === 'resume' && ui.$('#gap-resume-card-title') !== null && (await serverEntries()).length === 2, 'the kept gap and the resume offer');
     expect(ui.app.state.idleCheck.phase).toBe('resume');
-    const entries = Object.values(((await env.control('state')) as { entries: Record<string, { taskId: string; startedAt: string; endedAt: string }[]> }).entries).flat();
+    const entries = await serverEntries();
     expect(entries).toHaveLength(2);
     expect(entries[1].startedAt).toBe(entries[0].endedAt);
     expect(Math.abs(Date.parse(entries[1].endedAt) - (now.getTime() - 1000))).toBeLessThan(2000);
     expect(ui.$('#gap-resume-card-title').textContent).toBe('Resume Write onboarding guide?');
     ui.click('#gap-resume');
-    for (let i = 0; i < 20 && ui.app.state.activeTimer === null; i++) await tick();
+    await until(() => ui.app.state.activeTimer !== null && ui.app.state.idleCheck.phase === 'watching', 'the resumed timer');
     expect(ui.app.state.activeTimer?.taskId).toBe('T-101');
     expect(ui.app.state.idleCheck.phase).toBe('watching');
     ui.app.destroy();
@@ -280,9 +298,9 @@ describe('desktop app', () => {
     ui.click('#idle-reassign');
     ui.root.querySelector<HTMLInputElement>('input[name="reassign-task"][value="T-102"]')!.checked = true;
     ui.click('#reassign-save');
-    for (let i = 0; i < 20 && ui.app.state.idleCheck.phase !== 'resume'; i++) await tick();
-    await tick();
-    const entries = Object.values(((await env.control('state')) as { entries: Record<string, { taskId: string }[]> }).entries).flat();
+    const serverEntries = async () => Object.values(((await env.control('state')) as { entries: Record<string, { taskId: string }[]> }).entries).flat();
+    await until(async () => ui.app.state.idleCheck.phase === 'resume' && (await serverEntries()).length === 2, 'the reassigned gap');
+    const entries = await serverEntries();
     expect(entries.map((e) => e.taskId)).toEqual(['T-101', 'T-102']);
     ui.click('#gap-dismiss');
     expect(ui.app.state.idleCheck.phase).toBe('watching');
@@ -293,16 +311,14 @@ describe('desktop app', () => {
     ui.platform.hooks.idleSeconds = 700;
     await ui.app.tick();
     ui.click('#idle-discard');
-    for (let i = 0; i < 20 && ui.app.state.idleCheck.phase !== 'watching'; i++) await tick();
-    await tick();
+    await until(() => ui.app.state.idleCheck.phase === 'watching' && ui.$('#notice') !== null, 'the discard');
     expect(ui.app.state.activeTimer?.taskId).toBe('T-101');
     expect(ui.$('#notice').textContent).toBe('Those minutes were left out. The timer keeps running.');
     await env.control('timer/backdate', { seconds: 3600 });
     await ui.app.refresh();
     await ui.app.tick();
     ui.click('#idle-pause');
-    for (let i = 0; i < 20 && ui.app.state.activeTimer !== null; i++) await tick();
-    await tick();
+    await until(() => ui.app.state.activeTimer === null && ui.app.state.idleCheck.phase === 'resume', 'the pause');
     expect(ui.app.state.activeTimer).toBeNull();
     expect(ui.app.state.idleCheck.phase).toBe('resume');
     const decisions = ((await env.control('state')) as { idleDecisions: { action: string }[] }).idleDecisions.map((d) => d.action);
@@ -324,8 +340,7 @@ describe('desktop app', () => {
     const toggle = ui.$<HTMLInputElement>('#feature-idleDetection');
     toggle.checked = true;
     toggle.dispatchEvent(new Event('change'));
-    await tick();
-    expect(ui.$('#consent-idleDetection').textContent).toContain('Consent given on');
+    await until(() => ui.$('#consent-idleDetection')?.textContent?.includes('Consent given on') === true, 'the consent');
     const minutes = ui.$<HTMLSelectElement>('#idle-minutes');
     minutes.value = '15';
     minutes.dispatchEvent(new Event('change'));
@@ -343,7 +358,7 @@ describe('desktop app', () => {
     await ui.app.tick();
     expect(ui.$('#gap-unsupported').textContent).toContain('cannot add past time');
     ui.click('#gap-discard');
-    await tick();
+    await until(() => ui.$('#gap-dismiss') !== null, 'the left-out gap');
     ui.click('#gap-dismiss');
     await ui.app.setFeature('idleDetection', false);
     expect(ui.app.idleCheckEnabled()).toBe(false);
@@ -401,8 +416,7 @@ describe('desktop app', () => {
     expect(ui.root.querySelector('#idle-minutes')).not.toBeNull();
     toggle.checked = false;
     toggle.dispatchEvent(new Event('change'));
-    await tick();
-    expect(ui.app.idleCheckEnabled()).toBe(false);
+    await until(() => !ui.app.idleCheckEnabled() && ui.$('#consent-idleDetection')?.textContent?.includes('Consent withdrawn on') === true, 'the switch off');
     expect(ui.$('#consent-idleDetection').textContent).toContain('Consent withdrawn on');
     expect(ui.root.querySelector('#idle-minutes')).toBeNull();
     await ui.app.setFeature('idleDetection', true);
@@ -481,7 +495,7 @@ describe('desktop app', () => {
     expect(document.activeElement?.id).toBe('clear-local');
     ui.click('#clear-local');
     ui.click('#clear-local-yes');
-    for (let i = 0; i < 20 && ui.app.view !== 'login'; i++) await tick();
+    await until(() => ui.app.view === 'login', 'the login view');
     expect(ui.app.view).toBe('login');
     expect(ui.$('#notice').textContent).toContain('Local data cleared');
     expect(localStorage.length).toBe(0);
@@ -503,7 +517,7 @@ describe('desktop app', () => {
     await ui.app.checkUpdates();
     expect(ui.$('#update').textContent).toContain('Version 0.2.0 is available');
     ui.click('#update-now');
-    await tick();
+    await until(() => ui.platform.hooks.installed === 1 && ui.$('#update')?.textContent?.includes('Installing') === true, 'the install');
     expect(ui.platform.hooks.installed).toBe(1);
     expect(ui.$('#update').textContent).toContain('Installing version 0.2.0. TimeTrack will restart.');
     // The real app relaunches here; the browser fake stays, so go back to "offered".
@@ -534,7 +548,7 @@ describe('desktop app', () => {
     ui.app.updateDismissed = false;
     await ui.app.checkUpdates();
     ui.click('#logout-required');
-    await tick();
+    await until(() => ui.app.view === 'login', 'the sign-out');
     expect(ui.app.view).toBe('login');
   });
 
@@ -545,7 +559,7 @@ describe('desktop app', () => {
     expect(ui.app.view).toBe('update-required');
     ui.platform.hooks.installError = 'signature verification failed';
     ui.click('#install-required');
-    await tick();
+    await until(() => ui.app.view === 'main' && ui.$('#update-message') !== null, 'the failed install');
     expect(ui.app.view).toBe('main');
     expect(ui.$('#update-message').textContent).toContain('The automatic update failed: signature verification failed.');
     ui.click('#download-beacon');
@@ -588,7 +602,7 @@ describe('desktop app', () => {
     const ui = mount();
     await ui.app.init();
     const done = ui.app.connect(env.url);
-    await tick();
+    await until(() => ui.$('#user-code') !== null && ui.$('#device-untrusted') !== null, 'the device code');
     expect(ui.platform.hooks.opened).toEqual([]);
     expect(ui.$('#open-again')).toBeNull();
     expect(ui.$('#device-untrusted').textContent).toContain('https://evil.example.com/device?code=');
@@ -627,7 +641,7 @@ describe('desktop app', () => {
     const ui = await signedIn();
     ui.click('#open-settings');
     ui.click('#logout');
-    await tick();
+    await until(() => ui.app.view === 'login', 'the sign-out');
     expect(ui.app.view).toBe('login');
     expect(await ui.platform.secretGet()).toBeNull();
     const again = await signedIn({ fetchImpl: nodeFetch });

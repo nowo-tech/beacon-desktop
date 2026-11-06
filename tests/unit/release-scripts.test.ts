@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { checkPinExpiry, DEFAULT_MIN_DAYS, parseArgs } from '../../scripts/release/check-pin-expiry.mjs';
+import { checkChain, spkiSha256 } from '../../scripts/release/check-pin-chain.mjs';
 import { checkUpdaterKey, describePubkey, PLACEHOLDER } from '../../scripts/release/check-updater-key.mjs';
 import { buildManifest, escapeXml, msixVersion } from '../../scripts/store/msix-manifest.mjs';
 
@@ -123,6 +124,27 @@ describe('pin set expiry tripwire (FY-L2)', () => {
     expect(parseArgs(['--min-days', '180', 'x.json'])).toEqual({ minDays: 180, path: 'x.json' });
     expect(() => parseArgs(['--min-days', 'soon'])).toThrow('whole number');
     expect(() => parseArgs(['--min-days', '-1'])).toThrow('whole number');
+  });
+});
+
+describe('live pin chain check (FY-D-3)', () => {
+  const shipped = JSON.parse(readFileSync('src-tauri/pins.json', 'utf8'));
+  const x1 = 'C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=';
+
+  it('hashes a certificate the way pins.json lists it (SPKI SHA-256, base64)', () => {
+    // ISRG Root X1 (public root certificate, also in the Mozilla store): its pin is in the shipped set.
+    expect(spkiSha256(readFileSync('tests/unit/fixtures/isrg-root-x1.crt'))).toBe(x1);
+    expect(shipped.pins.map((pin: { sha256: string }) => pin.sha256)).toContain(x1);
+  });
+
+  it('passes when a CA key of the chain is pinned, never on the leaf alone', () => {
+    expect(checkChain({ pins: shipped, host: 'h', chain: ['leaf', 'other', x1] })).toMatchObject({ ok: true, message: expect.stringContaining('ISRG Root X1') });
+    const leafOnly = checkChain({ pins: shipped, host: 'h', chain: [x1, 'other'] });
+    expect(leafOnly.ok).toBe(false);
+    expect(leafOnly.message).toContain('no pinned CA key');
+    expect(checkChain({ pins: shipped, host: 'h', chain: ['leaf'] })).toMatchObject({ ok: false, message: expect.stringContaining('no CA certificate') });
+    expect(checkChain({ pins: {}, host: 'h', chain: ['leaf', x1] }).ok).toBe(false);
+    expect(checkChain({ pins: { pins: [{ sha256: x1 }] }, host: 'h', chain: ['leaf', x1] }).message).toContain(x1);
   });
 });
 

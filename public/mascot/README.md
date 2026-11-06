@@ -62,8 +62,12 @@ here, imported from a transparent (or white) `pose-<id>.png`, for example 1024 Ã
    character, with their glow; props close to it (steam, sparkles, a leaf, the antenna arcs) stay;
 3. trimmed, 96 / 192 px high, WebP quality 80.
 
-The script also rewrites `src/ui/pose-art.json`, the list of ids that have their own art (40 today). beach, sofa and
-park have no art yet and show their fallback (`POSE_FALLBACK` in `src/ui/mascot.ts`).
+The script also rewrites `src/ui/pose-art.json`, the list of ids that have their own art (49 today, every id of
+`POSE_IDS`). beach (deck chair under a parasol), sofa (with the remote) and park (walking with a balloon) arrived on
+2026-11-06 and were imported with `IMPORT_POSES_KEEP_DISTANCE=200`, like the empty states: with the default 64 px the
+top antenna arc is taken for a stray fragment and only its glow stays. `scripts/mascot/notification-art.sh` then adds
+their notification pictures. `POSE_FALLBACK` (`src/ui/mascot.ts`) keeps only the empty states' entries, for a build
+without their art.
 
 | Use | Poses |
 |---|---|
@@ -78,6 +82,12 @@ float further from the head than in the other poses, are kept. The `-dark` varia
 dark theme: `empty-recent-dark` is the owner's outlined alternate, `empty-pinned-dark` and `empty-tasks-dark` add a
 white stroke to the same art (ImageMagick `-morphology Dilate Disk:10` on the alpha, white, under the picture). They
 carry meaning next to a short line, so they have translated alt text.
+
+`empty-pinned-dark` (after 0.5.1): the stroke filled the narrow gaps between the three antenna arcs, so the pale green arcs
+sat on white (about 1.6:1) and read as one light blob. The stroke pixels nearer to an arc than to the rest of the robot
+are dropped (each stroke pixel goes to the nearest part of the art), so the arcs sit on the dark paper: at least 6:1
+against `--paper` and `--surface` of the dark theme with `--mascot-filter`, above the 3:1 of WCAG 1.4.11; the rest of the
+outline is unchanged. Re-imported with `IMPORT_POSES_KEEP_DISTANCE=200`.
 
 ## Rules
 

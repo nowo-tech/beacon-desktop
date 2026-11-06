@@ -116,7 +116,8 @@ pinned build reaches users, and stay in place (audit FY-M1). The operator side i
    ```
 
    The served chain must also validate against `webpki-roots` (not only the system store), since that is the only
-   root store the app trusts.
+   root store the app trusts. The weekly `pins.yml` workflow runs a second, repository-side check
+   (`scripts/release/check-pin-chain.mjs`): it fails when no CA key of the chain served to it is pinned.
 
 Before any CA or intermediate change (runbook step 3), update the S18 monitor pins and `pins.json` together, adding the
 new key before removing the old one, and change the CAA record in the same step (DNS-CAA.md, section 4).

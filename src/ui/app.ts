@@ -57,6 +57,7 @@ import type { ConnectionSecurity, FriendlyNotification, Platform, SessionEvent, 
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
 import { art, emptyArt, ERROR_POSES, moment, poseArt, variant, type Moment } from './mascot';
+import { toastAction, toastActions } from './toast';
 import { PromptMount, type PromptAnswer, type PromptBlock, type PromptButton, type PromptPicker, type PromptTaskOption, type PromptText, type PromptView } from './prompt';
 
 export type View = 'loading' | 'login' | 'device' | 'main' | 'settings' | 'privacy' | 'update-required';
@@ -3188,26 +3189,25 @@ export class DesktopApp {
     );
   }
 
-  /** A friendly message: smile, cheer or a gentle nudge, in the Beacon user's language. A toast, never focused. */
   /** A working-hours reminder as a toast: its line, the button (Start / Stop / Resume) while it applies, ×. */
   private renderReminder(note: ReminderNote): HTMLElement {
     const action = note.action !== null && note.actionLabel !== null && this.reminderActionable(note)
-      ? h('button', { class: 'secondary small toast-action', id: 'reminder-action', key: 'reminder-action', attrs: { type: 'button', lang: note.locale, 'data-action': note.action }, on: { click: () => void this.reminderAction(note.action) } }, note.actionLabel)
+      ? toastAction('reminder-action', note.actionLabel, note.locale, () => void this.reminderAction(note.action), { 'data-action': note.action })
       : null;
     return this.toast('reminder', note.pose, note.text, note.locale, () => this.showReminderToast(null), note.kind, action);
   }
 
   /** "Working without a timer?" inside the window, with "Start <last task>" and "Choose task". */
   private renderNudge(note: NudgeNote): HTMLElement {
-    const actions = h(
-      'div',
-      { class: 'toast-actions' },
-      note.resume !== null && h('button', { class: 'secondary small toast-action', id: 'nudge-resume', key: 'nudge-resume', attrs: { type: 'button', lang: note.locale }, on: { click: () => void this.nudgeAction('resume') } }, note.resume.label),
-      h('button', { class: 'secondary small toast-action', id: 'nudge-choose', key: 'nudge-choose', attrs: { type: 'button', lang: note.locale }, on: { click: () => void this.nudgeAction('choose') } }, note.choose.label),
+    const actions = toastActions(
+      undefined,
+      note.resume !== null && toastAction('nudge-resume', note.resume.label, note.locale, () => void this.nudgeAction('resume')),
+      toastAction('nudge-choose', note.choose.label, note.locale, () => void this.nudgeAction('choose')),
     );
     return this.toast('nudge', note.pose, note.text, note.locale, () => this.showNudgeToast(null), 'nudge', actions);
   }
 
+  /** A friendly message: smile, cheer or a gentle nudge, in the Beacon user's language. A toast, never focused. */
   private renderCheer(): HTMLElement | null {
     const card = this.currentCard();
     const timer = this.state.activeTimer;
