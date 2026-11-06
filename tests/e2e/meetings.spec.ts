@@ -1,5 +1,5 @@
-import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { axe } from './axe';
 
 /**
  * Meeting detection with the microphone mocked: the browser platform's `hooks.mic` stands for the Rust heartbeat's
@@ -23,11 +23,6 @@ interface Hooks {
   notificationAction(id: string): void;
 }
 type Tt = { __timeTrack: { hooks: Hooks } };
-
-const axe = async (page: Page) => {
-  const { violations } = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
-  return violations.map((v) => `${v.id} ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`);
-};
 
 async function signIn(page: Page) {
   await page.clock.setFixedTime(new Date(T0));
