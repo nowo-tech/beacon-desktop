@@ -78,6 +78,12 @@ export interface TrayMenu {
   checkUpdates: string | null;
   /** "Pause friendly messages for 1 h" (`pause-friendly`) / "Paused until … — resume" (`resume-friendly`); absent with both switches off. */
   pauseFriendly: TrayMenuItem | null;
+  /**
+   * "Today's meetings ▸" (meeting reminders): label and today's remaining meetings, ids `meeting:<16 hex>` (the host
+   * opens the window; the UI joins when the meeting has a link). Absent when there is nothing to show.
+   */
+  meetingsLabel?: string | null;
+  meetings?: TrayMenuItem[];
   settings: string;
   quit: string;
 }

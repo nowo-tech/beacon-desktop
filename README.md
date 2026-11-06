@@ -270,6 +270,33 @@ state (app id, start, end, the answer) in local storage, and nothing is sent (on
 shows what the last check found. `pnpm screenshots:meetings` (`MEETING_SCREENS=<dir>`) renders the questions and the
 settings in Spanish, light and dark.
 
+### Meeting reminders (TimeTrack 1.14)
+
+With a Beacon on TimeTrack 1.14 or later and a calendar connected there, the app reminds you before each meeting,
+on this computer only (contract §23). Settings → **Meeting reminders**: *Remind me before my meetings* (on by default
+once a calendar is connected), *Remind me* 5 minutes before (not before, 1, 2, 5, 10, 15, 30 or a custom 1–120),
+*Remind me outside working hours* and *on days off* (both off), *When a meeting starts and a timer is running, ask
+what to record* (on) and *Pause my timer automatically when a meeting starts* (off).
+
+- The reminder is a desktop notification — title (*Busy* for a private meeting), local time range, "in 5 min", up to
+  three internal attendees and the count of external ones — with **Join** (Teams, Google Meet, Zoom, Jitsi Meet and
+  Webex links only, opened in your "Open Beacon in" browser) and **Snooze** (until a minute before the start). The
+  window shows it too, with *Snooze 1 / 5 min*; without desktop notifications it also opens the always-on-top prompt
+  window. More than three at once become one notification.
+- When a meeting starts while a timer runs: *Keep timing*, *Pause* or *Track the meeting* (its linked task, or one you
+  pick). With the automatic pause, the timer stops and a notification offers *Undo*.
+- *Today's meetings* lists the rest of the day in the main window and in the tray, with *Join*.
+- Only meetings inside your working hours (Settings → My schedule) and never on days off, unless switched on; free,
+  all-day and past meetings never remind; each meeting reminds once per start time (a moved meeting reminds again).
+- The list (today and tomorrow) is fetched on start, on wake, when the network comes back and every 5 minutes (or
+  Beacon's `refreshAfterSeconds`), honouring `429 Retry-After`; it is kept for at most 48 hours so reminders work
+  offline ("may be outdated" after an hour) and deleted when you sign out or turn the reminders off.
+- Sessions signed in before 0.6 lack the `meetings:read` permission: one card asks *Allow TimeTrack to read your
+  upcoming meetings* and runs the device sign-in again. Older servers simply have no reminders (Settings says why).
+
+The mock server serves `GET me/meetings` (`POST /__mock/config {"meetings": {"status": "connected", "list": [...]}}`;
+`"meetingsScope": false` makes it an older server that refuses the scope).
+
 Everything stays on this computer except the entries you confirm — see [PRIVACY.md](PRIVACY.md). What comes next, and
 what TimeTrack deliberately will not do: [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -331,6 +358,10 @@ required" screen send you to the Store listing instead.
   Meeting detection adds no command and no permission either: the UI turns it on with `set_wake_plan`
   (`micEverySeconds`), the heartbeat sends `mic` events (known app ids only) to the `main` window, and its
   notification buttons (`meeting-generic`, `meeting-switch`, `meeting-back`, `meeting-stop`) join `notify::ACTION_IDS`.
+  Meeting reminders add no command and no permission: their buttons are `meeting-<join|snooze|keep|pause|track|undo>:<16
+  hex>` (`notify::meeting_action`), the prompt window's answers `meeting-join`, `meeting-snooze`, `meeting-dismiss`, … with a
+  16-hex `meeting` field (`prompt::valid_answer`), the tray's *Today's meetings* items `meeting:<16 hex>`; *Join* goes
+  through `open_external` from the main window after the meeting-link allow-list (`src/lib/links.ts`).
 - No tray permission for any window: `default.json` lists the core defaults one by one (`core:app`, `event`, `image`,
   `menu`, `path`, `resources`, `webview`, `window`) instead of `core:default`, which includes `core:tray:default` and
   would let the webview create a second tray icon. The tray is built once, in Rust (a Rust test checks both).

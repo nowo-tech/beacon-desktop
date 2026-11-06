@@ -13,6 +13,11 @@ export class DeviceFlowError extends Error {
 export interface DeviceFlowOptions {
   clientName: string;
   scopes?: readonly Scope[];
+  /**
+   * Asked for instead when the server refuses `scopes` as unknown (`invalid_scope` on `device/code`): an older server
+   * that does not know an optional scope such as `meetings:read` (TimeTrackBundle < 1.14).
+   */
+  fallbackScopes?: readonly Scope[];
   onCode(code: DeviceCode): void | Promise<void>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -29,11 +34,19 @@ export async function runDeviceFlow(api: TimeTrackApi, options: DeviceFlowOption
   const sleep = options.sleep ?? wait;
   const now = options.now ?? Date.now;
   let code: DeviceCode;
+  const ask = async (scopes: readonly Scope[] | undefined) => {
+    try {
+      return await api.deviceCode(options.clientName, scopes);
+    } catch (error) {
+      if ((error as { code?: string }).code === 'invalid_scope') throw new DeviceFlowError('invalid_scope');
+      throw error;
+    }
+  };
   try {
-    code = await api.deviceCode(options.clientName, options.scopes);
+    code = await ask(options.scopes);
   } catch (error) {
-    if ((error as { code?: string }).code === 'invalid_scope') throw new DeviceFlowError('invalid_scope');
-    throw error;
+    if (!(error instanceof DeviceFlowError) || options.fallbackScopes === undefined) throw error;
+    code = await ask(options.fallbackScopes);
   }
   await options.onCode(code);
   const deadline = now() + code.expiresIn * 1000;

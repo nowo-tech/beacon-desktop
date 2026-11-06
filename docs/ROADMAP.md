@@ -53,8 +53,20 @@ Meeting detection reads an activity signal, so it follows the rule below for any
 - **Not employer monitoring** (Estatuto de los Trabajadores art. 20.3; LOPDGDD art. 87, privacy in the use of digital
   devices at work): it only helps the worker record their own time; the employer sees nothing the worker did not
   record.
-- Calendar integration, window titles or URLs to name the meeting automatically are **not** part of it; any such idea
-  would be a separate, opt-in item reviewed with a DPIA first.
+- Window titles or URLs to name the meeting automatically are **not** part of it. Calendar data reaches the app
+  only through **meeting reminders** (below), a separate item covered by Beacon's DPIA for spec 210.
+
+### Meeting reminders (TimeTrack 1.14, spec 210)
+
+| Item | Status | Privacy risk | Owner |
+|---|---|---|---|
+| **Meeting reminders**: a reminder before each meeting (5 min by default, 1–120 or off), *Join* and *Snooze*, a start prompt when a timer runs (*Keep* / *Pause* / *Track the meeting*, opt-in automatic pause), *Today's meetings* in the window and the tray; only inside working hours and never on days off unless switched on | Done, unreleased (desktop ≥ 0.6, contract §23) | 1 (data from Beacon, local cache ≤ 48 h) | desktop; Beacon (calendars, sync, DPIA) and TimeTrackBundle 1.14 (`GET me/meetings`) |
+
+Rules (contract §22–§23, owner decisions Q-O18…Q-O22): the meetings come from Beacon, which owns the calendar
+connection, the sync, retention and the DPIA; the desktop asks for `meetings:read` explicitly; the reminders are on by
+default only once a calendar is connected in Beacon (connecting it is the opt-in) and can be switched off per device;
+the local list lives at most 48 hours and is deleted on sign-out; nothing about meetings is sent back. The browser
+extension shows no meetings in 1.14 (Q-O21).
 
 ### API request for item 4 (TimeTrackBundle)
 

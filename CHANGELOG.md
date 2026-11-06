@@ -5,7 +5,55 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+### Added
+
+- **Meeting reminders** (contract §23, spec 210 FR-008 / FR-009 / FR-011; needs TimeTrack 1.14 with calendars on in
+  Beacon). The app reads the person's own meetings from `GET /api/time-track/me/meetings` (scope `meetings:read`)
+  and reminds on this computer only:
+  - **Before each meeting**: 5 minutes by default (Settings → Meeting reminders: not before, 1, 2, 5, 10, 15, 30
+    minutes, or a custom whole 1–120). A desktop notification with the meeting's title (*Busy* for a private one), the
+    local time range, "in N min", up to three internal attendees' first names and the count of external ones, and
+    the buttons **Join** (only for an allow-listed Teams / Meet / Zoom / Jitsi / Webex link) and **Snooze** (until a
+    minute before the start; the window also offers 1 or 5 minutes; never past the start). More than three at once
+    become one notification ("4 meetings at 10:00"). The window shows the same as a toast with every choice.
+  - **When a meeting starts while a timer runs** (on by default): "Sprint review has started. Keep timing "Docs",
+    pause, or track the meeting?" — *Keep*, *Pause* (`timer/stop`) or *Track the meeting* (`timer/switch` to the
+    meeting's linked task with `metadata.origin = "meeting"`, or a task picked in the window). Opt-in **automatic
+    pause** with an *Undo* notification. One prompt per meeting, also when microphone detection fires (Q-O20).
+  - **Gates**: only for meetings inside your working hours (Settings → My schedule, local overrides included) and
+    never on days off, unless *Remind me outside working hours* / *Remind me on days off* are on; free, all-day and
+    past meetings never remind; the OS's Do Not Disturb / Focus is respected.
+  - **Dedupe** by meeting id + start (a moved meeting reminds again, a new title does not): a local store of
+    `sha256(id|start)` hashes and times only, per account, pruned 24 h after the start, at most 500.
+  - **Today's meetings** in the main window and in the tray (*Today's meetings ▸*), with *Join*.
+  - **Polling**: on start, wake from sleep, network back and settings changes, then every
+    `max(refreshAfterSeconds, 300 s)` ± 10 %, never twice within 60 s; outside working hours only one fetch two
+    hours before the next working slot. `429` / `503` honour `Retry-After` (seconds or an HTTP date, now parsed by
+    the API client) and then back off ×2 up to 30 minutes; `401` signs in again; `403` asks for the permission again
+    and stops; `404` (feature off) clears the list and stops until `GET me` says otherwise. Reminders are scheduled
+    locally from the last list and the heartbeat's wake plan (`reminderAt`), so a poll gap does not delay them.
+  - **Offline**: the last list is kept in memory and local storage until the end of tomorrow (never past 48 h) and
+    reminders still fire from it, marked "(may be outdated)" after an hour. Signing out, switching account and
+    turning the reminders off delete it; *Clear local data* deletes the whole store.
+  - **Server support is feature-detected**: `GET me.features.meetings`, `GET me.meetings` (`status`,
+    `refreshAfterSeconds`) and `GET me.links.calendars`. Older servers show "Your Beacon does not offer meeting
+    reminders yet"; *No calendar connected* and *Reconnect* point to Beacon's Calendars page; reminders are on by
+    default only when a calendar is connected (Q-O18).
+  - **Re-consent**: sign-ins now ask for `meetings:read` on top of the usual scopes, and fall back to the usual ones
+    when an older server refuses the unknown scope. A session without it gets one card (*Allow TimeTrack to read
+    your upcoming meetings*) that runs the device flow again; Cancel keeps the current session.
+  - Notification texts in the seven message languages (`src/lib/messages/meetingReminders.ts`), Settings and Today
+    in English and Spanish. Mock server: `GET me/meetings`, the 1.14 `GET me` keys, `meetings:read` and the
+    *Track the meeting* metadata on `timer/switch` (`POST /__mock/config {"meetings": …, "meetingsScope": …}`).
+
 ### Security
+
+- Meeting reminders: *Join* opens the link only through `open_external` from the main window, after the same host
+  allow-list as TimeTrackBundle's `MeetingLinkDetector` (defence in depth; anything else: "This link cannot be opened
+  from TimeTrack"). Notification buttons are `meeting-<join|snooze|keep|pause|track|undo>:<16 hex>` (the start of the
+  dedupe hash, never the meeting's id or title), allow-listed in `notify.rs`; the prompt window accepts
+  `meeting-join`, `meeting-snooze(-1|-5)`, `meeting-dismiss`, `meeting-keep`, `meeting-pause` and `meeting-track` with
+  a 16-hex `meeting` field only; tray items `meeting:<16 hex>`. No title, link, attendee or meeting id is logged.
 
 - **The session token never reaches the webview** (known limitation after the security review 2026-11-05, appendix
   FY: a script running in the main webview could call `secret_get` and read the token). The token now stays in Rust

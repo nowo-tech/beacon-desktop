@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Mock of the TimeTrackBundle 1.10.0 client API, contract v0.3 (docs/CLIENT-API.md of nowo-tech/TimeTrackBundle), plus
- * Beacon's desktop updater route. `POST /__mock/config {"apiVersion": "1.9"}` turns it into a 1.9 server (no `features`
+ * Beacon's desktop updater route and the 1.14 meetings route (`POST /__mock/config {"meetings": {...}}`, contract §22). `POST /__mock/config {"apiVersion": "1.9"}` turns it into a 1.9 server (no `features`
  * / `limits`, `startedAt` / `endedAt` ignored, no `reassign`). Zero dependencies. Used by the unit / e2e tests and for local development:
  *
  *   node mock-server/server.mjs            # http://127.0.0.1:8787
@@ -19,6 +19,10 @@ import { pathToFileURL } from 'node:url';
 
 const PREFIX = '/api/time-track';
 const ALL_SCOPES = ['timer:read', 'timer:write', 'tasks:read', 'entries:read'];
+/** TimeTrack 1.14 (contract §22.7): explicit grant only, refused as unknown by a server with `meetingsScope: false`. */
+const MEETINGS_SCOPE = 'meetings:read';
+const MEETING_PARAMS = new Set(['from', 'to', 'tz', 'limit']);
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/;
 const SOURCES = new Set(['extension', 'desktop', 'web']);
 const IDLE_ACTIONS = new Set(['keep', 'discard', 'split', 'reassign']);
 const IDLE_THEN = new Set(['continue', 'stop', 'switch']);
@@ -85,6 +89,12 @@ function freshState() {
       idleCheck: { enabled: true, threshold_minutes: 10, answer_timeout_minutes: 5 },
       // limits.idle_check.user_can_disable; null = key absent.
       userCanDisable: null,
+      // TimeTrack 1.14 meetings: null = an older server (no `features.meetings`, `me/meetings` 404). Else
+      // {status: 'connected' | 'not_connected' | 'needs_reconnect' | 'syncing', refreshAfterSeconds, calendarsUrl,
+      //  list: [meeting as in GET me/meetings]}; `enabled: false` = the 1.14 server with the feature off.
+      meetings: null,
+      // `meetings:read` is a known scope (1.14+); false = device/code refuses it like an older server.
+      meetingsScope: true,
     },
   };
 }
@@ -168,7 +178,7 @@ export function createMockServer(options = {}) {
     return url === undefined ? { ...item, ...extras } : { ...item, ...extras, url };
   }
 
-  function startTimer(userId, taskId, note, source) {
+  function startTimer(userId, taskId, note, source, origin = null) {
     const task = TASKS.find((t) => t.id === taskId);
     const timer = withUrl(
       {
@@ -179,7 +189,7 @@ export function createMockServer(options = {}) {
         startedAt: new Date().toISOString(),
         lastHeartbeatAt: null,
         clientType: source,
-        metadata: note ? { note } : null,
+        metadata: note || origin ? { ...(note ? { note } : {}), ...(origin ? { origin } : {}) } : null,
       },
       task.id,
     );
@@ -212,6 +222,18 @@ export function createMockServer(options = {}) {
   }
 
   const v110 = () => state.config.apiVersion !== '1.9';
+  const NO_STORE = { 'Cache-Control': 'no-store', Pragma: 'no-cache' };
+  /** The 1.14 meetings feature is on for the demo user. */
+  const meetingsOn = () => v110() && state.config.meetings !== null && state.config.meetings.enabled !== false;
+  /** `GET me` additions of 1.14 (absent on an older server). */
+  function meetingsOfMe() {
+    if (state.config.meetings === null || !v110()) return {};
+    const config = state.config.meetings;
+    return {
+      meetings: meetingsOn() ? { status: config.status ?? 'connected', refreshAfterSeconds: config.refreshAfterSeconds ?? 300 } : null,
+      links: { calendars: config.calendarsUrl ?? null },
+    };
+  }
 
   /** Strict-enough RFC 3339 check (the bundle uses one parser for every client time). */
   function parseTime(value) {
@@ -298,6 +320,7 @@ export function createMockServer(options = {}) {
           ...(state.config.daysOff !== null ? { daysOff: state.config.daysOff } : {}),
           ...(state.config.locale !== null ? { locale: state.config.locale } : {}),
           ...(state.config.minSupportedVersion ? { minSupportedVersion: state.config.minSupportedVersion } : {}),
+          ...meetingsOfMe(),
           ...(v110()
             ? {
                 features: {
@@ -309,6 +332,7 @@ export function createMockServer(options = {}) {
                   ...(state.config.keepNote ? { idle_keep_note: true } : {}),
                   workday: false,
                   monitoring: false,
+                  ...(meetingsOn() ? { meetings: true } : state.config.meetings !== null ? { meetings: false } : {}),
                 },
                 limits: {
                   backdate: { max_seconds: state.config.backdateMaxSeconds, clock_skew_seconds: CLOCK_SKEW_SECONDS },
@@ -371,12 +395,14 @@ export function createMockServer(options = {}) {
       }
       case 'POST timer/switch': {
         const session = auth(req, res, 'timer:write');
-        if (!session || !validSource(body, res)) return;
+        // 1.14 (Q-B22): "Track the meeting" is the only metadata a switch accepts.
+        const meeting = state.config.meetings !== null && body.metadata?.origin === 'meeting' && Object.keys(body.metadata).length === 1;
+        if (!session || !validSource(meeting ? Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'metadata')) : body, res)) return;
         if (!validTask(body)) {
           return error(res, 403, 'task_forbidden', 'You may not track time on this task.');
         }
         const entry = stopTimer(session.userId, body.note) ?? null;
-        const timer = startTimer(session.userId, body.taskId, undefined, body.source ?? session.clientType);
+        const timer = startTimer(session.userId, body.taskId, undefined, body.source ?? session.clientType, meeting ? 'meeting' : null);
         return send(res, 201, { entry, timer });
       }
       case 'POST timer/discard-idle': {
@@ -462,9 +488,46 @@ export function createMockServer(options = {}) {
         res.writeHead(200).end(`${rows.join('\n')}\n`);
         return;
       }
+      case 'GET me/meetings': {
+        const session = auth(req, res, MEETINGS_SCOPE);
+        if (!session) return;
+        if (!meetingsOn()) return error(res, 404, 'not_found', 'Unknown endpoint.', NO_STORE);
+        for (const key of url.searchParams.keys()) {
+          if (!MEETING_PARAMS.has(key)) return send(res, 400, { error: 'unknown_parameter', field: key }, NO_STORE);
+        }
+        const bound = (name, fallback) => {
+          const raw = url.searchParams.get(name);
+          if (raw === null) return fallback;
+          return RFC3339.test(raw) ? new Date(raw) : null;
+        };
+        const from = bound('from', new Date());
+        if (from === null) return send(res, 400, { error: 'invalid_datetime', field: 'from' }, NO_STORE);
+        const to = bound('to', new Date(from.getTime() + 24 * 3600_000));
+        if (to === null) return send(res, 400, { error: 'invalid_datetime', field: 'to' }, NO_STORE);
+        if (to <= from || to - from > 14 * 24 * 3600_000) return send(res, 400, { error: 'invalid_range', field: 'to' }, NO_STORE);
+        const config = state.config.meetings;
+        const meetings = (config.list ?? [])
+          .filter((item) => Date.parse(item.start) < to.getTime() && Date.parse(item.end) > from.getTime())
+          .sort((a, b) => Date.parse(a.start) - Date.parse(b.start) || a.id.localeCompare(b.id));
+        return send(
+          res,
+          200,
+          {
+            from: from.toISOString(),
+            to: to.toISOString(),
+            tz: url.searchParams.get('tz') ?? 'UTC',
+            generatedAt: new Date().toISOString(),
+            sync: { status: config.status ?? 'connected', lastSyncAt: null, refreshAfterSeconds: config.refreshAfterSeconds ?? 300 },
+            truncated: false,
+            meetings,
+          },
+          { ...NO_STORE, Vary: 'Authorization' },
+        );
+      }
       case 'POST device/code': {
+        const known = state.config.meetingsScope ? [...ALL_SCOPES, MEETINGS_SCOPE] : ALL_SCOPES;
         const scopes = body.scopes ?? [...ALL_SCOPES];
-        if (!Array.isArray(scopes) || scopes.length === 0 || scopes.some((scope) => !ALL_SCOPES.includes(scope))) {
+        if (!Array.isArray(scopes) || scopes.length === 0 || scopes.some((scope) => !known.includes(scope))) {
           return error(res, 400, 'invalid_scope', 'Unknown or empty scope list.');
         }
         const deviceCode = token();

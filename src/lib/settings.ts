@@ -5,6 +5,7 @@ import { type IdleCheckState, WATCHING } from './idleCheck';
 import { DEFAULT_NUDGE_MINUTES, EMPTY_NUDGE, NUDGE_MINUTES_CHOICES, type NudgeState, sanitizeNudge } from './nudge';
 import { DEFAULT_MIN_CALL_MINUTES, type MeetingApp, type MeetingState, MIN_CALL_CHOICES, NO_MEETING, sanitizeMeeting, sanitizeMuted, sanitizeTaskRef, type TaskRef } from './meetings';
 import { DEFAULT_LEAD_MINUTES, EMPTY_SCHEDULE, LEAD_CHOICES, sanitizeSchedule, type ScheduleState } from './schedule';
+import { DEFAULT_REMINDER_SETTINGS, MEETINGS_KEY, type ReminderSettings, sanitizeReminderSettings } from './meetingReminders';
 import type { ServerFeatures } from './serverFeatures';
 import { isTheme, type ThemePreference } from './theme';
 
@@ -22,7 +23,8 @@ export interface ConsentRecord {
 /** Bump when the information text of an opt-in feature changes, so consent is asked again. */
 export const CONSENT_TEXT_VERSION = 1;
 
-export interface Settings {
+/** Meeting reminders (contract §23.2) are `ReminderSettings`: per device, never synced. */
+export interface Settings extends ReminderSettings {
   /** Opt-in "Still there?" check, used only when the server does not say (1.9). */
   idleDetection: boolean;
   /** Own "Still there?" threshold in minutes; `null` = the organisation's (or the local default). Only lengthens it. */
@@ -137,6 +139,7 @@ export const DEFAULT_SETTINGS: Settings = {
   meetingGeneric: null,
   meetingMuted: [],
   pinExpiryNotified: null,
+  ...DEFAULT_REMINDER_SETTINGS,
 };
 
 const KEY = 'time-track-desktop';
@@ -203,6 +206,7 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
         meetingGeneric: sanitizeTaskRef(raw.settings?.meetingGeneric),
         meetingMuted: sanitizeMuted(raw.settings?.meetingMuted),
         pinExpiryNotified: typeof raw.settings?.pinExpiryNotified === 'number' ? raw.settings.pinExpiryNotified : null,
+        ...sanitizeReminderSettings(raw.settings),
       },
       meeting: sanitizeMeeting(raw.meeting),
       messages: sanitizeMessages(raw.messages),
@@ -217,7 +221,7 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
 }
 
 /** Every key this app writes to its local storage (for "Clear local data"). */
-export const LOCAL_KEYS = [KEY, `${KEY}.queue`];
+export const LOCAL_KEYS = [KEY, `${KEY}.queue`, MEETINGS_KEY];
 
 export function saveLocal(state: LocalState, storage: Storage = localStorage): void {
   storage.setItem(KEY, JSON.stringify(state));

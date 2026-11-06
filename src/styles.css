@@ -401,3 +401,10 @@ input[type='time'], input[type='date'] { font: inherit; padding: 0.25rem 0.375re
 .meeting-badge { border-color: var(--moss); color: var(--moss-deep); background: var(--mist); }
 .meeting-options { display: grid; gap: 0.375rem; }
 .meeting-muted-list li { padding: 0.125rem 0; }
+/* Meeting reminders (contract §23): Today's meetings and the custom lead time. */
+.meetings-today-list { display: grid; gap: 0.375rem; margin: 0; }
+.meeting-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.meeting-row .meeting-time { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.meeting-row .meeting-title { flex: 1 1 8rem; min-width: 0; overflow-wrap: anywhere; }
+.meeting-row.busy .meeting-title { font-style: italic; }
+#meeting-lead-custom { width: 5rem; }
