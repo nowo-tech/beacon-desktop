@@ -41,7 +41,7 @@ on:
         default: ''
       version:
         description: Version stamped on the build of this ref
-        default: '0.5.1'
+        default: '0.6.0'
       scenarios:
         description: all, or comma-separated scenario ids
         default: all
@@ -59,7 +59,7 @@ env:
   DEFAULT_OLD_RUN_ID: '41621683190'
   DEFAULT_PREV_RUN_ID: '41895956986'
   DEFAULT_NEW_RUN_ID: ''
-  DEFAULT_VERSION: '0.5.1'
+  DEFAULT_VERSION: '0.6.0'
   DEFAULT_SCENARIOS: all
 
 jobs:

@@ -129,6 +129,13 @@ and GM) and the backlog fixes. Not released yet (release freeze).
 - Dependabot waits seven days before proposing a new GitHub Actions release; the `dtolnay/rust-toolchain` pin comment
   names its commit date and the manual refresh (audit FY-D-4).
 
+### Changed
+
+- CI / release: macOS jobs are off unless the repository variable `MACOS_CI_ENABLED` is `true` (owner decision
+  2026-11-06, GitHub Actions budget). `platforms.yml` runs Rust on Windows only; `release.yml` skips `build-macos`
+  and publishes Linux and Windows without macOS entries in `stable.json`. `installer-upgrade-test.yml` defaults to
+  0.6.0.
+
 ### Fixed
 
 - **Dark theme: the antenna arcs of the "nothing pinned yet" robot are visible again.** Its white outline filled the

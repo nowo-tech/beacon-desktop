@@ -17,6 +17,8 @@ name: Release
 #   WINDOWS_RUNNER  JSON runs-on value, e.g. ["self-hosted","windows","x64","tauri-build"] (default "windows-latest")
 #   MACOS_RUNNER    JSON runs-on value, e.g. ["self-hosted","macos","tauri-build"]         (default "macos-latest")
 #   WINDOWS_BUILD / MACOS_BUILD = false skip that platform: stable.json then has no entries for it in this version.
+#   MACOS_CI_ENABLED  macOS is off unless this is 'true' (owner decision 2026-11-06, Actions budget): build-macos is
+#                   skipped, publish goes on with Linux and Windows, and stable.json has no macOS entries.
 # Self-hosted runners must be ephemeral and repo-scoped (no pull_request trigger here, so forks never reach them);
 # Linux ones need the Tauri system libraries, rustup and the AWS CLI preinstalled (the apt step runs on hosted only).
 on:
@@ -161,11 +163,12 @@ jobs:
     timeout-minutes: 45
     steps: *build-steps
 
-  # Last: macOS minutes count ×10, so it only runs after Linux and Windows succeeded (or Windows was switched off).
+  # Last: macOS minutes count ×10, so it only runs after Linux and Windows succeeded (or Windows was switched off),
+  # and only while vars.MACOS_CI_ENABLED == 'true' (off by default: skipped, never blocking publish).
   build-macos:
     needs: [prepare, build-linux, build-windows]
     if: >-
-      ${{ !cancelled() && vars.MACOS_BUILD != 'false' && needs.build-linux.result == 'success'
+      ${{ !cancelled() && vars.MACOS_CI_ENABLED == 'true' && vars.MACOS_BUILD != 'false' && needs.build-linux.result == 'success'
       && contains(fromJSON('["success","skipped"]'), needs.build-windows.result) }}
     strategy:
       matrix:
@@ -233,6 +236,8 @@ jobs:
         run: rm -rf src-tauri/target out node_modules dist
 
   # A switched-off (skipped) Windows / macOS build simply leaves its platform out of stable.json for this version.
+  # A skipped build-macos (MACOS_CI_ENABLED not 'true') does not block publishing; with no desktop-darwin artifact,
+  # stable.json gets no macOS entries.
   publish:
     needs: [prepare, build-linux, build-windows, build-macos]
     if: >-
