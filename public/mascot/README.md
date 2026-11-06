@@ -75,7 +75,7 @@ without their art.
 | Cheers | celebrate, cheer-up, thumbs, flag, music, focus, working, keep-going, progress, achievement (milestones), presentation, task-complete, finished, deadline |
 | Wellbeing | stretch, stretch-legs, water, eyes, mindfulness, rest, overtime ("take a real break") |
 | Moments | early, sunrise, coffee, lunch, moon, late-working, friday, holiday, weekend-start, shades |
-| Empty states of the list | empty-pinned (thumbtack), empty-recent (stopwatch), empty-tasks (blank clipboard), each with a `-dark` variant |
+| Empty states of the list | empty-pinned (thumbtack), empty-recent (stopwatch), empty-tasks (cheering next to a clipboard with a check mark), each with a `-dark` variant |
 
 The empty-state art (owner, 2026-11-05) was imported with `IMPORT_POSES_KEEP_DISTANCE=200` so the antenna arcs, which
 float further from the head than in the other poses, are kept. The `-dark` variants have a light outer stroke for the
@@ -88,6 +88,13 @@ sat on white (about 1.6:1) and read as one light blob. The stroke pixels nearer 
 are dropped (each stroke pixel goes to the nearest part of the art), so the arcs sit on the dark paper: at least 6:1
 against `--paper` and `--surface` of the dark theme with `--mascot-filter`, above the 3:1 of WCAG 1.4.11; the rest of the
 outline is unchanged. Re-imported with `IMPORT_POSES_KEEP_DISTANCE=200`.
+
+`empty-tasks` and `empty-tasks-dark` (2026-11-06): new owner art (the robot cheering next to a green clipboard with a
+check mark; the old clipboard art had its arc gaps filled with glow, so the dark variant read as one fan). Both come
+from that one picture (transparent, 1254 px), imported with `IMPORT_POSES_KEEP_DISTANCE=200`. The `-dark` variant is
+the same art over the usual white stroke (alpha > 50 %, 10 px disk), except the antenna arcs, which keep no stroke
+(nor does the top of the ball under them), so their green outline sits on the dark paper: at least 4.3:1 against
+`--paper` and `--surface` with `--mascot-filter` at 1x and 2x (4.8:1 at the 5th percentile), above WCAG 1.4.11's 3:1.
 
 ## Rules
 
