@@ -3,9 +3,7 @@
 All notable changes to this project are documented here ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/)).
 
-## [Unreleased]
-
-Likely 0.5.1.
+## [0.5.1] - 2026-11-06
 
 ### Security
 
@@ -91,6 +89,8 @@ Likely 0.5.1.
   Two new scenarios: an entry disabled in Task Manager (stays disabled) and another vendor's "TimeTrack" entries
   (left untouched).
 - README → *Two TimeTrack icons in the tray*: how to check and remove duplicates by hand on Windows.
+- The `@tauri-apps/plugin-autostart` npm package is removed (Settings uses the app commands `set_autostart` /
+  `get_autostart`); the Rust plugin stays for macOS and Linux.
 
 ## [0.5.0] - 2026-11-05
 
