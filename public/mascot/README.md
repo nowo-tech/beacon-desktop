@@ -79,6 +79,12 @@ dark theme: `empty-recent-dark` is the owner's outlined alternate, `empty-pinned
 white stroke to the same art (ImageMagick `-morphology Dilate Disk:10` on the alpha, white, under the picture). They
 carry meaning next to a short line, so they have translated alt text.
 
+`empty-pinned-dark` (after 0.5.1): the stroke filled the narrow gaps between the three antenna arcs, so the pale green arcs
+sat on white (about 1.6:1) and read as one light blob. The stroke pixels nearer to an arc than to the rest of the robot
+are dropped (each stroke pixel goes to the nearest part of the art), so the arcs sit on the dark paper: at least 6:1
+against `--paper` and `--surface` of the dark theme with `--mascot-filter`, above the 3:1 of WCAG 1.4.11; the rest of the
+outline is unchanged. Re-imported with `IMPORT_POSES_KEEP_DISTANCE=200`.
+
 ## Rules
 
 - Decorative by default: `alt=""` and `aria-hidden="true"`; the heading next to the picture carries the meaning. Only

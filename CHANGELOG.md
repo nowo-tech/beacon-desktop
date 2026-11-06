@@ -3,6 +3,14 @@
 All notable changes to this project are documented here ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/)).
 
+## [Unreleased]
+
+### Fixed
+
+- **Dark theme: the antenna arcs of the "nothing pinned yet" robot are visible again.** Its white outline filled the
+  gaps between the arcs, so they blurred into one pale shape; the arcs now sit on the dark background (at least 6:1,
+  WCAG 1.4.11 asks for 3:1) and the rest of the outline is unchanged.
+
 ## [0.5.1] - 2026-11-06
 
 ### Security
