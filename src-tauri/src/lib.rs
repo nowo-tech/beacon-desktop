@@ -173,11 +173,6 @@ pub(crate) fn caller_allowed(caller: &str, label: &str) -> Result<(), String> {
     }
 }
 
-/// True when a session token is stored (`beacon_bind` then refuses to switch servers).
-pub(crate) fn has_session_token() -> bool {
-    secret::has_token(&secret::Keychain)
-}
-
 /// Seconds since the last keyboard / mouse input, read locally from the OS. Never sent anywhere.
 /// Returns 0 when the platform cannot tell (e.g. some Wayland sessions): idle detection then never triggers.
 #[tauri::command]
@@ -502,9 +497,9 @@ fn validate_server(server: &str) -> Result<url::Url, String> {
 }
 
 /// The updater commands talk to the bound server only (net.rs, FY-L1): `server` comes from the webview.
-fn bound_server(bound: &net::BoundServer, server: &str) -> Result<url::Url, String> {
+fn bound_server(session: &secret::Session, server: &str) -> Result<url::Url, String> {
     let url = validate_server(server)?;
-    net::require_origin(bound.origin().as_ref(), &url)?;
+    net::require_origin(session.bound_origin().as_ref(), &url)?;
     Ok(url)
 }
 
@@ -573,11 +568,13 @@ async fn check_update(app: AppHandle, window: tauri::Window, server: String) -> 
         return UpdateCheck::Disabled;
     }
     // `State` borrows the request: an async command returning a plain value takes the state from the app handle.
-    if let Err(message) = bound_server(&app.state::<net::BoundServer>(), &server) {
-        return UpdateCheck::Error { message };
-    }
-    // The token never crosses to the webview: Rust reads it here (secret.rs).
-    let authorization = match session_authorization(&secret::Keychain) {
+    let session = app.state::<secret::Session>();
+    let server_url = match bound_server(&session, &server) {
+        Ok(url) => url,
+        Err(message) => return UpdateCheck::Error { message },
+    };
+    // The token never crosses to the webview: Rust reads it here, for its own origin only (secret.rs).
+    let authorization = match session_authorization(&session, &server_url) {
         Ok(Some(value)) => value,
         Ok(None) => return UpdateCheck::Unauthorized,
         Err(message) => return UpdateCheck::Error { message },
@@ -631,11 +628,16 @@ async fn check_update(app: AppHandle, window: tauri::Window, server: String) -> 
     }
 }
 
-/// The `Authorization` value of the stored session (`None`: signed out). Errors never quote the token.
+/// The `Authorization` value of the stored session for `server` (`None`: signed out, or the token belongs to another
+/// origin). Errors never quote the token.
 fn session_authorization(
-    store: &dyn secret::TokenStore,
+    session: &secret::Session,
+    server: &url::Url,
 ) -> Result<Option<reqwest::header::HeaderValue>, String> {
-    store.get()?.map(|token| secret::bearer(&token)).transpose()
+    Ok(match session.authorization_for(server)? {
+        secret::Authorization::Bearer(value) => Some(value),
+        secret::Authorization::None => None,
+    })
 }
 
 /// Turns the updater's chunk callbacks into at most ~100 `update-progress` events (one per percent, or per MiB when
@@ -676,16 +678,16 @@ impl ProgressThrottle {
 async fn install_update(
     app: AppHandle,
     window: tauri::Window,
-    bound: tauri::State<'_, net::BoundServer>,
+    session: tauri::State<'_, secret::Session>,
     server: String,
 ) -> Result<(), String> {
     only_from(&window, "main")?;
     if store_channel() {
         return Err("Updates come from the Microsoft Store.".into());
     }
-    let server_url = bound_server(&bound, &server)?;
-    let authorization =
-        session_authorization(&secret::Keychain)?.ok_or_else(|| "Not connected.".to_string())?;
+    let server_url = bound_server(&session, &server)?;
+    let authorization = session_authorization(&session, &server_url)?
+        .ok_or_else(|| "Not connected.".to_string())?;
     let Some(pubkey) = updater_pubkey(&app) else {
         return Err("This build cannot verify updates (no updater key).".into());
     };
@@ -1076,7 +1078,7 @@ pub fn run() {
             app.manage(HeartbeatState(Mutex::new(heartbeat::Heartbeat::new())));
             app.manage(MainFocus::default());
             app.manage(prompt::PromptState::default());
-            app.manage(net::BoundServer::default());
+            app.manage(secret::Session::new(Box::new(secret::Keychain)));
             // "Open Beacon in" lives on this side (browser.json in the app's config folder), see browser.rs.
             browser::manage(app.handle());
             create_main_window(app.handle())?;
@@ -1123,6 +1125,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             secret::secret_status,
+            secret::sign_in_begin,
             secret::secret_delete,
             idle_seconds,
             set_tray_status,
@@ -1506,19 +1509,26 @@ mod tests {
     }
 
     #[test]
-    fn updater_authorization_comes_from_the_store_and_never_echoes_the_token() {
-        use secret::tests::{BrokenStore, MemoryStore};
-        let value = session_authorization(&MemoryStore::with("secret-token"))
-            .unwrap()
-            .unwrap();
+    fn updater_authorization_comes_from_the_store_for_its_origin_only() {
+        use secret::tests::{session, MemoryStore};
+        let a = url::Url::parse("https://beacon.a.example").unwrap();
+        let b = url::Url::parse("https://beacon.b.example").unwrap();
+        let signed_in = session(&MemoryStore::with(a.as_str(), "secret-token"));
+        let value = session_authorization(&signed_in, &a).unwrap().unwrap();
         assert_eq!(value.to_str().unwrap(), "Bearer secret-token");
         assert!(value.is_sensitive());
-        assert!(session_authorization(&MemoryStore::default())
+        assert!(session_authorization(&signed_in, &b).unwrap().is_none());
+        assert!(session_authorization(&session(&MemoryStore::default()), &a)
             .unwrap()
             .is_none());
+        let bad = session(&MemoryStore::with(a.as_str(), "secret-token\r\n"));
+        let locked = MemoryStore::with(a.as_str(), "secret-token");
+        locked
+            .fail_read
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         for error in [
-            session_authorization(&MemoryStore::with("secret-token\r\n")).unwrap_err(),
-            session_authorization(&BrokenStore).unwrap_err(),
+            session_authorization(&bad, &a).unwrap_err(),
+            session_authorization(&session(&locked), &a).unwrap_err(),
         ] {
             assert!(!error.contains("secret-token"), "{error}");
         }
@@ -1526,28 +1536,29 @@ mod tests {
 
     #[test]
     fn no_command_returns_the_session_token() {
-        // secret_get / secret_set (0.5.1 and earlier) are gone: the webview can only ask whether a token is stored
-        // and delete it (secret.rs).
+        // secret_get / secret_set (0.5.1 and earlier) are gone: the webview can only ask whether a token is stored,
+        // start a sign-in and delete the token (secret.rs).
         for gone in ["secret_get", "secret_set"] {
             assert!(!APP_COMMANDS.contains(&gone), "{gone}");
         }
         assert!(MAIN_COMMANDS.contains(&"secret_status"));
+        assert!(MAIN_COMMANDS.contains(&"sign_in_begin"));
         assert!(MAIN_COMMANDS.contains(&"secret_delete"));
         let source = include_str!("secret.rs");
         let status = source.find("pub fn secret_status").unwrap();
-        assert!(source[status..]
-            .starts_with("pub fn secret_status(window: tauri::Window) -> Result<bool, String>"));
+        let signature = &source[status..status + source[status..].find('{').unwrap()];
+        assert!(
+            signature.ends_with("-> Result<bool, String> "),
+            "{signature}"
+        );
     }
 
     #[test]
     fn updater_commands_need_the_bound_server() {
-        let bound = net::BoundServer::default();
+        let bound = secret::tests::session(&secret::tests::MemoryStore::default());
         assert!(bound_server(&bound, "https://beacon.example.com").is_err());
         bound
-            .bind(
-                &url::Url::parse("https://beacon.example.com").unwrap(),
-                false,
-            )
+            .bind(&url::Url::parse("https://beacon.example.com").unwrap())
             .unwrap();
         assert!(bound_server(&bound, "https://beacon.example.com/").is_ok());
         assert!(bound_server(&bound, "https://beacon.example.com:8443").is_err());

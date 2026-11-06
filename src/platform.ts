@@ -198,6 +198,11 @@ export interface Platform {
    * start-up. Requests to any other origin are refused; switching servers needs `secretDelete` first.
    */
   bindServer(server: string): Promise<void>;
+  /**
+   * Starts a sign-in to `server` (Rust `sign_in_begin`): binds it like `bindServer` and lets the host keep the token
+   * of the sign-in answer that follows. Rejects while a token is stored (`secretDelete` first).
+   */
+  beginSignIn(server: string): Promise<void>;
   appVersion(): Promise<string>;
   hostName(): Promise<string>;
   /**
@@ -352,6 +357,7 @@ export interface BrowserHooks {
 
 export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o) => globalThis.fetch(i, o)): Platform & { hooks: BrowserHooks } {
   let secret: string | null = null;
+  let secretOrigin: string | null = null;
   let autostart = false;
   const shortcutHandlers: (() => void)[] = [];
   const resumeHandlers: (() => void)[] = [];
@@ -434,15 +440,25 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     appVersion: async () => version,
     hostName: async () => 'Browser',
     secretGet: async () => secret,
+    // Same rules as the Rust session (src-tauri/src/secret.rs): a stored token binds only its own origin.
     bindServer: async (server) => {
-      if (secret !== null && hooks.boundServer !== null && new URL(hooks.boundServer).origin !== new URL(server).origin) {
+      if (secret !== null && secretOrigin !== null && secretOrigin !== new URL(server).origin) {
         throw new Error('signed in to another server: sign out first');
       }
+      if (secret !== null && secretOrigin === null) secretOrigin = new URL(server).origin;
       hooks.boundServer = server;
     },
-    secretSet: async (token) => void (secret = token),
+    beginSignIn: async (server) => {
+      if (secret !== null) throw new Error('already signed in: sign out first');
+      hooks.boundServer = server;
+    },
+    secretSet: async (token) => {
+      secret = token;
+      secretOrigin = hooks.boundServer === null ? null : new URL(hooks.boundServer).origin;
+    },
     secretDelete: async () => {
       secret = null;
+      secretOrigin = null;
       hooks.boundServer = null;
     },
     idleSeconds: async () => hooks.idleSeconds,

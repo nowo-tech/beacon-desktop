@@ -7,12 +7,13 @@
 //! anywhere else (audit FY-L1). Plain `http://` is accepted for loopback development servers in debug builds only.
 //!
 //! The session token never crosses to the webview (secret.rs): the UI marks a request as authenticated (`auth`) and
-//! Rust sets `Authorization` from the OS keychain; an `Authorization` header from the UI is dropped. A 2xx answer to a
-//! sign-in route has its token stored in the keychain and replaced by `secret::SESSION_HANDLE` before the UI sees it.
+//! Rust sets `Authorization` from the OS keychain, only for the token's own origin; an `Authorization` header from the
+//! UI is dropped. A 2xx answer to a sign-in the app started has its token stored in the keychain and replaced by
+//! `secret::SESSION_HANDLE`; every other JSON answer has its token fields scrubbed before the UI sees it.
 //!
 //! No redirects (the Bearer token stays bound to the configured server), no cookies, no request or response logging.
 
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -20,7 +21,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 
 use crate::pinning::{self, PinSet, PinStatus, UNTRUSTED_MARKER};
-use crate::secret::{self, TokenStore};
+use crate::secret::{self, Authorization, Session};
 
 /// Largest response body handed to the UI (exports included).
 const MAX_BODY: usize = 32 * 1024 * 1024;
@@ -79,34 +80,6 @@ pub fn validate_url_with(value: &str, allow_loopback_http: bool) -> Result<url::
 
 /// Refusal text when a request targets another origin than the bound server.
 pub const OTHER_ORIGIN: &str = "request outside the signed-in Beacon server";
-
-/// The origin of the Beacon server the app is signed in to (or signing in to). Held in Rust, managed by Tauri.
-#[derive(Default)]
-pub struct BoundServer(Mutex<Option<url::Origin>>);
-
-impl BoundServer {
-    pub fn origin(&self) -> Option<url::Origin> {
-        self.0.lock().ok().and_then(|bound| bound.clone())
-    }
-
-    /// Binds `server`. Rebinding to another origin while a session token is stored is refused: the UI signs out
-    /// first (`secret_delete` clears the binding).
-    pub fn bind(&self, server: &url::Url, signed_in: bool) -> Result<(), String> {
-        let mut bound = self.0.lock().map_err(|_| "state unavailable")?;
-        let origin = server.origin();
-        if signed_in && bound.as_ref().is_some_and(|current| *current != origin) {
-            return Err("signed in to another server: sign out first".into());
-        }
-        *bound = Some(origin);
-        Ok(())
-    }
-
-    pub fn clear(&self) {
-        if let Ok(mut bound) = self.0.lock() {
-            *bound = None;
-        }
-    }
-}
 
 /// `url` must have exactly the bound origin (scheme, host, port); nothing is sent before a server is bound.
 pub fn require_origin(bound: Option<&url::Origin>, url: &url::Url) -> Result<(), String> {
@@ -201,17 +174,21 @@ pub struct FetchResponse {
     pub body: String,
 }
 
-/// Sends one request with `client`, only to the `bound` server origin (so the `Authorization` header never reaches
-/// another origin). With `request.auth`, the token comes from `store`; a sign-in answer is stored there and its token
-/// replaced (secret.rs). Errors are strings for the UI (see [`describe_error`]) and never carry the token.
+/// Sends one request with `client`, only to the origin bound in `session` (so the `Authorization` header never
+/// reaches another origin). With `request.auth`, the token comes from `session`, and only for its own origin; a
+/// sign-in answer is captured there (secret.rs) and every JSON answer is scrubbed of token fields. Errors are strings
+/// for the UI (see [`describe_error`]) and never carry the token.
 pub async fn send(
     client: &reqwest::Client,
     request: FetchRequest,
-    bound: Option<&url::Origin>,
-    store: &dyn TokenStore,
+    session: &Session,
 ) -> Result<FetchResponse, String> {
     let url = validate_url(&request.url)?;
-    require_origin(bound, &url)?;
+    require_origin(session.bound_origin().as_ref(), &url)?;
+    // `/api/time-track/%6Cogin` would reach the sign-in route unrecognised (GM-L1).
+    if secret::obfuscated_path(&url) {
+        return Err("invalid URL".into());
+    }
     let method = match request.method.to_ascii_uppercase().as_str() {
         "GET" => reqwest::Method::GET,
         "POST" => reqwest::Method::POST,
@@ -228,14 +205,15 @@ pub async fn send(
         headers.insert(name, value);
     }
     if request.auth {
-        match store.get()? {
-            Some(token) => {
-                headers.insert(AUTHORIZATION, secret::bearer(&token)?);
+        match session.authorization_for(&url)? {
+            Authorization::Bearer(value) => {
+                headers.insert(AUTHORIZATION, value);
             }
-            None => return Ok(not_signed_in()),
+            Authorization::None => return Ok(not_signed_in()),
         }
     }
     let sign_in = secret::is_sign_in(&method, &url);
+    let target = url.clone();
     let mut builder = client.request(method, url).headers(headers);
     if let Some(body) = request.body {
         builder = builder.body(body);
@@ -254,9 +232,11 @@ pub async fn send(
         }
         body.extend_from_slice(&chunk);
     }
-    if sign_in && status.is_success() {
-        body = secret::capture_token(&body, store)?;
-    }
+    let body = if sign_in && status.is_success() {
+        session.capture(&target, &body)?
+    } else {
+        secret::scrub(body)
+    };
     Ok(FetchResponse {
         status: status.as_u16(),
         status_text: status.canonical_reason().unwrap_or_default().to_string(),
@@ -279,24 +259,24 @@ fn not_signed_in() -> FetchResponse {
 #[tauri::command]
 pub async fn beacon_fetch(
     window: tauri::Window,
-    bound: tauri::State<'_, BoundServer>,
+    session: tauri::State<'_, Session>,
     request: FetchRequest,
 ) -> Result<FetchResponse, String> {
     crate::only_from(&window, "main")?;
-    let origin = bound.origin();
-    send(client(), request, origin.as_ref(), &secret::Keychain).await
+    send(client(), request, &session).await
 }
 
-/// Binds the Beacon server the UI signs in to (before the sign-in requests) or is signed in to (at start-up).
+/// Binds the Beacon server the UI is signed in to (at start-up). While a token is stored, only the origin that issued
+/// it can be bound (secret.rs, GM-M1); a sign-in binds with `sign_in_begin`.
 #[tauri::command]
 pub fn beacon_bind(
     window: tauri::Window,
-    bound: tauri::State<'_, BoundServer>,
+    session: tauri::State<'_, Session>,
     server: String,
 ) -> Result<(), String> {
     crate::only_from(&window, "main")?;
     let url = validate_url(&server)?;
-    bound.bind(&url, crate::has_session_token())
+    session.bind(&url)
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -338,7 +318,7 @@ mod tests {
     //! End to end: a local TLS mock server with a CA made at test time, reached through the real client.
     use super::*;
     use crate::pinning::tests::{pin_set, TestCa};
-    use crate::secret::tests::{BrokenStore, MemoryStore};
+    use crate::secret::tests::{session, MemoryStore};
     use crate::secret::SESSION_HANDLE;
     use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
     use rustls::RootCertStore;
@@ -412,11 +392,26 @@ mod tests {
             .unwrap()
     }
 
-    /// The origin the UI bound (`beacon_bind`) for the mock server.
-    fn bound(port: u16) -> url::Origin {
-        url::Url::parse(&format!("https://{HOST}:{port}/"))
+    /// The origin of the mock server.
+    fn origin_of(port: u16) -> String {
+        format!("https://{HOST}:{port}")
+    }
+
+    /// Signed in to `origin` (token `secret-token`, as Rust keeps it) and bound to it (`beacon_bind`).
+    fn signed_in_to(origin: &str) -> Session {
+        let session = session(&MemoryStore::with(origin, "secret-token"));
+        session.bind(&url::Url::parse(origin).unwrap()).unwrap();
+        session
+    }
+
+    fn signed_in(port: u16) -> Session {
+        signed_in_to(&origin_of(port))
+    }
+
+    fn decode(body: String) -> Vec<u8> {
+        base64::engine::general_purpose::STANDARD
+            .decode(body)
             .unwrap()
-            .origin()
     }
 
     /// An authenticated request; the UI's own `Authorization` (anything a script could set) is dropped.
@@ -434,11 +429,6 @@ mod tests {
         }
     }
 
-    /// The keychain of the tests: the token Rust sends.
-    fn store() -> MemoryStore {
-        MemoryStore::with("secret-token")
-    }
-
     #[tokio::test]
     async fn pinned_server_answers() {
         let ca = TestCa::new("E2E Root");
@@ -449,7 +439,7 @@ mod tests {
             pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
             port,
         );
-        let response = send(&client, request(port), Some(&bound(port)), &store())
+        let response = send(&client, request(port), &signed_in(port))
             .await
             .unwrap();
         assert_eq!(response.status, 200);
@@ -490,7 +480,7 @@ mod tests {
             pin_set(&[HOST], &[&official.spki_pin], "2999-01-01"),
             port,
         );
-        let error = send(&client, request(port), Some(&bound(port)), &store())
+        let error = send(&client, request(port), &signed_in(port))
             .await
             .unwrap_err();
         assert_eq!(
@@ -517,7 +507,7 @@ mod tests {
             port,
         );
         assert_eq!(
-            send(&client, request(port), Some(&bound(port)), &store())
+            send(&client, request(port), &signed_in(port))
                 .await
                 .unwrap()
                 .status,
@@ -541,7 +531,7 @@ mod tests {
             port,
         );
         assert_eq!(
-            send(&client, request(port), Some(&bound(port)), &store())
+            send(&client, request(port), &signed_in(port))
                 .await
                 .unwrap()
                 .status,
@@ -560,7 +550,7 @@ mod tests {
             pin_set(&[HOST], &[&trusted.spki_pin], "2999-01-01"),
             port,
         );
-        let error = send(&client, request(port), Some(&bound(port)), &store())
+        let error = send(&client, request(port), &signed_in(port))
             .await
             .unwrap_err();
         assert!(!error.contains(UNTRUSTED_MARKER), "{error}");
@@ -570,9 +560,7 @@ mod tests {
     #[tokio::test]
     async fn requests_are_validated_before_sending() {
         let client = build_client(pinning::shipped_client_config()).unwrap();
-        let example = url::Url::parse("https://beacon.example.com")
-            .unwrap()
-            .origin();
+        let example = signed_in_to("https://beacon.example.com");
         for (url, method) in [
             ("http://beacon.example.com/api", "GET"),
             ("https://user:pw@beacon.example.com/api", "GET"),
@@ -587,9 +575,7 @@ mod tests {
                 auth: true,
             };
             assert!(
-                send(&client, request, Some(&example), &store())
-                    .await
-                    .is_err(),
+                send(&client, request, &example).await.is_err(),
                 "{url} {method}"
             );
         }
@@ -600,9 +586,7 @@ mod tests {
             body: Some("{}".into()),
             auth: false,
         };
-        assert!(send(&client, bad_header, Some(&example), &store())
-            .await
-            .is_err());
+        assert!(send(&client, bad_header, &example).await.is_err());
     }
 
     #[tokio::test]
@@ -616,25 +600,20 @@ mod tests {
             pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
             port,
         );
-        // Bound to another host, to the same host on another port, to http of the same host, or to nothing.
-        let other_host = url::Url::parse("https://beacon.elsewhere.example")
-            .unwrap()
-            .origin();
-        let other_port = url::Url::parse(&format!("https://{HOST}:{}/", port.wrapping_add(1)))
-            .unwrap()
-            .origin();
-        let other_scheme = url::Url::parse(&format!("http://{HOST}:{port}/"))
-            .unwrap()
-            .origin();
-        for origin in [Some(&other_host), Some(&other_port), Some(&other_scheme)] {
-            let error = send(&client, request(port), origin, &store())
+        // Signed in to (and bound to) another host, the same host on another port, http of the same host; or
+        // nothing bound.
+        for other in [
+            "https://beacon.elsewhere.example".to_string(),
+            format!("https://{HOST}:{}", port.wrapping_add(1)),
+            format!("http://{HOST}:{port}"),
+        ] {
+            let error = send(&client, request(port), &signed_in_to(&other))
                 .await
                 .unwrap_err();
-            assert_eq!(error, OTHER_ORIGIN);
+            assert_eq!(error, OTHER_ORIGIN, "{other}");
         }
-        let error = send(&client, request(port), None, &store())
-            .await
-            .unwrap_err();
+        let nothing = session(&MemoryStore::with(&origin_of(port), "secret-token"));
+        let error = send(&client, request(port), &nothing).await.unwrap_err();
         assert!(error.contains("sign in"), "{error}");
         // Nothing (no Authorization header) reached the server.
         assert!(seen
@@ -652,18 +631,13 @@ mod tests {
             pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
             port,
         );
-        let response = send(
-            &client,
-            request(port),
-            Some(&bound(port)),
-            &MemoryStore::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(response.status, 401);
-        let body = base64::engine::general_purpose::STANDARD
-            .decode(response.body)
+        let signed_out = session(&MemoryStore::default());
+        signed_out
+            .bind(&url::Url::parse(&origin_of(port)).unwrap())
             .unwrap();
+        let response = send(&client, request(port), &signed_out).await.unwrap();
+        assert_eq!(response.status, 401);
+        let body = decode(response.body);
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"], "invalid_token");
         assert!(seen
@@ -685,48 +659,139 @@ mod tests {
             auth: false,
             ..request(port)
         };
-        let response = send(&client, request, Some(&bound(port)), &store())
-            .await
-            .unwrap();
+        let response = send(&client, request, &signed_in(port)).await.unwrap();
         assert_eq!(response.status, 200);
         let head = seen.recv().unwrap().to_ascii_lowercase();
         assert!(!head.contains("authorization"), "{head}");
     }
 
+    /// POST to a sign-in route of the mock server.
+    fn sign_in_request(port: u16, path: &str) -> FetchRequest {
+        FetchRequest {
+            url: format!("https://{HOST}:{port}{path}"),
+            method: "POST".into(),
+            headers: vec![("Content-Type".into(), "application/json".into())],
+            body: Some(r#"{"deviceCode":"d"}"#.into()),
+            auth: false,
+        }
+    }
+
+    const SIGN_IN_ANSWER: &str =
+        r#"{"token":"fresh-token","expiresAt":"2027-01-01T00:00:00Z","scopes":["timer:read"]}"#;
+
     #[tokio::test]
-    async fn sign_in_answers_keep_the_token_in_rust() {
+    async fn a_started_sign_in_keeps_the_token_in_rust_bound_to_its_origin() {
         let ca = TestCa::new("E2E Root");
         let (leaf, key) = ca.leaf(HOST);
-        let (port, _) = mock_server_with(
-            vec![leaf],
-            &key,
-            1,
-            r#"{"token":"fresh-token","expiresAt":"2027-01-01T00:00:00Z","scopes":["timer:read"]}"#,
-        );
+        let (port, seen) = mock_server_with(vec![leaf], &key, 2, SIGN_IN_ANSWER);
         let client = client_for(
             ca.roots(),
             pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
             port,
         );
         let keychain = MemoryStore::default();
-        let request = FetchRequest {
-            url: format!("https://{HOST}:{port}/api/time-track/device/token"),
-            method: "POST".into(),
-            headers: vec![("Content-Type".into(), "application/json".into())],
-            body: Some(r#"{"deviceCode":"d"}"#.into()),
-            auth: false,
-        };
-        let response = send(&client, request, Some(&bound(port)), &keychain)
-            .await
+        let session = session(&keychain);
+        session
+            .begin_sign_in(&url::Url::parse(&origin_of(port)).unwrap())
             .unwrap();
-        assert_eq!(keychain.token().as_deref(), Some("fresh-token"));
-        let body = base64::engine::general_purpose::STANDARD
-            .decode(response.body)
-            .unwrap();
+        let response = send(
+            &client,
+            sign_in_request(port, "/api/time-track/device/token"),
+            &session,
+        )
+        .await
+        .unwrap();
+        let stored = keychain.stored().unwrap();
+        assert_eq!(stored.token, "fresh-token");
+        assert_eq!(stored.origin.as_deref(), Some(origin_of(port).as_str()));
+        let body = decode(response.body);
         assert!(!String::from_utf8_lossy(&body).contains("fresh-token"));
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["token"], SESSION_HANDLE);
         assert_eq!(json["scopes"][0], "timer:read");
+        // The next authenticated call carries the captured token.
+        let _ = seen.recv().unwrap();
+        send(&client, request(port), &session).await.unwrap();
+        let head = seen.recv().unwrap().to_ascii_lowercase();
+        assert!(head.contains("authorization: bearer fresh-token"), "{head}");
+    }
+
+    // GM-L2, end to end: a sign-in answer the app did not start is never stored, and never shown.
+    #[tokio::test]
+    async fn an_unstarted_sign_in_is_neither_stored_nor_shown() {
+        let ca = TestCa::new("E2E Root");
+        let (leaf, key) = ca.leaf(HOST);
+        let (port, _) = mock_server_with(vec![leaf], &key, 1, SIGN_IN_ANSWER);
+        let client = client_for(
+            ca.roots(),
+            pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
+            port,
+        );
+        // Signed in already (a script tries to swap in its own account).
+        let keychain = MemoryStore::with(&origin_of(port), "secret-token");
+        let session = session(&keychain);
+        session
+            .bind(&url::Url::parse(&origin_of(port)).unwrap())
+            .unwrap();
+        let response = send(
+            &client,
+            sign_in_request(port, "/api/time-track/login"),
+            &session,
+        )
+        .await
+        .unwrap();
+        assert_eq!(keychain.stored().unwrap().token, "secret-token");
+        let body = String::from_utf8(decode(response.body)).unwrap();
+        assert!(!body.contains("fresh-token"), "{body}");
+    }
+
+    // GM-L1 / GM-I1, end to end.
+    #[tokio::test]
+    async fn encoded_sign_in_paths_are_refused_and_every_answer_is_scrubbed() {
+        let ca = TestCa::new("E2E Root");
+        let (leaf, key) = ca.leaf(HOST);
+        let (port, seen) = mock_server_with(
+            vec![leaf],
+            &key,
+            1,
+            r#"{"identifier":"ana","data":{"access_token":"fresh-token"},"token":"fresh-token"}"#,
+        );
+        let client = client_for(
+            ca.roots(),
+            pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
+            port,
+        );
+        let session = session(&MemoryStore::default());
+        session
+            .begin_sign_in(&url::Url::parse(&origin_of(port)).unwrap())
+            .unwrap();
+        for path in [
+            "/api/time-track/%6Cogin",
+            "/api/time-track/device/to%6Ben",
+            "/api/time-track/device%2Ftoken",
+        ] {
+            let error = send(&client, sign_in_request(port, path), &session)
+                .await
+                .unwrap_err();
+            assert_eq!(error, "invalid URL", "{path}");
+        }
+        assert!(seen
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err());
+        // Any other answer with token fields: scrubbed, whatever the route.
+        let response = send(
+            &client,
+            FetchRequest {
+                auth: false,
+                ..request(port)
+            },
+            &session,
+        )
+        .await
+        .unwrap();
+        let body = String::from_utf8(decode(response.body)).unwrap();
+        assert!(!body.contains("fresh-token"), "{body}");
+        assert!(body.contains("ana"), "{body}");
     }
 
     #[tokio::test]
@@ -737,7 +802,6 @@ mod tests {
         let port = closed.local_addr().unwrap().port();
         drop(closed);
         let url = format!("http://127.0.0.1:{port}/api/time-track/me");
-        let origin = url::Url::parse(&url).unwrap().origin();
         let request = |url: &str| FetchRequest {
             url: url.into(),
             method: "GET".into(),
@@ -747,29 +811,28 @@ mod tests {
         };
         let mut errors = vec![];
         if ALLOW_LOOPBACK_HTTP {
+            let loopback = format!("http://127.0.0.1:{port}");
             errors.push(
-                send(&client, request(&url), Some(&origin), &store())
+                send(&client, request(&url), &signed_in_to(&loopback))
                     .await
                     .unwrap_err(),
             );
         }
-        // A stored token that is not a valid header value, a keychain that fails, another origin, no origin.
-        let example = url::Url::parse("https://beacon.example.com").unwrap();
-        for (store, bound) in [
-            (
-                &MemoryStore::with("secret-token\nX-Injected: 1") as &dyn TokenStore,
-                Some(example.origin()),
-            ),
-            (&BrokenStore as &dyn TokenStore, Some(example.origin())),
-            (&store() as &dyn TokenStore, Some(origin.clone())),
-            (&store() as &dyn TokenStore, None),
+        // A stored token that is not a valid header value, another origin, no origin.
+        let example = "https://beacon.example.com";
+        let bad = session(&MemoryStore::with(example, "secret-token\nX-Injected: 1"));
+        bad.bind(&url::Url::parse(example).unwrap()).unwrap();
+        let unbound = session(&MemoryStore::with(example, "secret-token"));
+        for session in [
+            &bad,
+            &signed_in_to("https://beacon.other.example"),
+            &unbound,
         ] {
             errors.push(
                 send(
                     &client,
-                    request("https://beacon.example.com/api/time-track/me"),
-                    bound.as_ref(),
-                    store,
+                    request(&format!("{example}/api/time-track/me")),
+                    session,
                 )
                 .await
                 .unwrap_err(),
@@ -783,28 +846,16 @@ mod tests {
 
     #[test]
     fn origin_binding_rules() {
-        let server = BoundServer::default();
         let a = url::Url::parse("https://beacon.a.example/").unwrap();
         let a_path = url::Url::parse("https://beacon.a.example:443/api/time-track/me").unwrap();
         let b = url::Url::parse("https://beacon.b.example/").unwrap();
-        assert!(require_origin(server.origin().as_ref(), &a).is_err());
-        // Signing in: any server may be bound while no token is stored.
-        server.bind(&a, false).unwrap();
-        server.bind(&b, false).unwrap();
-        server.bind(&a, false).unwrap();
-        assert!(require_origin(server.origin().as_ref(), &a_path).is_ok());
+        assert!(require_origin(None, &a).is_err());
+        assert!(require_origin(Some(&a.origin()), &a_path).is_ok());
         assert_eq!(
-            require_origin(server.origin().as_ref(), &b),
+            require_origin(Some(&a.origin()), &b),
             Err(OTHER_ORIGIN.to_string())
         );
-        // Signed in: the same server again is fine (start-up), another one is refused until sign-out.
-        server.bind(&a, true).unwrap();
-        assert!(server.bind(&b, true).is_err());
-        assert_eq!(server.origin(), Some(a.origin()));
-        server.clear();
-        assert_eq!(server.origin(), None);
-        server.bind(&b, true).unwrap();
-        assert!(require_origin(server.origin().as_ref(), &b).is_ok());
+        // Binding rules with a stored token: secret.rs tests (GM-M1).
     }
 
     #[test]

@@ -1,6 +1,7 @@
 // The session token stays in Rust (src-tauri/src/secret.rs): the Tauri bridge (src/platform-tauri.ts) never asks for
-// it, never sends it and only ever holds SESSION_HANDLE. `invoke` is mocked with a fake Rust side that follows the
-// same rules as net.rs / secret.rs, backed by the mock server.
+// it, never sends it and only ever holds SESSION_HANDLE. `invoke` is mocked with a simplified fake Rust side backed by
+// the mock server. This covers the bridge and the UI's call order only: the Rust rules themselves (origin binding,
+// capture, scrubbing, sign-out) are tested in Rust (secret.rs / net.rs tests), not by this JS stand-in.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TimeTrackApi } from '../../src/api/client';
 import { runDeviceFlow } from '../../src/lib/deviceFlow';
@@ -34,8 +35,13 @@ const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
 
 /** The Rust side of net.rs / secret.rs over the mock server: keychain in `keychain.token`. */
 function fakeRust(keychain: { token: string | null }) {
+  let signingIn = false;
   return async (command: string, args: Record<string, unknown>): Promise<unknown> => {
     switch (command) {
+      case 'sign_in_begin':
+        if (keychain.token !== null) throw 'already signed in: sign out first';
+        signingIn = true;
+        return undefined;
       case 'secret_status':
         return keychain.token !== null;
       case 'secret_delete':
@@ -54,9 +60,12 @@ function fakeRust(keychain: { token: string | null }) {
         let text = await response.text();
         if (request.method === 'POST' && /\/api\/time-track\/(login|device\/token)$/.test(new URL(request.url).pathname) && response.ok) {
           const json = JSON.parse(text) as { token?: string };
-          if (typeof json.token === 'string' && json.token !== '') {
+          if (signingIn && keychain.token === null && typeof json.token === 'string' && json.token !== '') {
             keychain.token = json.token;
             json.token = SESSION_HANDLE;
+            signingIn = false;
+          } else {
+            delete json.token;
           }
           text = JSON.stringify(json);
         }
@@ -131,6 +140,7 @@ describe('Tauri bridge: the session token never reaches the webview', () => {
       rust = fakeRust(keychain);
       const platform = tauriPlatform();
       const api = new TimeTrackApi({ baseUrl: env.url, source: 'desktop', fetchImpl: platform.fetch });
+      await platform.beginSignIn(env.url);
       const login = await runDeviceFlow(api, {
         clientName: 'TimeTrack desktop (test)',
         sleep: () => new Promise((resolve) => setTimeout(resolve, 5)),
@@ -150,6 +160,7 @@ describe('Tauri bridge: the session token never reaches the webview', () => {
       await platform.secretDelete();
       expect(keychain.token).toBeNull();
       expect(await platform.secretGet()).toBeNull();
+      expect(calls.filter((call) => call.command === 'sign_in_begin')).toEqual([{ command: 'sign_in_begin', args: { server: env.url } }]);
     });
   });
 });

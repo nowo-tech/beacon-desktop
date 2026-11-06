@@ -192,6 +192,7 @@ describe('app: pin mismatch and the Settings line', () => {
     expect(platform.hooks.boundServer).toBe(env.url);
     // Signed in: another server cannot be bound until sign-out.
     await expect(platform.bindServer('https://other.example')).rejects.toThrow('sign out first');
+    await expect(platform.beginSignIn(env.url)).rejects.toThrow('sign out first');
     ui.app.destroy();
     // Restart: unbound in Rust until the UI binds the saved server.
     platform.hooks.boundServer = null;
@@ -203,6 +204,40 @@ describe('app: pin mismatch and the Settings line', () => {
     expect(platform.hooks.boundServer).toBe(env.url);
     await again.logout();
     expect(platform.hooks.boundServer).toBeNull();
+    again.destroy();
+  });
+
+  it('a saved server changed to another origin is refused and the token is dropped, never sent there (GM-M1)', async () => {
+    const platform = browserPlatform('0.5.0', nodeFetch);
+    const ui = await signedIn(platform);
+    ui.app.destroy();
+    const saved = JSON.parse(localStorage.getItem('time-track-desktop') ?? '{}') as { session: { server: string } };
+    saved.session.server = 'https://attacker.example';
+    localStorage.setItem('time-track-desktop', JSON.stringify(saved));
+    platform.hooks.boundServer = null;
+    const root = document.createElement('div');
+    document.body.replaceChildren(root);
+    const again = new DesktopApp(root, platform, { storage: localStorage, locale: 'es', sleep: () => Promise.resolve(), searchDelayMs: 5 });
+    await again.init();
+    expect(again.view).toBe('login');
+    expect(platform.hooks.boundServer).toBeNull();
+    expect(await platform.secretGet()).toBeNull();
+    // A new sign-in is possible again.
+    await platform.beginSignIn(env.url);
+    again.destroy();
+  });
+
+  it('a token without a saved session is dropped so that signing in works', async () => {
+    const platform = browserPlatform('0.5.0', nodeFetch);
+    const ui = await signedIn(platform);
+    ui.app.destroy();
+    localStorage.clear();
+    const root = document.createElement('div');
+    document.body.replaceChildren(root);
+    const again = new DesktopApp(root, platform, { storage: localStorage, locale: 'es', sleep: () => Promise.resolve(), searchDelayMs: 5 });
+    await again.init();
+    expect(again.view).toBe('login');
+    expect(await platform.secretGet()).toBeNull();
     again.destroy();
   });
 

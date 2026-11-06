@@ -316,8 +316,9 @@ required" screen send you to the Store listing instead.
   `clipboard-manager:allow-write-text` (*Copy link*), `notification:default`, no autostart permission (*Start at
   login* goes through the app commands `set_autostart` / `get_autostart`), process restart, set theme, and the app
   commands
-  `secret_status` / `secret_delete` (whether a session token is stored, and sign-out; no command returns the token,
-  which Rust adds to the requests itself, `src-tauri/src/secret.rs`), `idle_seconds`, `set_tray_status`, `set_tray_menu`,
+  `secret_status` / `sign_in_begin` / `secret_delete` (whether a session token is stored, start a sign-in, sign-out;
+  no command returns the token, which Rust keeps with the origin that issued it and adds only to requests to that
+  origin, `src-tauri/src/secret.rs`), `idle_seconds`, `set_tray_status`, `set_tray_menu`,
   `set_global_shortcut`, `check_update`, `install_update`, `set_wake_plan`, `notify_friendly`, `prompt_open`,
   `prompt_focus`, `prompt_close`, `open_external`, `list_browsers`, `get_browser`, `set_browser`, `pick_browser` (every
   link, in the system default or the chosen browser, launched with an argv array from Rust; no opener permission for

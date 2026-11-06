@@ -8,20 +8,36 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 ### Security
 
 - **The session token never reaches the webview** (known limitation after the security review 2026-11-05, appendix
-  FY: a script running in the main webview could call `secret_get` and read the token). The token now stays in Rust
-  (`src-tauri/src/secret.rs`):
+  FY: a script running in the main webview could call `secret_get` and read the token; follow-up review appendix GM).
+  The token now stays in Rust (`src-tauri/src/secret.rs`):
   - `beacon_fetch`, the update check and the updater read it from the OS keychain (kept in Rust memory after the first
     read) and set `Authorization` themselves. The UI marks a request as authenticated (`auth: true`); an
     `Authorization` header from the webview is dropped (`authorization` is no longer an allow-listed header). Without
-    a stored token an authenticated request gets `401 invalid_token` and nothing is sent.
-  - The 2xx answers of the sign-in routes (`POST …/api/time-track/device/token` and `…/login`) are stored in the
-    keychain by Rust, and the UI gets them with the token replaced by a fixed handle (`stored-in-os-keychain`).
-  - Commands: `secret_get` and `secret_set` are removed; new `secret_status` (whether a token is stored, `main` window
-    only); `secret_delete` (sign-out) is unchanged. `check_update` and `install_update` no longer take a `token`
-    argument. Capability `default.json`: `allow-secret-get` / `allow-secret-set` replaced by `allow-secret-status`.
-  - The bound-origin rule (FY-L1) still applies before the keychain is read. Keychain and header errors are fixed
-    texts that never quote the token; the header value is marked sensitive. Rust and Vitest tests cover it.
-  - Upgrading keeps the session: the keychain entry is the same.
+    a token for that server an authenticated request gets `401 invalid_token` and nothing is sent.
+  - The keychain entry now holds the token and the origin that issued it (`{"v":1,"origin":…,"token":…}`). While a
+    token is stored only that origin can be bound, including at start-up, so a server changed in local storage is
+    refused (the app then deletes the token and asks to sign in again), and the bearer goes only to that origin. A
+    keychain that cannot be read refuses the binding (GM-M1). A 0.5.1 entry adopts the server of the first start-up
+    after the upgrade, so the session is kept.
+  - Rust keeps the token of a 2xx sign-in answer (`POST …/api/time-track/device/token` and `…/login`) only for a
+    sign-in started with the new command `sign_in_begin` (signed out only, that server only, 30 minutes) and never
+    replaces a stored token (GM-L2). The UI gets the answer with the token replaced by a fixed handle
+    (`stored-in-os-keychain`). Sign-in routes are matched on the percent-decoded path, and paths escaping unreserved
+    characters (`%6Cogin`) are refused (GM-L1).
+  - `token`, `access_token` and `refresh_token` fields are scrubbed from every JSON answer, at any depth and on any
+    status (GM-I1).
+  - Sign-out is atomic: one lock over the in-memory token, the binding and the keychain; the keychain entry is deleted
+    first, and a refused delete keeps the token and the binding and reports the error (GM-L3).
+  - Commands: `secret_get` and `secret_set` are removed; new `secret_status` (whether a token is stored) and
+    `sign_in_begin` (start a sign-in; binds the server), both `main` window only; `secret_delete` (sign-out) is
+    unchanged for the UI. `check_update` and `install_update` no longer take a `token` argument. Capability
+    `default.json`: `allow-secret-get` / `allow-secret-set` replaced by `allow-secret-status` and `allow-sign-in-begin`.
+    The UI's `Platform` gains `beginSignIn(server)`, used by the sign-in instead of `bindServer`.
+  - Keychain and header errors are fixed texts that never quote the token; the header value is marked sensitive.
+    Rust tests cover origin binding, the locked keychain, the 0.5.1 entry, capture, encoded paths, scrubbing and
+    sign-out failures and races; Vitest covers the bridge.
+  - Still possible for a script in the main webview: authenticated requests to the signed-in server while the app
+    runs, and sending data it read elsewhere (for example through `open_external`). SECURITY.md lists it.
 
 ## [0.5.1] - 2026-11-06
 

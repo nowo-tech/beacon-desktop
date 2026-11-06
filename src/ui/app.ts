@@ -390,6 +390,8 @@ export class DesktopApp {
     await this.loadBrowserChoice();
     this.token = await this.platform.secretGet();
     if (this.state.session === null || this.token === null) {
+      // A token without a saved session (local data cleared) cannot be used or replaced: sign in again.
+      if (this.token !== null) await this.forgetToken();
       this.show('login');
       await this.updateTray();
       return;
@@ -397,7 +399,9 @@ export class DesktopApp {
     try {
       await this.platform.bindServer(this.state.session.server);
     } catch {
-      // The saved server is not allowed by this build (e.g. loopback http in a release build): sign in again.
+      // The saved server is not allowed by this build (e.g. loopback http in a release build), or is not the server
+      // that issued the stored token (the host refuses it): sign in again.
+      await this.forgetToken();
       this.show('login');
       await this.updateTray();
       return;
@@ -520,7 +524,8 @@ export class DesktopApp {
     await this.guard(
       async () => {
         try {
-          await this.platform.bindServer(server);
+          // Binds the server and lets the host keep the token of this sign-in only (the token never reaches the UI).
+          await this.platform.beginSignIn(server);
           await preflight(this.platform.fetch, server);
           stage = 'deviceCode';
           const login = await runDeviceFlow(api, {
@@ -572,6 +577,16 @@ export class DesktopApp {
       () => ({ stage, server }),
       () => this.connect(server),
     );
+  }
+
+  /** Deletes a stored token that cannot be used (best effort: a keychain refusal keeps it, and sign-in says so). */
+  private async forgetToken(): Promise<void> {
+    try {
+      await this.platform.secretDelete();
+    } catch {
+      // Reported by the next sign-in attempt.
+    }
+    this.token = null;
   }
 
   cancelDevice(): void {

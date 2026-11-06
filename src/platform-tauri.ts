@@ -66,6 +66,8 @@ export function tauriPlatform(): Platform {
     connectionSecurity: (server) => invoke<ConnectionSecurity>('connection_security', { server }),
     // Every request and the updater are bound to this origin in Rust (audit FY-L1).
     bindServer: (server) => invoke('beacon_bind', { server }),
+    // The sign-in answer's token is kept by Rust only for a sign-in started here (audit GM-L2).
+    beginSignIn: (server) => invoke('sign_in_begin', { server }),
     appVersion: () => getVersion(),
     hostName: async () => (navigator.platform.toLowerCase().includes('mac') ? 'Mac' : navigator.platform.toLowerCase().includes('win') ? 'Windows PC' : 'Linux PC'),
     // The session token stays in Rust (src-tauri/src/secret.rs): the app only learns whether one is stored and holds

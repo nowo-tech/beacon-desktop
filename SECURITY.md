@@ -14,13 +14,27 @@ Only the latest release receives fixes. The server can force an update with `min
 
 - **Credentials.** Device flow only: no password is typed in the app. The session token lives in the OS keychain
   (macOS Keychain, Windows Credential Manager, Secret Service on Linux), never in files or web storage, and it never
-  reaches the webview: Rust stores it from the sign-in answer (the UI gets a fixed handle in its place) and sets
-  `Authorization` itself in `beacon_fetch`, the update check and the updater (`src-tauri/src/secret.rs`). No command
-  returns it (`secret_get` is gone since the version after 0.5.1); the webview can only ask whether one is stored
-  (`secret_status`) and delete it (`secret_delete`). An `Authorization` header from the webview is dropped, and error
-  texts never quote the token. A script running in the main webview could still make requests to the bound server
-  while the app runs, but cannot take the token elsewhere. Sign-out revokes it on the server and deletes it locally;
-  `401` deletes it and asks to sign in again.
+  reaches the webview (`src-tauri/src/secret.rs`, security review appendix GM):
+  - No command returns it (`secret_get` / `secret_set` are gone since the version after 0.5.1). The webview can ask
+    whether one is stored (`secret_status`), start a sign-in (`sign_in_begin`) and delete it (`secret_delete`).
+  - The keychain entry holds the token **and the origin that issued it**. While a token is stored, only that origin
+    can be bound, also at start-up (a server changed in the app's local storage is refused and the user signs in
+    again), and Rust sets `Authorization` only on requests to that origin (`beacon_fetch`, the update check, the
+    updater). A keychain that cannot be read refuses the binding. A 0.5.1 entry, which has no origin, adopts the server
+    of the first start-up after the upgrade (trust on first use, the trust 0.5.1 already gave it).
+  - Rust keeps a token only from the sign-in answer of a sign-in the app started (`sign_in_begin`, signed out, 30
+    minutes, that server only), and never replaces a stored token. The UI gets a fixed handle in its place. The
+    sign-in routes are matched on the decoded path, and paths that escape unreserved characters are refused.
+  - `token`, `access_token` and `refresh_token` fields are removed from every JSON answer, at any depth and on any
+    status, before the webview sees it. An `Authorization` header from the webview is dropped. Error texts never quote
+    the token.
+  - Sign-out revokes it on the server, then deletes the keychain entry before Rust forgets it and unbinds the server,
+    all under one lock; if the keychain refuses, the token and the binding stay and the error is shown. `401` deletes it
+    and asks to sign in again.
+  - **Residual risk.** A script running in the main webview could still make authenticated requests to the signed-in
+    server while the app runs (any GET / POST the token's scopes allow, `export` included), and could send the **data**
+    it reads elsewhere, for example in an https URL given to `open_external`. It cannot read the token or get it sent
+    to another server. Script injection itself is prevented by `script-src 'self'` and a text-only DOM.
 - **Network.** HTTPS required; plain `http://` to `localhost` / `127.0.0.1` / `[::1]` only in debug builds. The
   webview cannot reach the network (CSP `connect-src ipc:`, no HTTP plugin): every request goes through the Rust
   command `beacon_fetch` (main window only; GET / POST, allow-listed headers, no redirects, no cookies). No remote

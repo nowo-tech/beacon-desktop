@@ -5,6 +5,7 @@
 /// Commands only the main window may call (capabilities/default.json).
 pub const MAIN_COMMANDS: &[&str] = &[
     "secret_status",
+    "sign_in_begin",
     "secret_delete",
     "idle_seconds",
     "set_tray_status",
@@ -34,6 +35,7 @@ pub const PROMPT_COMMANDS: &[&str] = &["prompt_view", "prompt_answer", "prompt_s
 
 pub const APP_COMMANDS: &[&str] = &[
     "secret_status",
+    "sign_in_begin",
     "secret_delete",
     "idle_seconds",
     "set_tray_status",
