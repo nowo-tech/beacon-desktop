@@ -33,10 +33,14 @@ Likely 0.5.1.
     plugin wrote the path unquoted, and from an elevated process to HKLM (its "dynamic" mode), for every user of the
     machine. Now on = one quoted HKCU value for the running executable (any install folder), marked enabled in Task
     Manager, the app's other entries (other names, HKLM) removed; off = every entry of the app removed; refused when
-    another product uses the value name. macOS and Linux still use the plugin. At start, a copy installed in a
+    another product uses the value name. Switching on is also refused, with a message in Settings, when TimeTrack
+    runs as administrator or is not the installed copy (switching off always works). Settings reads the state with
+    `get_autostart` (the app's own HKCU value and its Task Manager state only; no `autostart:*` permission is left).
+    macOS and Linux still use the plugin. At start, a copy installed in a
     custom folder (the one the installer records, or any copy whose HKCU value already starts it) gets its value
     quoted; the installer writes the path quoted (`"<install dir>\time-track-desktop.exe" --hidden`) and only
-    matches commands that *start* with one of the app's executables.
+    matches commands that *start* with one of the app's executables, the path ending there (end, space or closing
+    quote: `timetrack.exe.evil.exe` is not `timetrack.exe`, in the app either).
   - macOS: the plugin's socket lives in the shared `/tmp` (not configurable upstream): another local account could
     keep TimeTrack from starting. Documented in SECURITY.md → *Known limitations*; upstream issue drafted, not
     yet filed.

@@ -883,6 +883,22 @@ fn set_autostart(app: AppHandle, window: tauri::Window, enabled: bool) -> Result
     }
 }
 
+/// "Start at login" as Settings shows it. Windows: only the app's own HKCU value and its Task Manager state
+/// (autostart.rs `status`), not the plugin's `is_enabled` (which also counts HKLM); macOS and Linux: the plugin.
+#[tauri::command]
+fn get_autostart(app: AppHandle, window: tauri::Window) -> Result<bool, String> {
+    only_from(&window, "main")?;
+    #[cfg(windows)]
+    {
+        Ok(autostart::get(&app.package_info().name))
+    }
+    #[cfg(not(windows))]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        app.autolaunch().is_enabled().map_err(|e| e.to_string())
+    }
+}
+
 /// Another launch of the app (Start menu, desktop shortcut, a second start-at-login entry) while this one runs: it
 /// exits and this one shows its window, unless it was a start at login (`--hidden`), which stays in the tray.
 fn on_second_launch(app: &AppHandle, args: &[String]) {
@@ -1142,7 +1158,8 @@ pub fn run() {
             browser::get_browser,
             browser::set_browser,
             browser::pick_browser,
-            set_autostart
+            set_autostart,
+            get_autostart
         ])
         .run(tauri::generate_context!())
         .expect("error while running TimeTrack");

@@ -114,25 +114,38 @@ Function TTRemoveLegacyMsi
   ${EndIf}
 FunctionEnd
 
-;; $R7 = "1" when the Run command CMD starts with PATH (an executable path), quoted or not (case-insensitive, like
-;; NSIS string comparisons). Uses $R5 / $R6 (saved).
+;; $R7 = "1" when the Run command CMD starts with the executable PATH, quoted or not, and the path ends there: end
+;; of the command or a space after it, or its closing quote (`…\timetrack.exe.evil.exe` does not match
+;; `…\timetrack.exe`). Case-insensitive, like NSIS string comparisons. Uses $R4 / $R5 / $R6 (saved).
 !macro TT_STARTS_WITH CMD PATH
+  Push $R4
   Push $R5
   Push $R6
   StrLen $R5 "${PATH}"
+  ; Unquoted: PATH, then the end or a space.
   StrCpy $R6 "${CMD}" $R5
   ${If} $R6 == "${PATH}"
-    StrCpy $R7 "1"
-  ${EndIf}
-  StrCpy $R6 "${CMD}" $R5 1
-  ${If} $R6 == "${PATH}"
-    StrCpy $R6 "${CMD}" 1
-    ${If} $R6 == '"'
+    StrCpy $R6 "${CMD}" 1 $R5
+    ${If} $R6 == ""
+    ${OrIf} $R6 == " "
       StrCpy $R7 "1"
+    ${EndIf}
+  ${EndIf}
+  ; Quoted: ", PATH, then the closing ".
+  StrCpy $R6 "${CMD}" 1
+  ${If} $R6 == '"'
+    StrCpy $R6 "${CMD}" $R5 1
+    ${If} $R6 == "${PATH}"
+      IntOp $R4 $R5 + 1
+      StrCpy $R6 "${CMD}" 1 $R4
+      ${If} $R6 == '"'
+        StrCpy $R7 "1"
+      ${EndIf}
     ${EndIf}
   ${EndIf}
   Pop $R6
   Pop $R5
+  Pop $R4
 !macroend
 
 ;; OUT = "1" when the Run command CMD starts (anchored, quoted or not) one of the app's executables (TimeTrack.exe or

@@ -50,6 +50,10 @@ describe('one TimeTrack, one tray icon (0.5.1)', () => {
     const startsWith = hooks.slice(hooks.indexOf('!macro TT_STARTS_WITH'), hooks.indexOf('!macro TT_OUR_COMMAND'));
     expect(startsWith).not.toContain('StrLoc');
     expect(startsWith).toContain('StrLen $R5 "${PATH}"');
+    // …and the path ends there: end of the command or a space (unquoted), the closing quote (quoted).
+    expect(startsWith).toContain('StrCpy $R6 "${CMD}" 1 $R5');
+    expect(startsWith).toMatch(/\$\{If\} \$R6 == ""\n\s+\$\{OrIf\} \$R6 == " "/);
+    expect(startsWith).toContain('StrCpy $R6 "${CMD}" 1 $R4');
     // The rewritten value is quoted.
     expect(postinstall).toContain(`StrCpy $R9 '"$INSTDIR\\\${MAINBINARYNAME}.exe" --hidden'`);
   });
@@ -59,8 +63,13 @@ describe('one TimeTrack, one tray icon (0.5.1)', () => {
     expect(main).toContain('allow-set-autostart');
     expect(main).not.toContain('autostart:allow-enable');
     expect(main).not.toContain('autostart:allow-disable');
+    // The state comes from the app too (only its own HKCU value on Windows), not the plugin's is_enabled.
+    expect(main).toContain('allow-get-autostart');
+    expect(main.filter((p) => typeof p === 'string' && p.startsWith('autostart:'))).toEqual([]);
     const bridge = readFileSync('src/platform-tauri.ts', 'utf8');
     expect(bridge).toContain("invoke('set_autostart', { enabled })");
+    expect(bridge).toContain("invoke<boolean>('get_autostart')");
+    expect(bridge).not.toContain('@tauri-apps/plugin-autostart');
     expect(bridge).not.toMatch(/import \{[^}]*\b(enable|disable)\b[^}]*\} from '@tauri-apps\/plugin-autostart'/);
   });
 });

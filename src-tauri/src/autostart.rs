@@ -73,9 +73,15 @@ pub fn command_exe(command: &str) -> &str {
     if let Some(rest) = command.strip_prefix('"') {
         return rest.split('"').next().unwrap_or(rest);
     }
+    // The first ".exe" that ends the path (end of the command or a space): `a.exe.evil.exe` is not `a.exe`.
     let lower = command.to_ascii_lowercase();
-    if let Some(end) = lower.find(".exe") {
-        return &command[..end + 4];
+    if let Some((at, _)) = lower.match_indices(".exe").find(|(at, _)| {
+        lower[at + 4..]
+            .chars()
+            .next()
+            .is_none_or(char::is_whitespace)
+    }) {
+        return &command[..at + 4];
     }
     command.split_whitespace().next().unwrap_or(command)
 }
@@ -199,11 +205,21 @@ pub fn plan(
     fixes
 }
 
+/// Refusals of `toggle_plan`, `autostart:<code>: <text>`; the UI shows a translated message per code
+/// (src/lib/errors.ts).
+pub const REFUSED_ELEVATED: &str =
+    "autostart:elevated: TimeTrack runs as administrator; start it normally to switch start at login on";
+pub const REFUSED_NOT_INSTALLED: &str =
+    "autostart:not_installed: this copy is not the installed TimeTrack; switch start at login on in the installed one";
+pub const REFUSED_TAKEN: &str =
+    "autostart:taken: another app already starts at login under the name TimeTrack";
+
 /// "Start at login" switched on or off in Settings. Replaces the autostart plugin's `enable` / `disable` on Windows:
 /// those write the path unquoted and, from an elevated process, to HKLM (the plugin's "dynamic" mode), for every user
 /// of the machine. On: one quoted HKCU value for this executable, marked enabled in Task Manager, and the app's other
-/// entries (other names, HKLM) removed. Off: every entry of the app removed. Refused when another product uses the
-/// HKCU value name.
+/// entries (other names, HKLM) removed; refused from an elevated process (its HKCU may be another administrator's) and
+/// from a copy outside this account's install folders (a download, a portable copy). Off: every entry of the app
+/// removed, always allowed. Both refused when another product uses the HKCU value name.
 pub fn toggle_plan(
     entries: &[RunEntry],
     app_name: &str,
@@ -211,14 +227,19 @@ pub fn toggle_plan(
     install_dirs: &[String],
     args: &[&str],
     enabled: bool,
+    elevated: bool,
 ) -> Result<Vec<Fix>, String> {
     let own_value =
         |e: &RunEntry| e.hive == Hive::CurrentUser && e.name.eq_ignore_ascii_case(app_name);
     let mine = |e: &RunEntry| is_ours(e, install_dirs) || this_exe(e, current_exe);
+    if enabled && elevated {
+        return Err(REFUSED_ELEVATED.into());
+    }
+    if enabled && !installed(current_exe, install_dirs) {
+        return Err(REFUSED_NOT_INSTALLED.into());
+    }
     if entries.iter().any(|e| own_value(e) && !mine(e)) {
-        return Err(format!(
-            "another app already starts at login as \"{app_name}\""
-        ));
+        return Err(REFUSED_TAKEN.into());
     }
     let mut fixes: Vec<Fix> = entries
         .iter()
@@ -238,6 +259,22 @@ pub fn toggle_plan(
         });
     }
     Ok(fixes)
+}
+
+/// What Settings shows: on when the app's own HKCU value exists (for this executable or an installed copy) and Task
+/// Manager does not mark it disabled. Other names, HKLM values and other products' values do not count.
+pub fn status(
+    entries: &[RunEntry],
+    app_name: &str,
+    current_exe: &str,
+    install_dirs: &[String],
+) -> bool {
+    entries.iter().any(|e| {
+        e.hive == Hive::CurrentUser
+            && e.name.eq_ignore_ascii_case(app_name)
+            && (is_ours(e, install_dirs) || this_exe(e, current_exe))
+            && !e.disabled()
+    })
 }
 
 #[cfg(windows)]
@@ -262,6 +299,33 @@ mod registry {
             Hive::CurrentUser => HKEY_CURRENT_USER,
             Hive::LocalMachine => HKEY_LOCAL_MACHINE,
         })
+    }
+
+    /// Whether this process runs elevated (administrator token).
+    pub fn elevated() -> bool {
+        use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows_sys::Win32::Security::{
+            GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+        };
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        // SAFETY: the token handle is checked and closed; the output buffer is a TOKEN_ELEVATION of the size given.
+        unsafe {
+            let mut token: HANDLE = std::ptr::null_mut();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                return false;
+            }
+            let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+            let mut size = 0u32;
+            let ok = GetTokenInformation(
+                token,
+                TokenElevation,
+                (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+                std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+                &mut size,
+            );
+            CloseHandle(token);
+            ok != 0 && elevation.TokenIsElevated != 0
+        }
     }
 
     pub fn current_exe() -> Option<String> {
@@ -393,6 +457,7 @@ pub fn set(app_name: &str, args: &[&str], enabled: bool) -> Result<(), String> {
         &registry::install_dirs(),
         args,
         enabled,
+        enabled && registry::elevated(),
     )?;
     // HKLM removals need administrator rights: only the HKCU changes decide the result.
     let (machine, user): (Vec<Fix>, Vec<Fix>) = fixes.into_iter().partition(|fix| {
@@ -406,6 +471,19 @@ pub fn set(app_name: &str, args: &[&str], enabled: bool) -> Result<(), String> {
     });
     let _ = registry::apply(&machine);
     registry::apply(&user)
+}
+
+/// "Start at login" as Settings shows it (see `status`).
+#[cfg(windows)]
+pub fn get(app_name: &str) -> bool {
+    registry::current_exe().is_some_and(|exe| {
+        status(
+            &registry::entries(),
+            app_name,
+            &exe,
+            &registry::install_dirs(),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -746,7 +824,13 @@ mod tests {
     }
 
     fn toggle(exe: &str, entries: &[RunEntry], enabled: bool) -> Result<Vec<Fix>, String> {
-        toggle_plan(entries, APP, exe, &dirs(), &ARGS, enabled)
+        toggle_plan(entries, APP, exe, &dirs(), &ARGS, enabled, false)
+    }
+
+    fn custom_dirs() -> Vec<String> {
+        let mut dirs = dirs();
+        dirs.push(r"D:\My Tools\TimeTrack".into());
+        dirs
     }
 
     fn enable() -> Fix {
@@ -757,7 +841,11 @@ mod tests {
     fn switching_on_writes_one_quoted_hkcu_value() {
         assert_eq!(toggle(NEW, &[], true), Ok(vec![write(NEW), enable()]));
         // A custom folder too, quoted.
-        assert_eq!(toggle(CUSTOM, &[], true), Ok(vec![write(CUSTOM), enable()]));
+        // The folder the installer recorded (a custom one) too, quoted.
+        assert_eq!(
+            toggle_plan(&[], APP, CUSTOM, &custom_dirs(), &ARGS, true, false),
+            Ok(vec![write(CUSTOM), enable()])
+        );
         // The plugin's HKLM value (elevated "dynamic" mode) and other names go; the HKCU value is rewritten.
         let entries = [
             entry(Hive::LocalMachine, APP, &format!("{NEW} --hidden")),
@@ -819,5 +907,101 @@ mod tests {
         )];
         assert!(toggle(NEW, &taken, true).is_err());
         assert!(toggle(NEW, &taken, false).is_err());
+    }
+
+    #[test]
+    fn switching_on_is_refused_elevated_or_outside_the_install_folders() {
+        assert_eq!(
+            toggle_plan(&[], APP, NEW, &dirs(), &ARGS, true, true),
+            Err(REFUSED_ELEVATED.to_string())
+        );
+        for exe in [
+            CUSTOM,
+            r"C:\Users\ana\Downloads\time-track-desktop.exe",
+            r"D:\dev\target\release\time-track-desktop.exe",
+        ] {
+            assert_eq!(
+                toggle(exe, &[], true),
+                Err(REFUSED_NOT_INSTALLED.to_string()),
+                "{exe}"
+            );
+        }
+        // Switching off is always allowed, elevated or from any copy.
+        let entries = [entry(Hive::CurrentUser, APP, &command_for(NEW, &ARGS))];
+        let off = Ok(vec![delete(Hive::CurrentUser, APP)]);
+        assert_eq!(
+            toggle_plan(&entries, APP, NEW, &dirs(), &ARGS, false, true),
+            off
+        );
+        assert_eq!(toggle(r"C:\Temp\TimeTrack.exe", &entries, false), off);
+        // The codes the UI translates.
+        for refusal in [REFUSED_ELEVATED, REFUSED_NOT_INSTALLED, REFUSED_TAKEN] {
+            assert!(refusal.starts_with("autostart:"), "{refusal}");
+        }
+        let taken = [entry(
+            Hive::CurrentUser,
+            APP,
+            r"C:\Vendor\TimeTrack\TimeTrack.exe",
+        )];
+        assert_eq!(toggle(NEW, &taken, false), Err(REFUSED_TAKEN.to_string()));
+    }
+
+    #[test]
+    fn settings_shows_only_the_apps_own_enabled_value() {
+        let shown = |entries: &[RunEntry]| status(entries, APP, NEW, &dirs());
+        assert!(!shown(&[]));
+        assert!(shown(&[entry(
+            Hive::CurrentUser,
+            APP,
+            &command_for(NEW, &ARGS)
+        )]));
+        // The MSI copy's value (installed) counts; a custom copy's counts when it is this executable.
+        assert!(shown(&[entry(
+            Hive::CurrentUser,
+            APP,
+            &format!("{MSI} --hidden")
+        )]));
+        assert!(status(
+            &[entry(Hive::CurrentUser, APP, &format!("{CUSTOM} --hidden"))],
+            APP,
+            CUSTOM,
+            &dirs()
+        ));
+        // Disabled in Task Manager, HKLM, another name or another product: off.
+        assert!(!shown(&[with(
+            entry(Hive::CurrentUser, APP, &command_for(NEW, &ARGS)),
+            &DISABLED
+        )]));
+        assert!(shown(&[with(
+            entry(Hive::CurrentUser, APP, &command_for(NEW, &ARGS)),
+            &ENABLED
+        )]));
+        assert!(!shown(&[entry(
+            Hive::LocalMachine,
+            APP,
+            &command_for(NEW, &ARGS)
+        )]));
+        assert!(!shown(&[entry(
+            Hive::CurrentUser,
+            "time-track-desktop",
+            &command_for(NEW, &ARGS)
+        )]));
+        assert!(!shown(&[entry(
+            Hive::CurrentUser,
+            APP,
+            r"C:\Vendor\TimeTrack\TimeTrack.exe"
+        )]));
+    }
+
+    #[test]
+    fn an_executable_path_ends_at_a_space_or_the_end() {
+        let evil = r"C:\Program Files\TimeTrack\timetrack.exe.evil.exe --hidden";
+        assert_eq!(
+            command_exe(evil),
+            r"C:\Program Files\TimeTrack\timetrack.exe.evil.exe"
+        );
+        assert!(!is_ours(&entry(Hive::CurrentUser, APP, evil), &dirs()));
+        assert_eq!(command_exe(r"C:\a.exe"), r"C:\a.exe");
+        assert_eq!(command_exe(r"C:\My Tools\a.exe  -x"), r"C:\My Tools\a.exe");
     }
 }

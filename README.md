@@ -58,7 +58,8 @@ start-at-login entry left by an older install) started a second copy with its ow
   never switched on. The installer moves the app's value pointing at the 0.1.0 copy to this install even when that
   copy is kept, and removes the app's per-machine value when it runs with administrator rights.
 - **Start at login written by the app itself** (Windows): Settings switches one quoted HKCU value, never an
-  unquoted or per-machine (`HKLM`) one as the autostart plugin did when the app ran elevated.
+  unquoted or per-machine (`HKLM`) one as the autostart plugin did when the app ran elevated. Switching it on is
+  refused from a TimeTrack run as administrator or from a copy that is not the installed one (Settings says why).
 - **One tray icon per process**: built once in Rust; the webview has no tray permission.
 
 To check by hand (Windows, PowerShell), list what starts at login and what runs:
@@ -288,7 +289,7 @@ required" screen send you to the Store listing instead.
   (`tauri_build::AppManifest::commands`, list in `src-tauri/app-commands.rs`), so Tauri only lets a window call the
   commands its capability grants (`allow-<command>`); without a manifest any local window could call any command.
   A Rust test checks the list against `generate_handler!` and that each command is granted to exactly one window.
-- `src-tauri/capabilities/default.json`, window `main`: core defaults, HTTP to your server, `clipboard-manager:allow-write-text` (*Copy link*), `notification:default`, autostart is-enabled (switching it goes through the app command `set_autostart`), process restart, set theme, and the app commands
+- `src-tauri/capabilities/default.json`, window `main`: core defaults, HTTP to your server, `clipboard-manager:allow-write-text` (*Copy link*), `notification:default`, no autostart permission (*Start at login* goes through the app commands `set_autostart` / `get_autostart`), process restart, set theme, and the app commands
   `secret_get` / `secret_set` / `secret_delete`, `idle_seconds`, `set_tray_status`, `set_tray_menu`,
   `set_global_shortcut`, `check_update`, `install_update`, `set_wake_plan`, `notify_friendly`, `prompt_open`,
   `prompt_focus`, `prompt_close`, `open_external`, `list_browsers`, `get_browser`, `set_browser`, `pick_browser` (every
