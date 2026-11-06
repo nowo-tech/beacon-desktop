@@ -141,6 +141,9 @@ and GM) and the backlog fixes. Not released yet (release freeze).
 - **Dark theme: the antenna arcs of the "nothing pinned yet" robot are visible again.** Its white outline filled the
   gaps between the arcs, so they blurred into one pale shape; the arcs now sit on the dark background (at least 6:1,
   WCAG 1.4.11 asks for 3:1) and the rest of the outline is unchanged.
+- **New "no tasks yet" robot**, cheering next to a clipboard with a check mark (owner's art), light and dark. The old
+  picture's antenna arcs merged into one pale fan in the dark theme; the new arcs stay apart and reach at least 4.3:1
+  against the dark background.
 
 ## [0.5.1] - 2026-11-06
 
