@@ -21,7 +21,9 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 
 use crate::pinning::{self, PinSet, PinStatus, UNTRUSTED_MARKER};
-use crate::secret::{self, Authorization, Session};
+use std::sync::Arc;
+
+use crate::secret::{self, blocking, Authorization, Session};
 
 /// Largest response body handed to the UI (exports included).
 const MAX_BODY: usize = 32 * 1024 * 1024;
@@ -178,11 +180,21 @@ pub struct FetchResponse {
 /// reaches another origin). With `request.auth`, the token comes from `session`, and only for its own origin; a
 /// sign-in answer is captured there (secret.rs) and every JSON answer is scrubbed of token fields. Errors are strings
 /// for the UI (see [`describe_error`]) and never carry the token.
+#[cfg(test)]
 pub async fn send(
     client: &reqwest::Client,
     request: FetchRequest,
-    session: &Session,
+    session: &Arc<Session>,
 ) -> Result<FetchResponse, String> {
+    Ok(send_and_capture(client, request, session).await?.0)
+}
+
+/// [`send`], plus the origin (and notification language) of a sign-in it stored.
+pub async fn send_and_capture(
+    client: &reqwest::Client,
+    request: FetchRequest,
+    session: &Arc<Session>,
+) -> Result<(FetchResponse, Option<(String, bool)>), String> {
     let url = validate_url(&request.url)?;
     require_origin(session.bound_origin().as_ref(), &url)?;
     // `/api/time-track/%6Cogin` would reach the sign-in route unrecognised (GM-L1).
@@ -205,11 +217,13 @@ pub async fn send(
         headers.insert(name, value);
     }
     if request.auth {
-        match session.authorization_for(&url)? {
+        // Keychain work runs off the async workers (GM-D-4).
+        let (owner, target) = (Arc::clone(session), url.clone());
+        match blocking(move || owner.authorization_for(&target)).await? {
             Authorization::Bearer(value) => {
                 headers.insert(AUTHORIZATION, value);
             }
-            Authorization::None => return Ok(not_signed_in()),
+            Authorization::None => return Ok((not_signed_in(), None)),
         }
     }
     let sign_in = secret::is_sign_in(&method, &url);
@@ -223,6 +237,8 @@ pub async fn send(
     let headers = response
         .headers()
         .iter()
+        // Only the headers the UI reads: nothing else (a cookie, a token header) reaches the webview (GM-D-3).
+        .filter(|(name, _)| secret::RESPONSE_HEADERS.contains(&name.as_str()))
         .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
         .collect();
     let mut body = Vec::new();
@@ -232,17 +248,22 @@ pub async fn send(
         }
         body.extend_from_slice(&chunk);
     }
-    let body = if sign_in && status.is_success() {
-        session.capture(&target, &body)?
+    let (body, stored_for) = if sign_in && status.is_success() {
+        let owner = Arc::clone(session);
+        let captured = blocking(move || owner.capture(&target, &body)).await?;
+        (captured.body, captured.stored_for)
     } else {
-        secret::scrub(body)
+        (secret::scrub(body), None)
     };
-    Ok(FetchResponse {
-        status: status.as_u16(),
-        status_text: status.canonical_reason().unwrap_or_default().to_string(),
-        headers,
-        body: base64::engine::general_purpose::STANDARD.encode(body),
-    })
+    Ok((
+        FetchResponse {
+            status: status.as_u16(),
+            status_text: status.canonical_reason().unwrap_or_default().to_string(),
+            headers,
+            body: base64::engine::general_purpose::STANDARD.encode(body),
+        },
+        stored_for,
+    ))
 }
 
 fn not_signed_in() -> FetchResponse {
@@ -259,24 +280,31 @@ fn not_signed_in() -> FetchResponse {
 #[tauri::command]
 pub async fn beacon_fetch(
     window: tauri::Window,
-    session: tauri::State<'_, Session>,
+    app: tauri::AppHandle,
+    session: tauri::State<'_, Arc<Session>>,
     request: FetchRequest,
 ) -> Result<FetchResponse, String> {
     crate::only_from(&window, "main")?;
-    send(client(), request, &session).await
+    let (response, stored_for) = send_and_capture(client(), request, &session).await?;
+    // Every stored sign-in is announced by the OS, from Rust (GM-D-1).
+    if let Some((origin, spanish)) = stored_for {
+        secret::notify_signed_in(&app, &origin, spanish);
+    }
+    Ok(response)
 }
 
 /// Binds the Beacon server the UI is signed in to (at start-up). While a token is stored, only the origin that issued
 /// it can be bound (secret.rs, GM-M1); a sign-in binds with `sign_in_begin`.
 #[tauri::command]
-pub fn beacon_bind(
+pub async fn beacon_bind(
     window: tauri::Window,
-    session: tauri::State<'_, Session>,
+    session: tauri::State<'_, Arc<Session>>,
     server: String,
 ) -> Result<(), String> {
     crate::only_from(&window, "main")?;
     let url = validate_url(&server)?;
-    session.bind(&url)
+    let session = Arc::clone(&session);
+    blocking(move || session.bind(&url)).await
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -318,7 +346,7 @@ mod tests {
     //! End to end: a local TLS mock server with a CA made at test time, reached through the real client.
     use super::*;
     use crate::pinning::tests::{pin_set, TestCa};
-    use crate::secret::tests::{session, MemoryStore};
+    use crate::secret::tests::{begin, session, MemoryStore};
     use crate::secret::SESSION_HANDLE;
     use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
     use rustls::RootCertStore;
@@ -371,7 +399,7 @@ mod tests {
                 let _ = seen.send(String::from_utf8_lossy(&buffer[..read]).to_string());
                 let _ = write!(
                     tls,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Min-Supported-Version: 0.1.0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Min-Supported-Version: 0.1.0\r\nSet-Cookie: s=fresh-token\r\nX-Auth-Token: fresh-token\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 let _ = tls.flush();
@@ -398,13 +426,13 @@ mod tests {
     }
 
     /// Signed in to `origin` (token `secret-token`, as Rust keeps it) and bound to it (`beacon_bind`).
-    fn signed_in_to(origin: &str) -> Session {
+    fn signed_in_to(origin: &str) -> Arc<Session> {
         let session = session(&MemoryStore::with(origin, "secret-token"));
         session.bind(&url::Url::parse(origin).unwrap()).unwrap();
         session
     }
 
-    fn signed_in(port: u16) -> Session {
+    fn signed_in(port: u16) -> Arc<Session> {
         signed_in_to(&origin_of(port))
     }
 
@@ -448,6 +476,19 @@ mod tests {
             .headers
             .iter()
             .any(|(name, value)| name == "x-min-supported-version" && value == "0.1.0"));
+        // Only the headers the UI reads (GM-D-3): no cookie, no token header.
+        let names: Vec<&str> = response
+            .headers
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(
+            names
+                .iter()
+                .all(|name| secret::RESPONSE_HEADERS.contains(name)),
+            "{names:?}"
+        );
+        assert!(!names.contains(&"set-cookie") && !names.contains(&"x-auth-token"));
         let body = base64::engine::general_purpose::STANDARD
             .decode(response.body)
             .unwrap();
@@ -691,9 +732,7 @@ mod tests {
         );
         let keychain = MemoryStore::default();
         let session = session(&keychain);
-        session
-            .begin_sign_in(&url::Url::parse(&origin_of(port)).unwrap())
-            .unwrap();
+        begin(&session, &origin_of(port)).unwrap();
         let response = send(
             &client,
             sign_in_request(port, "/api/time-track/device/token"),
@@ -745,6 +784,33 @@ mod tests {
         assert!(!body.contains("fresh-token"), "{body}");
     }
 
+    // GM-D-1: the app is device-flow only; a password sign-in answer is never stored, even during a sign-in.
+    #[tokio::test]
+    async fn the_password_route_is_never_captured() {
+        let ca = TestCa::new("E2E Root");
+        let (leaf, key) = ca.leaf(HOST);
+        let (port, _) = mock_server_with(vec![leaf], &key, 1, SIGN_IN_ANSWER);
+        let client = client_for(
+            ca.roots(),
+            pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
+            port,
+        );
+        let keychain = MemoryStore::default();
+        let session = session(&keychain);
+        begin(&session, &origin_of(port)).unwrap();
+        let (response, stored_for) = send_and_capture(
+            &client,
+            sign_in_request(port, "/api/time-track/login"),
+            &session,
+        )
+        .await
+        .unwrap();
+        assert!(stored_for.is_none());
+        assert_eq!(keychain.stored(), None);
+        let body = String::from_utf8(decode(response.body)).unwrap();
+        assert!(!body.contains("fresh-token"), "{body}");
+    }
+
     // GM-L1 / GM-I1, end to end.
     #[tokio::test]
     async fn encoded_sign_in_paths_are_refused_and_every_answer_is_scrubbed() {
@@ -762,9 +828,7 @@ mod tests {
             port,
         );
         let session = session(&MemoryStore::default());
-        session
-            .begin_sign_in(&url::Url::parse(&origin_of(port)).unwrap())
-            .unwrap();
+        begin(&session, &origin_of(port)).unwrap();
         for path in [
             "/api/time-track/%6Cogin",
             "/api/time-track/device/to%6Ben",

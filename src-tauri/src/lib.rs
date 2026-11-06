@@ -568,17 +568,20 @@ async fn check_update(app: AppHandle, window: tauri::Window, server: String) -> 
         return UpdateCheck::Disabled;
     }
     // `State` borrows the request: an async command returning a plain value takes the state from the app handle.
-    let session = app.state::<secret::Session>();
+    let session = std::sync::Arc::clone(&app.state::<std::sync::Arc<secret::Session>>());
     let server_url = match bound_server(&session, &server) {
         Ok(url) => url,
         Err(message) => return UpdateCheck::Error { message },
     };
-    // The token never crosses to the webview: Rust reads it here, for its own origin only (secret.rs).
-    let authorization = match session_authorization(&session, &server_url) {
-        Ok(Some(value)) => value,
-        Ok(None) => return UpdateCheck::Unauthorized,
-        Err(message) => return UpdateCheck::Error { message },
-    };
+    // The token never crosses to the webview: Rust reads it here, for its own origin only, off the async workers
+    // (secret.rs).
+    let target = server_url.clone();
+    let authorization =
+        match secret::blocking(move || session_authorization(&session, &target)).await {
+            Ok(Some(value)) => value,
+            Ok(None) => return UpdateCheck::Unauthorized,
+            Err(message) => return UpdateCheck::Error { message },
+        };
     let bundle = bundle_name(tauri::utils::platform::bundle_type());
     let url = updater_endpoint(&server)
         .replace("{{target}}", updater_target())
@@ -678,7 +681,7 @@ impl ProgressThrottle {
 async fn install_update(
     app: AppHandle,
     window: tauri::Window,
-    session: tauri::State<'_, secret::Session>,
+    session: tauri::State<'_, std::sync::Arc<secret::Session>>,
     server: String,
 ) -> Result<(), String> {
     only_from(&window, "main")?;
@@ -686,7 +689,9 @@ async fn install_update(
         return Err("Updates come from the Microsoft Store.".into());
     }
     let server_url = bound_server(&session, &server)?;
-    let authorization = session_authorization(&session, &server_url)?
+    let (owner, target) = (std::sync::Arc::clone(&session), server_url.clone());
+    let authorization = secret::blocking(move || session_authorization(&owner, &target))
+        .await?
         .ok_or_else(|| "Not connected.".to_string())?;
     let Some(pubkey) = updater_pubkey(&app) else {
         return Err("This build cannot verify updates (no updater key).".into());
@@ -1078,7 +1083,9 @@ pub fn run() {
             app.manage(HeartbeatState(Mutex::new(heartbeat::Heartbeat::new())));
             app.manage(MainFocus::default());
             app.manage(prompt::PromptState::default());
-            app.manage(secret::Session::new(Box::new(secret::Keychain)));
+            app.manage(std::sync::Arc::new(secret::Session::new(Box::new(
+                secret::Keychain,
+            ))));
             // "Open Beacon in" lives on this side (browser.json in the app's config folder), see browser.rs.
             browser::manage(app.handle());
             create_main_window(app.handle())?;
@@ -1545,7 +1552,7 @@ mod tests {
         assert!(MAIN_COMMANDS.contains(&"sign_in_begin"));
         assert!(MAIN_COMMANDS.contains(&"secret_delete"));
         let source = include_str!("secret.rs");
-        let status = source.find("pub fn secret_status").unwrap();
+        let status = source.find("pub async fn secret_status").unwrap();
         let signature = &source[status..status + source[status..].find('{').unwrap()];
         assert!(
             signature.ends_with("-> Result<bool, String> "),

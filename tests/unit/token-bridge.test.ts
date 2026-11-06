@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TimeTrackApi } from '../../src/api/client';
 import { runDeviceFlow } from '../../src/lib/deviceFlow';
-import { type NativeRequest, type NativeResponse, SESSION_HANDLE } from '../../src/lib/nativeFetch';
+import { isSignInDeclined, type NativeRequest, type NativeResponse, SESSION_HANDLE, SIGN_IN_DECLINED } from '../../src/lib/nativeFetch';
 import { nodeFetch, startMock } from './helpers';
 
 const calls: { command: string; args: unknown }[] = [];
@@ -58,7 +58,7 @@ function fakeRust(keychain: { token: string | null }) {
         }
         const response = await nodeFetch(request.url, { method: request.method, headers, body: request.body ?? undefined });
         let text = await response.text();
-        if (request.method === 'POST' && /\/api\/time-track\/(login|device\/token)$/.test(new URL(request.url).pathname) && response.ok) {
+        if (request.method === 'POST' && /\/api\/time-track\/device\/token$/.test(new URL(request.url).pathname) && response.ok) {
           const json = JSON.parse(text) as { token?: string };
           if (signingIn && keychain.token === null && typeof json.token === 'string' && json.token !== '') {
             keychain.token = json.token;
@@ -99,6 +99,16 @@ describe('Tauri bridge: the session token never reaches the webview', () => {
     expect(calls).toEqual([]);
     await platform.secretDelete();
     expect(calls).toEqual([{ command: 'secret_delete', args: {} }]);
+  });
+
+  it('a declined native sign-in confirmation is recognised (no error shown)', async () => {
+    const platform = tauriPlatform();
+    rust = async () => Promise.reject(SIGN_IN_DECLINED);
+    const error = await platform.beginSignIn('https://beacon.nowo.tech').catch((e: unknown) => e);
+    expect(isSignInDeclined(error)).toBe(true);
+    expect(isSignInDeclined(new Error(SIGN_IN_DECLINED))).toBe(true);
+    expect(isSignInDeclined('already signed in: sign out first')).toBe(false);
+    expect(calls).toEqual([{ command: 'sign_in_begin', args: { server: 'https://beacon.nowo.tech', locale: null } }]);
   });
 
   it('the updater commands get the server only', async () => {
@@ -160,7 +170,7 @@ describe('Tauri bridge: the session token never reaches the webview', () => {
       await platform.secretDelete();
       expect(keychain.token).toBeNull();
       expect(await platform.secretGet()).toBeNull();
-      expect(calls.filter((call) => call.command === 'sign_in_begin')).toEqual([{ command: 'sign_in_begin', args: { server: env.url } }]);
+      expect(calls.filter((call) => call.command === 'sign_in_begin')).toEqual([{ command: 'sign_in_begin', args: { server: env.url, locale: null } }]);
     });
   });
 });

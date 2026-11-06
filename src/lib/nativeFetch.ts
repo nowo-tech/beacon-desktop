@@ -15,6 +15,14 @@
  */
 export const SESSION_HANDLE = 'stored-in-os-keychain';
 
+/** What `sign_in_begin` rejects with when the person declines the native "Sign in to …?" confirmation (Rust `secret::SIGN_IN_DECLINED`). */
+export const SIGN_IN_DECLINED = 'sign_in_declined';
+
+/** The person declined the native sign-in confirmation: back to the sign-in view, no error. */
+export function isSignInDeclined(error: unknown): boolean {
+  return (error instanceof Error ? error.message : String(error)) === SIGN_IN_DECLINED;
+}
+
 /** What `beacon_fetch` receives. */
 export interface NativeRequest {
   url: string;

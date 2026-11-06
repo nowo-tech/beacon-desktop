@@ -19,17 +19,26 @@ All notable changes to this project are documented here ([Keep a Changelog](http
     refused (the app then deletes the token and asks to sign in again), and the bearer goes only to that origin. A
     keychain that cannot be read refuses the binding (GM-M1). A 0.5.1 entry adopts the server of the first start-up
     after the upgrade, so the session is kept.
-  - Rust keeps the token of a 2xx sign-in answer (`POST …/api/time-track/device/token` and `…/login`) only for a
-    sign-in started with the new command `sign_in_begin` (signed out only, that server only, 30 minutes) and never
-    replaces a stored token (GM-L2). The UI gets the answer with the token replaced by a fixed handle
-    (`stored-in-os-keychain`). Sign-in routes are matched on the percent-decoded path, and paths escaping unreserved
-    characters (`%6Cogin`) are refused (GM-L1).
-  - `token`, `access_token` and `refresh_token` fields are scrubbed from every JSON answer, at any depth and on any
-    status (GM-I1).
+  - Rust keeps the token of a 2xx sign-in answer (`POST …/api/time-track/device/token`) only for a sign-in started
+    with the new command `sign_in_begin` (signed out only, that server only, 30 minutes) and never replaces a stored
+    token (GM-L2). `sign_in_begin` first shows a native dialog the webview cannot answer, "Sign in to <host>?" /
+    "¿Iniciar sesión en <host>?" with the full host; **Cancel** refuses the sign-in and the app goes back to the
+    sign-in view. Every stored sign-in is announced by an OS notification from Rust naming the server. The password
+    route (`…/login`) is no longer captured: the app is device-flow only (GM-D-1). The UI gets the answer with the
+    token replaced by a fixed handle (`stored-in-os-keychain`). The sign-in route is matched on the percent-decoded
+    path, and paths escaping unreserved characters (`to%6Ben`) are refused (GM-L1).
+  - Token fields (`token`, `access_token` / `accessToken`, `refresh_token` / `refreshToken`, `session_token` /
+    `sessionToken`, `id_token`, `bearer`, any case) are scrubbed from every JSON answer, a UTF-8 BOM included, at any
+    depth and on any status; only the response headers the UI reads reach the webview (GM-I1, GM-D-3).
+  - When the saved server does not match the stored session at start-up, the app signs out locally and says the old
+    device can be revoked in Beacon (Account → Security → Time tracking apps) (GM-D-2).
+  - Keychain calls and the sign-in dialog run with `spawn_blocking`, off the async workers and the main thread; the
+    session lock is never held across a keychain call or the dialog; sign-out recovers a poisoned lock (GM-D-4).
   - Sign-out is atomic: one lock over the in-memory token, the binding and the keychain; the keychain entry is deleted
     first, and a refused delete keeps the token and the binding and reports the error (GM-L3).
   - Commands: `secret_get` and `secret_set` are removed; new `secret_status` (whether a token is stored) and
-    `sign_in_begin` (start a sign-in; binds the server), both `main` window only; `secret_delete` (sign-out) is
+    `sign_in_begin` (start a sign-in after the native confirmation; binds the server; `locale` only picks the dialog's
+    language), both `main` window only; `secret_status`, `sign_in_begin`, `secret_delete` and `beacon_bind` are async; `secret_delete` (sign-out) is
     unchanged for the UI. `check_update` and `install_update` no longer take a `token` argument. Capability
     `default.json`: `allow-secret-get` / `allow-secret-set` replaced by `allow-secret-status` and `allow-sign-in-begin`.
     The UI's `Platform` gains `beginSignIn(server)`, used by the sign-in instead of `bindServer`.
@@ -37,7 +46,8 @@ All notable changes to this project are documented here ([Keep a Changelog](http
     Rust tests cover origin binding, the locked keychain, the 0.5.1 entry, capture, encoded paths, scrubbing and
     sign-out failures and races; Vitest covers the bridge.
   - Still possible for a script in the main webview: authenticated requests to the signed-in server while the app
-    runs, and sending data it read elsewhere (for example through `open_external`). SECURITY.md lists it.
+    runs, sending data it read elsewhere (for example through `open_external`), and signing you out and asking you,
+    in the native dialog, to sign in to another server. SECURITY.md lists it.
 
 ## [0.5.1] - 2026-11-06
 

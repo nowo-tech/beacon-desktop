@@ -222,9 +222,27 @@ describe('app: pin mismatch and the Settings line', () => {
     expect(again.view).toBe('login');
     expect(platform.hooks.boundServer).toBeNull();
     expect(await platform.secretGet()).toBeNull();
+    // The notice points to Beacon to revoke the old device (GM-D-2).
+    expect(root.querySelector('#notice')?.textContent).toContain('puedes revocarlo allí');
     // A new sign-in is possible again.
     await platform.beginSignIn(env.url);
     again.destroy();
+  });
+
+  it('declining the native "Sign in to …?" confirmation goes back to the sign-in view without an error (GM-D-1)', async () => {
+    const platform = browserPlatform('0.5.0', nodeFetch);
+    platform.hooks.declineSignIn = true;
+    const root = document.createElement('div');
+    document.body.replaceChildren(root);
+    const app = new DesktopApp(root, platform, { storage: localStorage, locale: 'es', sleep: () => Promise.resolve(), searchDelayMs: 5 });
+    await app.init();
+    await app.connect(env.url);
+    expect(platform.hooks.signInConfirmations).toEqual([env.url]);
+    expect(app.view).toBe('login');
+    expect(root.querySelector('#error-title')).toBeNull();
+    expect(platform.hooks.boundServer).toBeNull();
+    expect(await platform.secretGet()).toBeNull();
+    app.destroy();
   });
 
   it('a token without a saved session is dropped so that signing in works', async () => {

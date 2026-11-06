@@ -198,10 +198,11 @@ TLS mock server at test time (`rcgen`).
   client. Covered: the pinned success, a pin mismatch (exact error, and the server never receives the request), an
   intermediate chain, an unpinned host, an untrusted CA (plain TLS error), and requests to another origin than the
   bound server (refused, nothing and no token reaches the server), the token added by Rust (the webview's
-  `Authorization` dropped; no stored token: `401` and nothing sent), a started sign-in stored with its token replaced
-  and an unstarted one neither stored nor shown, encoded sign-in paths refused, token fields scrubbed, and error texts
+  `Authorization` dropped; no stored token: `401` and nothing sent), a confirmed sign-in stored with its token replaced
+  and an unstarted one neither stored nor shown, the password route never stored, only allow-listed response headers, encoded sign-in paths refused, token fields scrubbed, and error texts
   that never quote the token. `src-tauri/src/secret.rs`: the token's origin decides the binding and the bearer, a
-  locked keychain fails closed, a 0.5.1 entry, capture rules, sign-out failures and races. Loopback http only in debug builds; updater error details without query
+  locked keychain fails closed, a 0.5.1 entry, capture rules (a declined confirmation, the dialog and notification
+  texts), camelCase and BOM scrubbing, sign-out failures, races and a poisoned lock, keychain work off the async workers. Loopback http only in debug builds; updater error details without query
   strings.
 - `tests/unit/token-bridge.test.ts`: the Tauri bridge with a mocked `invoke` (a simplified JS stand-in for Rust, not
   coverage of the Rust rules) never asks for, sends or holds the token.

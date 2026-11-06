@@ -79,11 +79,13 @@ a ghost Windows removes when the mouse passes over it.
 
 ### Sign in
 
-1. Enter your Beacon URL and click **Connect**.
+1. Enter your Beacon URL and click **Connect**. The app asks *Sign in to <host>?* in a system dialog: check the host
+   and click **Sign in** (if you did not just ask to sign in, click **Cancel**).
 2. The app shows a code like `BCDF-GHJK` and opens Beacon's *Connect a device* page in your browser.
 3. Check the code, approve. The app is now listed in Beacon under Account → Security → Time tracking apps, where you
    can revoke it. The session token is stored in the OS keychain only, and only Rust reads it: the app's web view
-   never sees it.
+   never sees it. A system notification confirms every sign-in. If the app ever signs you out because the saved
+   server no longer matches the session, revoke the old device there too.
 
 ## Features
 

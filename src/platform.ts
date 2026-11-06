@@ -1,6 +1,7 @@
 import type { Rect, Screens } from './lib/layout';
 import type { BrowserChoice, BrowserRequest, DetectedBrowser, OpenOutcome } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
+import { SIGN_IN_DECLINED } from './lib/nativeFetch';
 
 /**
  * What the UI needs from the host. In the Tauri app it is backed by Rust commands and plugins (platform-tauri.ts);
@@ -199,8 +200,9 @@ export interface Platform {
    */
   bindServer(server: string): Promise<void>;
   /**
-   * Starts a sign-in to `server` (Rust `sign_in_begin`): binds it like `bindServer` and lets the host keep the token
-   * of the sign-in answer that follows. Rejects while a token is stored (`secretDelete` first).
+   * Starts a sign-in to `server` (Rust `sign_in_begin`): the host asks the person in a native "Sign in to <host>?"
+   * dialog, then binds it like `bindServer` and keeps the token of the sign-in answer that follows. Rejects while a
+   * token is stored (`secretDelete` first), and with `SIGN_IN_DECLINED` (lib/nativeFetch.ts) when the person declines.
    */
   beginSignIn(server: string): Promise<void>;
   appVersion(): Promise<string>;
@@ -338,6 +340,9 @@ export interface BrowserHooks {
   promptFails: boolean;
   /** What the fake host answers for the connection's TLS pinning (`null`: unknown, nothing shown). */
   connectionSecurity: ConnectionSecurity | null;
+  /** Servers the fake host's native "Sign in to …?" dialog was shown for; `declineSignIn` answers it with Cancel. */
+  signInConfirmations: string[];
+  declineSignIn: boolean;
   /** The server the app bound (`bindServer`), `null` after `secretDelete`. */
   boundServer: string | null;
   shortcutPressed(): void;
@@ -412,6 +417,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     promptFocused: 0,
     promptFails: false,
     connectionSecurity: null,
+    signInConfirmations: [],
+    declineSignIn: false,
     boundServer: null,
     shortcutPressed: () => shortcutHandlers.forEach((handler) => handler()),
     resumeShortcutPressed: () => resumeHandlers.forEach((handler) => handler()),
@@ -450,6 +457,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     },
     beginSignIn: async (server) => {
       if (secret !== null) throw new Error('already signed in: sign out first');
+      hooks.signInConfirmations.push(server);
+      if (hooks.declineSignIn) throw new Error(SIGN_IN_DECLINED);
       hooks.boundServer = server;
     },
     secretSet: async (token) => {

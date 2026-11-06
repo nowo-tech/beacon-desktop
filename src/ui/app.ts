@@ -10,6 +10,7 @@ import { type GapChoice, type IdleCheckState, type IdleChoice, WATCHING, decide,
 import { lockReturn, meetingTask, pickerTasks, reassignMode, reassignWhileAsking } from '../lib/idleChoices';
 import { composeNudge, EMPTY_NUDGE, NUDGE_MINUTES_CHOICES, type NudgeAction, nudgeActionOf, type NudgeNote, observeActivity, watchingActivity, workingNow } from '../lib/nudge';
 import { preflight } from '../lib/preflight';
+import { isSignInDeclined } from '../lib/nativeFetch';
 import { OfflineQueue } from '../lib/queue';
 import { type ClampNote, type QueuedAction, type SyncResult, applyLocally } from '../lib/replay';
 import { type ServerFeatures, effectiveThreshold, serverFeatures, thresholdChoices } from '../lib/serverFeatures';
@@ -400,9 +401,11 @@ export class DesktopApp {
       await this.platform.bindServer(this.state.session.server);
     } catch {
       // The saved server is not allowed by this build (e.g. loopback http in a release build), or is not the server
-      // that issued the stored token (the host refuses it): sign in again.
+      // that issued the stored token (the host refuses it): sign in again. The old session cannot be revoked from
+      // here (its server is not bound), so the notice points to Beacon (audit GM-D-2).
       await this.forgetToken();
       this.show('login');
+      this.setNotice(this.t('signedOutRevoke'));
       await this.updateTray();
       return;
     }
@@ -524,8 +527,16 @@ export class DesktopApp {
     await this.guard(
       async () => {
         try {
-          // Binds the server and lets the host keep the token of this sign-in only (the token never reaches the UI).
-          await this.platform.beginSignIn(server);
+          // The host asks "Sign in to <host>?" natively, binds the server and keeps the token of this sign-in only
+          // (the token never reaches the UI). Declined: back to the sign-in view, no error.
+          try {
+            await this.platform.beginSignIn(server);
+          } catch (error) {
+            if (!isSignInDeclined(error)) throw error;
+            this.device = null;
+            this.view = 'login';
+            return;
+          }
           await preflight(this.platform.fetch, server);
           stage = 'deviceCode';
           const login = await runDeviceFlow(api, {

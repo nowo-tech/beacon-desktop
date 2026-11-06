@@ -22,19 +22,35 @@ Only the latest release receives fixes. The server can force an update with `min
     again), and Rust sets `Authorization` only on requests to that origin (`beacon_fetch`, the update check, the
     updater). A keychain that cannot be read refuses the binding. A 0.5.1 entry, which has no origin, adopts the server
     of the first start-up after the upgrade (trust on first use, the trust 0.5.1 already gave it).
-  - Rust keeps a token only from the sign-in answer of a sign-in the app started (`sign_in_begin`, signed out, 30
-    minutes, that server only), and never replaces a stored token. The UI gets a fixed handle in its place. The
-    sign-in routes are matched on the decoded path, and paths that escape unreserved characters are refused.
-  - `token`, `access_token` and `refresh_token` fields are removed from every JSON answer, at any depth and on any
-    status, before the webview sees it. An `Authorization` header from the webview is dropped. Error texts never quote
-    the token.
+  - Rust keeps a token only from the `device/token` answer of a sign-in the person confirmed: `sign_in_begin` (signed
+    out only) shows a native dialog, "Sign in to <host>?" with the full host (IDN hosts as `xn--…`), that the webview
+    cannot answer; only after **Sign in** is the answer stored, for that server, within 30 minutes, and every stored
+    sign-in is announced by an OS notification from Rust. A stored token is never replaced. The app signs in with the
+    device flow only, so the password route (`…/login`) is never stored. The UI gets a fixed handle in place of the
+    token. The sign-in route is matched on the decoded path, and paths that escape unreserved characters are refused.
+  - Token fields (`token`, `access_token` / `accessToken`, `refresh_token`, `session_token`, `id_token`, `bearer`,
+    any case) are removed from every JSON answer (a UTF-8 BOM included), at any depth and on any status, before the
+    webview sees it, and only the response headers the UI reads (`Content-Type`, `Content-Length`,
+    `Content-Disposition`, `Retry-After`, `X-Min-Supported-Version`) reach it. An `Authorization` header from the
+    webview is dropped. Error texts never quote the token. Keychain calls and the dialog run off the UI thread and the
+    async workers.
   - Sign-out revokes it on the server, then deletes the keychain entry before Rust forgets it and unbinds the server,
     all under one lock; if the keychain refuses, the token and the binding stay and the error is shown. `401` deletes it
     and asks to sign in again.
-  - **Residual risk.** A script running in the main webview could still make authenticated requests to the signed-in
-    server while the app runs (any GET / POST the token's scopes allow, `export` included), and could send the **data**
-    it reads elsewhere, for example in an https URL given to `open_external`. It cannot read the token or get it sent
-    to another server. Script injection itself is prevented by `script-src 'self'` and a text-only DOM.
+  - When the app signs you out because the saved server no longer matches the stored session, it cannot revoke that
+    session on the server: it says so, and you can revoke the device in Beacon (Account → Security → Time tracking
+    apps). The same applies after *Clear local data* while offline.
+  - **Residual risk.** A script running in the main webview (script injection is prevented by `script-src 'self'`
+    and a text-only DOM) could still:
+    - make authenticated requests to the signed-in server while the app runs (any GET / POST the token's scopes
+      allow, `export` included), and send the **data** it reads elsewhere, for example in an https URL given to
+      `open_external`;
+    - sign you out (`secret_delete`) and start a sign-in to a server of its choice (`sign_in_begin`). That needs you
+      to press **Sign in** in the native "Sign in to <host>?" dialog showing that host, and any stored sign-in is
+      announced by an OS notification naming the server. If you see a dialog or a notification you did not expect,
+      press **Cancel**, or sign out and revoke the device in Beacon.
+
+    It cannot read the token or get it sent to another server.
 - **Network.** HTTPS required; plain `http://` to `localhost` / `127.0.0.1` / `[::1]` only in debug builds. The
   webview cannot reach the network (CSP `connect-src ipc:`, no HTTP plugin): every request goes through the Rust
   command `beacon_fetch` (main window only; GET / POST, allow-listed headers, no redirects, no cookies). No remote
