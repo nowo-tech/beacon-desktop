@@ -450,6 +450,14 @@ pub fn decline_pause(base: Duration, count: u32) -> Duration {
         .min(cap)
 }
 
+/// Whether a pause ending at `until` still runs at `now`. A pause longer than `longest` from now (the clock was set
+/// back after the decline) counts as over, so a rolled-back clock cannot stretch it (audit GO-D-1).
+pub fn pause_running(until: SystemTime, now: SystemTime, longest: Duration) -> bool {
+    until
+        .duration_since(now)
+        .is_ok_and(|left| !left.is_zero() && left <= longest)
+}
+
 /// What an authenticated request gets.
 pub enum Authorization {
     Bearer(HeaderValue),
@@ -605,9 +613,10 @@ impl Session {
         // Declined recently: no dialog until the pause ends (a script cannot re-raise it in a loop).
         {
             let declines = self.declines.lock().map_err(|_| UNAVAILABLE.to_string())?;
+            let longest = decline_pause(self.decline_pause, MAX_DECLINES);
             if declines
                 .until
-                .is_some_and(|until| SystemTime::now() < until)
+                .is_some_and(|until| pause_running(until, SystemTime::now(), longest))
             {
                 return Err(SIGN_IN_WAIT.into());
             }
@@ -1348,6 +1357,37 @@ pub mod tests {
         assert_eq!(*session.declines.lock().unwrap(), Declines::default());
         // The person's own sign-in right after: shown, no wait.
         session.begin_sign_in(&url(A), None, true, || true).unwrap();
+    }
+
+    // GO-D-1
+    #[test]
+    fn a_clock_set_back_cannot_stretch_the_pause() {
+        let now = SystemTime::now();
+        let longest = DECLINE_PAUSE_MAX;
+        assert!(pause_running(now + Duration::from_secs(10), now, longest));
+        assert!(pause_running(now + longest, now, longest));
+        assert!(!pause_running(
+            now + longest + Duration::from_secs(1),
+            now,
+            longest
+        ));
+        assert!(!pause_running(now, now, longest));
+        assert!(!pause_running(now - Duration::from_secs(1), now, longest));
+        // A pause saved before the clock went back an hour: over, and the dialog shows again.
+        let store = MemoryStore::default();
+        let session = Session::with_timing(Box::new(store), SIGN_IN_WINDOW, DECLINE_PAUSE);
+        session.declines.lock().unwrap().until = Some(now + Duration::from_secs(3600));
+        session.begin_sign_in(&url(A), None, true, || true).unwrap();
+        // Within the longest pause it still holds.
+        let store = MemoryStore::default();
+        let session = Session::with_timing(Box::new(store), SIGN_IN_WINDOW, DECLINE_PAUSE);
+        session.declines.lock().unwrap().until = Some(now + Duration::from_secs(200));
+        assert_eq!(
+            session
+                .begin_sign_in(&url(A), None, true, || panic!("no dialog"))
+                .unwrap_err(),
+            SIGN_IN_WAIT
+        );
     }
 
     // GO-I2

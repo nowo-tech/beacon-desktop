@@ -94,7 +94,8 @@ and GM) and the backlog fixes. Not released yet (release freeze).
     window is focused with input in the last 30 seconds, else it is refused unseen (`sign_in_not_present`) without
     starting a pause (GO-I3; where the OS cannot report idle time, as on some Wayland sessions, only the focus counts,
     GO-I7); after a decline `sign_in_begin` refuses (`sign_in_wait`, no dialog) for 10 seconds, doubling up to 5
-    minutes, and neither sign-out nor a restart resets it (kept in `sign-in-pause.json` in the app data folder, GO-I2);
+    minutes, and neither sign-out nor a restart resets it (kept in `sign-in-pause.json` in the app data folder, GO-I2; a pause longer than 5 minutes from now, as
+    after the clock was set back, counts as over, GO-D-1);
     only the exact *Sign in* button result confirms (GO-I4) (GM-D2-1, GM-D2-2). Every stored sign-in is announced by an OS notification from Rust naming the server. The password
     route (`…/login`) is no longer captured: the app is device-flow only (GM-D-1). The UI gets the answer with the
     token replaced by a fixed handle (`stored-in-os-keychain`). The sign-in route is matched on the percent-decoded
