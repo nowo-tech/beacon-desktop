@@ -3,6 +3,26 @@
 All notable changes to this project are documented here ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/)).
 
+## [Unreleased]
+
+### Security
+
+- **The session token never reaches the webview** (known limitation after the security review 2026-11-05, appendix
+  FY: a script running in the main webview could call `secret_get` and read the token). The token now stays in Rust
+  (`src-tauri/src/secret.rs`):
+  - `beacon_fetch`, the update check and the updater read it from the OS keychain (kept in Rust memory after the first
+    read) and set `Authorization` themselves. The UI marks a request as authenticated (`auth: true`); an
+    `Authorization` header from the webview is dropped (`authorization` is no longer an allow-listed header). Without
+    a stored token an authenticated request gets `401 invalid_token` and nothing is sent.
+  - The 2xx answers of the sign-in routes (`POST …/api/time-track/device/token` and `…/login`) are stored in the
+    keychain by Rust, and the UI gets them with the token replaced by a fixed handle (`stored-in-os-keychain`).
+  - Commands: `secret_get` and `secret_set` are removed; new `secret_status` (whether a token is stored, `main` window
+    only); `secret_delete` (sign-out) is unchanged. `check_update` and `install_update` no longer take a `token`
+    argument. Capability `default.json`: `allow-secret-get` / `allow-secret-set` replaced by `allow-secret-status`.
+  - The bound-origin rule (FY-L1) still applies before the keychain is read. Keychain and header errors are fixed
+    texts that never quote the token; the header value is marked sensitive. Rust and Vitest tests cover it.
+  - Upgrading keeps the session: the keychain entry is the same.
+
 ## [0.5.1] - 2026-11-06
 
 ### Security

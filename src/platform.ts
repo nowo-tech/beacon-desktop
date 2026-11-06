@@ -200,7 +200,13 @@ export interface Platform {
   bindServer(server: string): Promise<void>;
   appVersion(): Promise<string>;
   hostName(): Promise<string>;
+  /**
+   * The stored session token, `null` when signed out. In the Tauri app it is never the token itself, which stays in
+   * Rust (src-tauri/src/secret.rs), but `SESSION_HANDLE` (lib/nativeFetch.ts): `fetch` and the updater add the real
+   * `Authorization` in Rust.
+   */
   secretGet(): Promise<string | null>;
+  /** Keeps the token of a sign-in answer. The Tauri app already stored it in Rust and only accepts `SESSION_HANDLE`. */
   secretSet(token: string): Promise<void>;
   secretDelete(): Promise<void>;
   /** Seconds since the last input, read locally from the OS. Never sent. */
@@ -246,6 +252,7 @@ export interface Platform {
   setWindowTheme(theme: 'light' | 'dark' | null): Promise<void>;
   autostartEnabled(): Promise<boolean>;
   setAutostart(enabled: boolean): Promise<void>;
+  /** `token` is what `secretGet` returned; the Tauri app ignores it and uses the token kept in Rust. */
   checkUpdate(server: string, token: string): Promise<UpdateCheck>;
   /**
    * Downloads, verifies the signature, installs and relaunches (the promise only settles on failure in the real app,

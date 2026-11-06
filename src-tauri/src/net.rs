@@ -6,22 +6,31 @@
 //! in to): `beacon_fetch`, the update check and the updater refuse any other origin, so the Bearer token never goes
 //! anywhere else (audit FY-L1). Plain `http://` is accepted for loopback development servers in debug builds only.
 //!
+//! The session token never crosses to the webview (secret.rs): the UI marks a request as authenticated (`auth`) and
+//! Rust sets `Authorization` from the OS keychain; an `Authorization` header from the UI is dropped. A 2xx answer to a
+//! sign-in route has its token stored in the keychain and replaced by `secret::SESSION_HANDLE` before the UI sees it.
+//!
 //! No redirects (the Bearer token stays bound to the configured server), no cookies, no request or response logging.
 
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use base64::Engine as _;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 
 use crate::pinning::{self, PinSet, PinStatus, UNTRUSTED_MARKER};
+use crate::secret::{self, TokenStore};
 
 /// Largest response body handed to the UI (exports included).
 const MAX_BODY: usize = 32 * 1024 * 1024;
 
-/// Request headers the UI may set; anything else is dropped.
-const ALLOWED_HEADERS: &[&str] = &["accept", "accept-language", "authorization", "content-type"];
+/// Request headers the UI may set; anything else is dropped. Never `authorization`: Rust sets it (`auth`).
+const ALLOWED_HEADERS: &[&str] = &["accept", "accept-language", "content-type"];
+
+/// What an authenticated request gets, without touching the network, when no token is stored: the same answer as the
+/// server's for a missing token, so the UI asks to sign in again.
+const NOT_SIGNED_IN: &str = r#"{"error":"invalid_token","message":"Not connected."}"#;
 
 /// A reqwest client with the given TLS configuration.
 pub fn build_client(tls: rustls::ClientConfig) -> Result<reqwest::Client, String> {
@@ -177,6 +186,9 @@ pub struct FetchRequest {
     pub headers: Vec<(String, String)>,
     #[serde(default)]
     pub body: Option<String>,
+    /// Send the stored session token (Rust reads it from the keychain; the UI never has it).
+    #[serde(default)]
+    pub auth: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -190,11 +202,13 @@ pub struct FetchResponse {
 }
 
 /// Sends one request with `client`, only to the `bound` server origin (so the `Authorization` header never reaches
-/// another origin). Errors are strings for the UI (see [`describe_error`]).
+/// another origin). With `request.auth`, the token comes from `store`; a sign-in answer is stored there and its token
+/// replaced (secret.rs). Errors are strings for the UI (see [`describe_error`]) and never carry the token.
 pub async fn send(
     client: &reqwest::Client,
     request: FetchRequest,
     bound: Option<&url::Origin>,
+    store: &dyn TokenStore,
 ) -> Result<FetchResponse, String> {
     let url = validate_url(&request.url)?;
     require_origin(bound, &url)?;
@@ -213,6 +227,15 @@ pub async fn send(
         let value = HeaderValue::from_str(value).map_err(|_| "invalid header value")?;
         headers.insert(name, value);
     }
+    if request.auth {
+        match store.get()? {
+            Some(token) => {
+                headers.insert(AUTHORIZATION, secret::bearer(&token)?);
+            }
+            None => return Ok(not_signed_in()),
+        }
+    }
+    let sign_in = secret::is_sign_in(&method, &url);
     let mut builder = client.request(method, url).headers(headers);
     if let Some(body) = request.body {
         builder = builder.body(body);
@@ -231,12 +254,24 @@ pub async fn send(
         }
         body.extend_from_slice(&chunk);
     }
+    if sign_in && status.is_success() {
+        body = secret::capture_token(&body, store)?;
+    }
     Ok(FetchResponse {
         status: status.as_u16(),
         status_text: status.canonical_reason().unwrap_or_default().to_string(),
         headers,
         body: base64::engine::general_purpose::STANDARD.encode(body),
     })
+}
+
+fn not_signed_in() -> FetchResponse {
+    FetchResponse {
+        status: 401,
+        status_text: "Unauthorized".into(),
+        headers: vec![("content-type".into(), "application/json".into())],
+        body: base64::engine::general_purpose::STANDARD.encode(NOT_SIGNED_IN),
+    }
 }
 
 /// Every Beacon API call of the UI (src/lib/nativeFetch.ts): pinned TLS, no redirects, bound server origin only, main
@@ -249,7 +284,7 @@ pub async fn beacon_fetch(
 ) -> Result<FetchResponse, String> {
     crate::only_from(&window, "main")?;
     let origin = bound.origin();
-    send(client(), request, origin.as_ref()).await
+    send(client(), request, origin.as_ref(), &secret::Keychain).await
 }
 
 /// Binds the Beacon server the UI signs in to (before the sign-in requests) or is signed in to (at start-up).
@@ -303,6 +338,8 @@ mod tests {
     //! End to end: a local TLS mock server with a CA made at test time, reached through the real client.
     use super::*;
     use crate::pinning::tests::{pin_set, TestCa};
+    use crate::secret::tests::{BrokenStore, MemoryStore};
+    use crate::secret::SESSION_HANDLE;
     use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
     use rustls::RootCertStore;
     use std::io::{Read, Write};
@@ -317,6 +354,16 @@ mod tests {
         chain: Vec<rustls::pki_types::CertificateDer<'static>>,
         key: &rcgen::KeyPair,
         connections: usize,
+    ) -> (u16, std::sync::mpsc::Receiver<String>) {
+        mock_server_with(chain, key, connections, r#"{"ok":true}"#)
+    }
+
+    /// [`mock_server`] answering 200 with `body`.
+    fn mock_server_with(
+        chain: Vec<rustls::pki_types::CertificateDer<'static>>,
+        key: &rcgen::KeyPair,
+        connections: usize,
+        body: &'static str,
     ) -> (u16, std::sync::mpsc::Receiver<String>) {
         let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der()));
         let config = Arc::new(
@@ -342,7 +389,6 @@ mod tests {
                     continue;
                 };
                 let _ = seen.send(String::from_utf8_lossy(&buffer[..read]).to_string());
-                let body = r#"{"ok":true}"#;
                 let _ = write!(
                     tls,
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Min-Supported-Version: 0.1.0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -373,17 +419,24 @@ mod tests {
             .origin()
     }
 
+    /// An authenticated request; the UI's own `Authorization` (anything a script could set) is dropped.
     fn request(port: u16) -> FetchRequest {
         FetchRequest {
             url: format!("https://{HOST}:{port}/api/time-track/me"),
             method: "GET".into(),
             headers: vec![
                 ("Accept".into(), "application/json".into()),
-                ("Authorization".into(), "Bearer secret-token".into()),
+                ("Authorization".into(), "Bearer from-the-webview".into()),
                 ("Cookie".into(), "dropped=1".into()),
             ],
             body: None,
+            auth: true,
         }
+    }
+
+    /// The keychain of the tests: the token Rust sends.
+    fn store() -> MemoryStore {
+        MemoryStore::with("secret-token")
     }
 
     #[tokio::test]
@@ -396,7 +449,7 @@ mod tests {
             pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
             port,
         );
-        let response = send(&client, request(port), Some(&bound(port)))
+        let response = send(&client, request(port), Some(&bound(port)), &store())
             .await
             .unwrap();
         assert_eq!(response.status, 200);
@@ -411,6 +464,11 @@ mod tests {
         assert_eq!(body, br#"{"ok":true}"#);
         let head = seen.recv().unwrap().to_ascii_lowercase();
         assert!(head.contains("authorization: bearer secret-token"));
+        assert!(
+            !head.contains("from-the-webview"),
+            "the UI's Authorization is dropped"
+        );
+        assert_eq!(head.matches("authorization").count(), 1);
         assert!(
             !head.contains("cookie"),
             "only allow-listed headers are sent"
@@ -432,7 +490,7 @@ mod tests {
             pin_set(&[HOST], &[&official.spki_pin], "2999-01-01"),
             port,
         );
-        let error = send(&client, request(port), Some(&bound(port)))
+        let error = send(&client, request(port), Some(&bound(port)), &store())
             .await
             .unwrap_err();
         assert_eq!(
@@ -459,7 +517,7 @@ mod tests {
             port,
         );
         assert_eq!(
-            send(&client, request(port), Some(&bound(port)))
+            send(&client, request(port), Some(&bound(port)), &store())
                 .await
                 .unwrap()
                 .status,
@@ -483,7 +541,7 @@ mod tests {
             port,
         );
         assert_eq!(
-            send(&client, request(port), Some(&bound(port)))
+            send(&client, request(port), Some(&bound(port)), &store())
                 .await
                 .unwrap()
                 .status,
@@ -502,7 +560,7 @@ mod tests {
             pin_set(&[HOST], &[&trusted.spki_pin], "2999-01-01"),
             port,
         );
-        let error = send(&client, request(port), Some(&bound(port)))
+        let error = send(&client, request(port), Some(&bound(port)), &store())
             .await
             .unwrap_err();
         assert!(!error.contains(UNTRUSTED_MARKER), "{error}");
@@ -526,19 +584,25 @@ mod tests {
                 method: method.into(),
                 headers: vec![],
                 body: None,
+                auth: true,
             };
             assert!(
-                send(&client, request, Some(&example)).await.is_err(),
+                send(&client, request, Some(&example), &store())
+                    .await
+                    .is_err(),
                 "{url} {method}"
             );
         }
         let bad_header = FetchRequest {
             url: "https://beacon.example.com/api".into(),
             method: "POST".into(),
-            headers: vec![("Authorization".into(), "Bearer \n".into())],
+            headers: vec![("Accept".into(), "application/json\n".into())],
             body: Some("{}".into()),
+            auth: false,
         };
-        assert!(send(&client, bad_header, Some(&example)).await.is_err());
+        assert!(send(&client, bad_header, Some(&example), &store())
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -563,15 +627,158 @@ mod tests {
             .unwrap()
             .origin();
         for origin in [Some(&other_host), Some(&other_port), Some(&other_scheme)] {
-            let error = send(&client, request(port), origin).await.unwrap_err();
+            let error = send(&client, request(port), origin, &store())
+                .await
+                .unwrap_err();
             assert_eq!(error, OTHER_ORIGIN);
         }
-        let error = send(&client, request(port), None).await.unwrap_err();
+        let error = send(&client, request(port), None, &store())
+            .await
+            .unwrap_err();
         assert!(error.contains("sign in"), "{error}");
         // Nothing (no Authorization header) reached the server.
         assert!(seen
             .recv_timeout(std::time::Duration::from_millis(500))
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn without_a_stored_token_nothing_is_sent_and_the_ui_gets_401() {
+        let ca = TestCa::new("E2E Root");
+        let (leaf, key) = ca.leaf(HOST);
+        let (port, seen) = mock_server(vec![leaf], &key, 1);
+        let client = client_for(
+            ca.roots(),
+            pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
+            port,
+        );
+        let response = send(
+            &client,
+            request(port),
+            Some(&bound(port)),
+            &MemoryStore::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status, 401);
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(response.body)
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "invalid_token");
+        assert!(seen
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn unauthenticated_requests_carry_no_token() {
+        let ca = TestCa::new("E2E Root");
+        let (leaf, key) = ca.leaf(HOST);
+        let (port, seen) = mock_server(vec![leaf], &key, 1);
+        let client = client_for(
+            ca.roots(),
+            pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
+            port,
+        );
+        let request = FetchRequest {
+            auth: false,
+            ..request(port)
+        };
+        let response = send(&client, request, Some(&bound(port)), &store())
+            .await
+            .unwrap();
+        assert_eq!(response.status, 200);
+        let head = seen.recv().unwrap().to_ascii_lowercase();
+        assert!(!head.contains("authorization"), "{head}");
+    }
+
+    #[tokio::test]
+    async fn sign_in_answers_keep_the_token_in_rust() {
+        let ca = TestCa::new("E2E Root");
+        let (leaf, key) = ca.leaf(HOST);
+        let (port, _) = mock_server_with(
+            vec![leaf],
+            &key,
+            1,
+            r#"{"token":"fresh-token","expiresAt":"2027-01-01T00:00:00Z","scopes":["timer:read"]}"#,
+        );
+        let client = client_for(
+            ca.roots(),
+            pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
+            port,
+        );
+        let keychain = MemoryStore::default();
+        let request = FetchRequest {
+            url: format!("https://{HOST}:{port}/api/time-track/device/token"),
+            method: "POST".into(),
+            headers: vec![("Content-Type".into(), "application/json".into())],
+            body: Some(r#"{"deviceCode":"d"}"#.into()),
+            auth: false,
+        };
+        let response = send(&client, request, Some(&bound(port)), &keychain)
+            .await
+            .unwrap();
+        assert_eq!(keychain.token().as_deref(), Some("fresh-token"));
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(response.body)
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&body).contains("fresh-token"));
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["token"], SESSION_HANDLE);
+        assert_eq!(json["scopes"][0], "timer:read");
+    }
+
+    #[tokio::test]
+    async fn error_paths_never_echo_the_token() {
+        let client = build_client(pinning::shipped_client_config()).unwrap();
+        // Connection refused (nothing listens on the port): the transport error.
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let url = format!("http://127.0.0.1:{port}/api/time-track/me");
+        let origin = url::Url::parse(&url).unwrap().origin();
+        let request = |url: &str| FetchRequest {
+            url: url.into(),
+            method: "GET".into(),
+            headers: vec![],
+            body: None,
+            auth: true,
+        };
+        let mut errors = vec![];
+        if ALLOW_LOOPBACK_HTTP {
+            errors.push(
+                send(&client, request(&url), Some(&origin), &store())
+                    .await
+                    .unwrap_err(),
+            );
+        }
+        // A stored token that is not a valid header value, a keychain that fails, another origin, no origin.
+        let example = url::Url::parse("https://beacon.example.com").unwrap();
+        for (store, bound) in [
+            (
+                &MemoryStore::with("secret-token\nX-Injected: 1") as &dyn TokenStore,
+                Some(example.origin()),
+            ),
+            (&BrokenStore as &dyn TokenStore, Some(example.origin())),
+            (&store() as &dyn TokenStore, Some(origin.clone())),
+            (&store() as &dyn TokenStore, None),
+        ] {
+            errors.push(
+                send(
+                    &client,
+                    request("https://beacon.example.com/api/time-track/me"),
+                    bound.as_ref(),
+                    store,
+                )
+                .await
+                .unwrap_err(),
+            );
+        }
+        for error in &errors {
+            assert!(!error.contains("secret-token"), "{error}");
+            assert!(!error.to_ascii_lowercase().contains("bearer"), "{error}");
+        }
     }
 
     #[test]

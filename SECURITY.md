@@ -13,8 +13,14 @@ Only the latest release receives fixes. The server can force an update with `min
 ## Design
 
 - **Credentials.** Device flow only: no password is typed in the app. The session token lives in the OS keychain
-  (macOS Keychain, Windows Credential Manager, Secret Service on Linux), never in files or web storage. Sign-out revokes
-  it on the server and deletes it locally; `401` deletes it and asks to sign in again.
+  (macOS Keychain, Windows Credential Manager, Secret Service on Linux), never in files or web storage, and it never
+  reaches the webview: Rust stores it from the sign-in answer (the UI gets a fixed handle in its place) and sets
+  `Authorization` itself in `beacon_fetch`, the update check and the updater (`src-tauri/src/secret.rs`). No command
+  returns it (`secret_get` is gone since the version after 0.5.1); the webview can only ask whether one is stored
+  (`secret_status`) and delete it (`secret_delete`). An `Authorization` header from the webview is dropped, and error
+  texts never quote the token. A script running in the main webview could still make requests to the bound server
+  while the app runs, but cannot take the token elsewhere. Sign-out revokes it on the server and deletes it locally;
+  `401` deletes it and asks to sign in again.
 - **Network.** HTTPS required; plain `http://` to `localhost` / `127.0.0.1` / `[::1]` only in debug builds. The
   webview cannot reach the network (CSP `connect-src ipc:`, no HTTP plugin): every request goes through the Rust
   command `beacon_fetch` (main window only; GET / POST, allow-listed headers, no redirects, no cookies). No remote

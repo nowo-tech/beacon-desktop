@@ -27,8 +27,9 @@ describe('nativeFetch (beacon_fetch bridge)', () => {
       body: '{"a":1}',
     });
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ url: 'https://beacon.nowo.tech/api/time-track/me', method: 'POST', body: '{"a":1}' });
-    expect(Object.fromEntries(sent[0].headers.map(([name, value]) => [name.toLowerCase(), value]))).toEqual({ accept: 'application/json', authorization: 'Bearer t' });
+    expect(sent[0]).toMatchObject({ url: 'https://beacon.nowo.tech/api/time-track/me', method: 'POST', body: '{"a":1}', auth: true });
+    // The token never crosses the bridge: `Authorization` only marks the request, Rust sets the header.
+    expect(Object.fromEntries(sent[0].headers.map(([name, value]) => [name.toLowerCase(), value]))).toEqual({ accept: 'application/json' });
     expect(response.status).toBe(200);
     expect(response.statusText).toBe('OK');
     expect(response.headers.get('X-Min-Supported-Version')).toBe('0.3.0');
@@ -42,7 +43,7 @@ describe('nativeFetch (beacon_fetch bridge)', () => {
       return { status: 200, statusText: 'OK', headers: [], body: btoa(String.fromCharCode(0, 255, 7)) };
     });
     const response = await fetchImpl(new URL('https://beacon.nowo.tech/x'));
-    expect(sent[0]).toEqual({ url: 'https://beacon.nowo.tech/x', method: 'GET', headers: [], body: null });
+    expect(sent[0]).toEqual({ url: 'https://beacon.nowo.tech/x', method: 'GET', headers: [], body: null, auth: false });
     expect([...new Uint8Array(await response.arrayBuffer())]).toEqual([0, 255, 7]);
   });
 

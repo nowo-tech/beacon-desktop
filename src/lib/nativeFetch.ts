@@ -3,7 +3,17 @@
  * itself: every Beacon request goes through the Rust HTTP client, which pins the TLS public keys of the official
  * Beacon host (docs/PINNING.md). Only the parts of `fetch` the API client uses are supported: a string / URL input,
  * GET / POST, plain headers and a string body.
+ *
+ * The session token never reaches the webview: Rust keeps it in the OS keychain and sets `Authorization` itself
+ * (src-tauri/src/secret.rs). The API client still adds `Authorization: Bearer <SESSION_HANDLE>` to authenticated
+ * requests; this bridge turns that header into `auth: true` and never forwards it.
  */
+
+/**
+ * What the app holds in place of the session token in the Tauri app (the sign-in answers carry it instead of the
+ * token, `secret_status` maps to it). Not a credential. Same value as `secret::SESSION_HANDLE` in Rust.
+ */
+export const SESSION_HANDLE = 'stored-in-os-keychain';
 
 /** What `beacon_fetch` receives. */
 export interface NativeRequest {
@@ -11,6 +21,8 @@ export interface NativeRequest {
   method: string;
   headers: [string, string][];
   body: string | null;
+  /** Rust adds the stored session token (`Authorization`) to this request. */
+  auth: boolean;
 }
 
 /** What `beacon_fetch` answers; `body` is base64. */
@@ -24,10 +36,15 @@ export interface NativeResponse {
 /** Statuses whose `Response` must not have a body. */
 const NULL_BODY = new Set([204, 205, 304]);
 
-function headerPairs(headers: HeadersInit | undefined): [string, string][] {
+/** The headers to forward, without `Authorization` (its presence only marks the request as authenticated). */
+function headerPairs(headers: HeadersInit | undefined): { pairs: [string, string][]; auth: boolean } {
   const pairs: [string, string][] = [];
-  new Headers(headers).forEach((value, name) => pairs.push([name, value]));
-  return pairs;
+  let auth = false;
+  new Headers(headers).forEach((value, name) => {
+    if (name.toLowerCase() === 'authorization') auth = true;
+    else pairs.push([name, value]);
+  });
+  return { pairs, auth };
 }
 
 function decodeBase64(value: string): Uint8Array<ArrayBuffer> {
@@ -44,7 +61,8 @@ export function nativeFetch(send: (request: NativeRequest) => Promise<NativeResp
     if (init?.body !== undefined && init.body !== null && typeof init.body !== 'string') throw new TypeError('Only string bodies are supported.');
     let answer: NativeResponse;
     try {
-      answer = await send({ url: input.toString(), method: init?.method ?? 'GET', headers: headerPairs(init?.headers), body: init?.body ?? null });
+      const { pairs, auth } = headerPairs(init?.headers);
+      answer = await send({ url: input.toString(), method: init?.method ?? 'GET', headers: pairs, body: init?.body ?? null, auth });
     } catch (error) {
       // Tauri rejects with the command's error string (`beacon_untrusted_certificate: …` on a pin mismatch).
       throw error instanceof Error ? error : new TypeError(String(error));

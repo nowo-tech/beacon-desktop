@@ -9,7 +9,8 @@ Bearer token) is sent.
 
 - **Everything goes through Rust.** The webview cannot reach the network (CSP `connect-src ipc:`, no HTTP plugin).
   The UI calls the command `beacon_fetch` (`src-tauri/src/net.rs`, main window only). It makes GET or POST requests
-  with allow-listed headers and no redirects or cookies, through one reqwest client on rustls. The update check
+  with allow-listed headers and no redirects or cookies, through one reqwest client on rustls. The session token is
+  added by Rust from the OS keychain (`auth: true`, `src-tauri/src/secret.rs`); the webview never has it. The update check
   (`check_update`) and the updater (`install_update`, via `configure_client`) use the same TLS configuration.
 - **Verifier** (`src-tauri/src/pinning.rs`, `PinningVerifier`):
   1. Normal WebPKI validation (rustls `WebPkiServerVerifier`) against the compiled-in Mozilla roots
@@ -195,8 +196,11 @@ TLS mock server at test time (`rcgen`).
 - `src-tauri/src/net.rs` (end to end): a local TLS mock server with a CA made at test time, reached through the real
   client. Covered: the pinned success, a pin mismatch (exact error, and the server never receives the request), an
   intermediate chain, an unpinned host, an untrusted CA (plain TLS error), and requests to another origin than the
-  bound server (refused, nothing and no token reaches the server). Loopback http only in debug builds; updater error
-  details without query strings.
+  bound server (refused, nothing and no token reaches the server), the token added by Rust (the webview's
+  `Authorization` dropped; no stored token: `401` and nothing sent), a sign-in answer stored with its token replaced,
+  and error texts that never quote the token. Loopback http only in debug builds; updater error details without query
+  strings.
+- `tests/unit/token-bridge.test.ts`: the Tauri bridge with a mocked `invoke` never asks for, sends or holds the token.
 - `tests/unit/pinning.test.ts`: the `beacon_fetch` bridge, the error mapping (Spanish and English text, no offline
   mode, nothing queued), the Settings line, binding the server (sign-in, start-up, sign-out) and the expired-pinning
   card and notification.

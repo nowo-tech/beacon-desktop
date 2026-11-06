@@ -82,7 +82,8 @@ a ghost Windows removes when the mouse passes over it.
 1. Enter your Beacon URL and click **Connect**.
 2. The app shows a code like `BCDF-GHJK` and opens Beacon's *Connect a device* page in your browser.
 3. Check the code, approve. The app is now listed in Beacon under Account → Security → Time tracking apps, where you
-   can revoke it. The session token is stored in the OS keychain only.
+   can revoke it. The session token is stored in the OS keychain only, and only Rust reads it: the app's web view
+   never sees it.
 
 ## Features
 
@@ -315,7 +316,8 @@ required" screen send you to the Store listing instead.
   `clipboard-manager:allow-write-text` (*Copy link*), `notification:default`, no autostart permission (*Start at
   login* goes through the app commands `set_autostart` / `get_autostart`), process restart, set theme, and the app
   commands
-  `secret_get` / `secret_set` / `secret_delete`, `idle_seconds`, `set_tray_status`, `set_tray_menu`,
+  `secret_status` / `secret_delete` (whether a session token is stored, and sign-out; no command returns the token,
+  which Rust adds to the requests itself, `src-tauri/src/secret.rs`), `idle_seconds`, `set_tray_status`, `set_tray_menu`,
   `set_global_shortcut`, `check_update`, `install_update`, `set_wake_plan`, `notify_friendly`, `prompt_open`,
   `prompt_focus`, `prompt_close`, `open_external`, `list_browsers`, `get_browser`, `set_browser`, `pick_browser` (every
   link, in the system default or the chosen browser, launched with an argv array from Rust; no opener permission for

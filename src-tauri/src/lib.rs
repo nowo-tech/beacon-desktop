@@ -18,6 +18,7 @@ mod notify;
 mod pinning;
 mod pose_art;
 mod prompt;
+mod secret;
 mod session;
 mod tray_clock;
 
@@ -31,8 +32,6 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, WindowEvent, Wry};
 use tauri_plugin_updater::UpdaterExt;
 
-const KEYCHAIN_SERVICE: &str = "tech.nowo.time-track-desktop";
-const KEYCHAIN_USER: &str = "session-token";
 const TRAY_ID: &str = "main";
 /// Argument of the start-at-login entry: start hidden in the tray.
 const HIDDEN_ARG: &str = "--hidden";
@@ -174,44 +173,9 @@ pub(crate) fn caller_allowed(caller: &str, label: &str) -> Result<(), String> {
     }
 }
 
-fn keychain() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER).map_err(|e| e.to_string())
-}
-
-/// Session token from the OS keychain (Keychain / Credential Manager / Secret Service). `None` when absent.
-#[tauri::command]
-fn secret_get(window: tauri::Window) -> Result<Option<String>, String> {
-    only_from(&window, "main")?;
-    match keychain()?.get_password() {
-        Ok(token) => Ok(Some(token)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-#[tauri::command]
-fn secret_set(window: tauri::Window, token: String) -> Result<(), String> {
-    only_from(&window, "main")?;
-    keychain()?.set_password(&token).map_err(|e| e.to_string())
-}
-
 /// True when a session token is stored (`beacon_bind` then refuses to switch servers).
 pub(crate) fn has_session_token() -> bool {
-    keychain().is_ok_and(|entry| entry.get_password().is_ok())
-}
-
-/// Signs out locally: deletes the token and unbinds the server (net.rs, FY-L1).
-#[tauri::command]
-fn secret_delete(
-    window: tauri::Window,
-    bound: tauri::State<'_, net::BoundServer>,
-) -> Result<(), String> {
-    only_from(&window, "main")?;
-    bound.clear();
-    match keychain()?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
+    secret::has_token(&secret::Keychain)
 }
 
 /// Seconds since the last keyboard / mouse input, read locally from the OS. Never sent anywhere.
@@ -601,12 +565,7 @@ fn parse_update(body: &str, header_min: Option<String>, installable: bool) -> Up
 /// Beacon's updater route (`time_track_client_updater`). 204 = up to date, 401 = sign in again (not an error),
 /// 200 = `{version, notes, pub_date, url, signature, min_supported_version?}` (Tauri v2 dynamic-server format).
 #[tauri::command]
-async fn check_update(
-    app: AppHandle,
-    window: tauri::Window,
-    server: String,
-    token: String,
-) -> UpdateCheck {
+async fn check_update(app: AppHandle, window: tauri::Window, server: String) -> UpdateCheck {
     if let Err(message) = only_from(&window, "main") {
         return UpdateCheck::Error { message };
     }
@@ -617,6 +576,12 @@ async fn check_update(
     if let Err(message) = bound_server(&app.state::<net::BoundServer>(), &server) {
         return UpdateCheck::Error { message };
     }
+    // The token never crosses to the webview: Rust reads it here (secret.rs).
+    let authorization = match session_authorization(&secret::Keychain) {
+        Ok(Some(value)) => value,
+        Ok(None) => return UpdateCheck::Unauthorized,
+        Err(message) => return UpdateCheck::Error { message },
+    };
     let bundle = bundle_name(tauri::utils::platform::bundle_type());
     let url = updater_endpoint(&server)
         .replace("{{target}}", updater_target())
@@ -627,7 +592,12 @@ async fn check_update(
         )
         .replace("{{bundle_type}}", bundle);
     // Pinned TLS on the official host (net.rs): the Bearer token never goes through an inspecting proxy.
-    let response = match net::client().get(&url).bearer_auth(&token).send().await {
+    let response = match net::client()
+        .get(&url)
+        .header(AUTHORIZATION, authorization)
+        .send()
+        .await
+    {
         Ok(response) => response,
         Err(e) => {
             return UpdateCheck::Error {
@@ -659,6 +629,13 @@ async fn check_update(
             message: format!("HTTP {status}"),
         },
     }
+}
+
+/// The `Authorization` value of the stored session (`None`: signed out). Errors never quote the token.
+fn session_authorization(
+    store: &dyn secret::TokenStore,
+) -> Result<Option<reqwest::header::HeaderValue>, String> {
+    store.get()?.map(|token| secret::bearer(&token)).transpose()
 }
 
 /// Turns the updater's chunk callbacks into at most ~100 `update-progress` events (one per percent, or per MiB when
@@ -701,13 +678,14 @@ async fn install_update(
     window: tauri::Window,
     bound: tauri::State<'_, net::BoundServer>,
     server: String,
-    token: String,
 ) -> Result<(), String> {
     only_from(&window, "main")?;
     if store_channel() {
         return Err("Updates come from the Microsoft Store.".into());
     }
     let server_url = bound_server(&bound, &server)?;
+    let authorization =
+        session_authorization(&secret::Keychain)?.ok_or_else(|| "Not connected.".to_string())?;
     let Some(pubkey) = updater_pubkey(&app) else {
         return Err("This build cannot verify updates (no updater key).".into());
     };
@@ -717,7 +695,7 @@ async fn install_update(
         .pubkey(pubkey)
         .endpoints(vec![endpoint])
         .map_err(|e| e.to_string())?
-        .header("Authorization", format!("Bearer {token}"))
+        .header(AUTHORIZATION, authorization)
         .map_err(|e| e.to_string())?
         // Same pinned TLS as the API (net.rs): the update check carries the Bearer token. The artifact itself is
         // also verified with the minisign key of the build.
@@ -1144,9 +1122,8 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
-            secret_get,
-            secret_set,
-            secret_delete,
+            secret::secret_status,
+            secret::secret_delete,
             idle_seconds,
             set_tray_status,
             set_tray_menu,
@@ -1526,6 +1503,40 @@ mod tests {
         assert!(validate_server("http://beacon.example.com").is_err());
         assert!(validate_server("https://user:pw@beacon.example.com").is_err());
         assert!(validate_server("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn updater_authorization_comes_from_the_store_and_never_echoes_the_token() {
+        use secret::tests::{BrokenStore, MemoryStore};
+        let value = session_authorization(&MemoryStore::with("secret-token"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(value.to_str().unwrap(), "Bearer secret-token");
+        assert!(value.is_sensitive());
+        assert!(session_authorization(&MemoryStore::default())
+            .unwrap()
+            .is_none());
+        for error in [
+            session_authorization(&MemoryStore::with("secret-token\r\n")).unwrap_err(),
+            session_authorization(&BrokenStore).unwrap_err(),
+        ] {
+            assert!(!error.contains("secret-token"), "{error}");
+        }
+    }
+
+    #[test]
+    fn no_command_returns_the_session_token() {
+        // secret_get / secret_set (0.5.1 and earlier) are gone: the webview can only ask whether a token is stored
+        // and delete it (secret.rs).
+        for gone in ["secret_get", "secret_set"] {
+            assert!(!APP_COMMANDS.contains(&gone), "{gone}");
+        }
+        assert!(MAIN_COMMANDS.contains(&"secret_status"));
+        assert!(MAIN_COMMANDS.contains(&"secret_delete"));
+        let source = include_str!("secret.rs");
+        let status = source.find("pub fn secret_status").unwrap();
+        assert!(source[status..]
+            .starts_with("pub fn secret_status(window: tauri::Window) -> Result<bool, String>"));
     }
 
     #[test]

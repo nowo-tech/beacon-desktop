@@ -1,11 +1,11 @@
-/** Tauri implementation of Platform (thin bridge; covered by the Rust build and manual QA, not by unit tests). */
+/** Tauri implementation of Platform (thin bridge; the keychain and fetch parts are unit-tested with a mocked `invoke`, tests/unit/token-bridge.test.ts). */
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { availableMonitors, currentMonitor, getCurrentWindow, type Monitor, PhysicalPosition, PhysicalSize } from '@tauri-apps/api/window';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
-import { type NativeRequest, type NativeResponse, nativeFetch } from './lib/nativeFetch';
+import { type NativeRequest, type NativeResponse, nativeFetch, SESSION_HANDLE } from './lib/nativeFetch';
 import { type ConnectionSecurity, notificationBody, type NotificationPermission, type Platform, type WindowHost, type PromptClient, type PromptHost, type SessionEvent, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
 import { type BrowserChoice, type DetectedBrowser, type OpenOutcome, sanitizeBrowser } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
@@ -68,8 +68,12 @@ export function tauriPlatform(): Platform {
     bindServer: (server) => invoke('beacon_bind', { server }),
     appVersion: () => getVersion(),
     hostName: async () => (navigator.platform.toLowerCase().includes('mac') ? 'Mac' : navigator.platform.toLowerCase().includes('win') ? 'Windows PC' : 'Linux PC'),
-    secretGet: () => invoke<string | null>('secret_get'),
-    secretSet: (token) => invoke('secret_set', { token }),
+    // The session token stays in Rust (src-tauri/src/secret.rs): the app only learns whether one is stored and holds
+    // SESSION_HANDLE in its place. Rust stores the token from the sign-in answer itself, before the webview sees it.
+    secretGet: async () => ((await invoke<boolean>('secret_status')) ? SESSION_HANDLE : null),
+    secretSet: async (token) => {
+      if (token !== SESSION_HANDLE) throw new Error('The session token is stored by the app from the sign-in answer only.');
+    },
     secretDelete: () => invoke('secret_delete'),
     idleSeconds: () => invoke<number>('idle_seconds'),
     // Every link: the system default (opener plugin, no `with`) or the browser Rust keeps for "Open Beacon in"
@@ -120,11 +124,12 @@ export function tauriPlatform(): Platform {
     autostartEnabled: () => invoke<boolean>('get_autostart'),
     // Rust command: on Windows an HKCU-only, quoted Run value (never the plugin's HKLM / unquoted write).
     setAutostart: (enabled) => invoke('set_autostart', { enabled }),
-    checkUpdate: (server, token) => invoke<UpdateCheck>('check_update', { server, token }),
-    installUpdate: async (server, token, onProgress) => {
+    // Rust adds the stored token itself; the `token` argument (SESSION_HANDLE here) is not sent.
+    checkUpdate: (server) => invoke<UpdateCheck>('check_update', { server }),
+    installUpdate: async (server, _token, onProgress) => {
       const stop = await listen<UpdateProgress>('update-progress', (event) => onProgress?.(event.payload));
       try {
-        await invoke('install_update', { server, token });
+        await invoke('install_update', { server });
       } finally {
         stop();
       }
