@@ -49,14 +49,56 @@ export function sanitizeBrowser(raw: unknown): BrowserChoice {
  * - `beacon`: a page of the connected Beacon (https, same origin, no credentials; http only for a Beacon on this
  *   computer);
  * - `device`: the sign-in verification page (https, or http to a Beacon on this computer; same host as the server);
- * - `help`: any https page (no credentials), e.g. the Store listing.
+ * - `help`: any https page (no credentials), e.g. the Store listing;
+ * - `meeting`: a meeting's *Join* link, only on the video-call hosts of `meetingJoinUrl`.
  */
-export type LinkRule = { kind: 'beacon'; server: string | null | undefined } | { kind: 'device'; server: string } | { kind: 'help' };
+export type LinkRule = { kind: 'beacon'; server: string | null | undefined } | { kind: 'device'; server: string } | { kind: 'help' } | { kind: 'meeting' };
+
+/** Video-call providers of a *Join* link (contract §22.4, the same list as TimeTrackBundle's `MeetingLinkDetector`). */
+export type JoinProvider = 'teams' | 'meet' | 'zoom' | 'jitsi' | 'webex';
+
+/** Exact hosts and `*.` suffixes per provider. Self-hosted Jitsi hosts of the server's `jitsi_hosts` are not known here. */
+const JOIN_HOSTS: readonly [JoinProvider, readonly string[], readonly string[]][] = [
+  ['teams', ['teams.microsoft.com', 'teams.live.com'], []],
+  ['meet', ['meet.google.com'], []],
+  ['zoom', ['zoom.us', 'zoomgov.com'], ['.zoom.us', '.zoomgov.com']],
+  ['jitsi', ['meet.jit.si'], []],
+  ['webex', [], ['.webex.com']],
+];
+
+/** Control, whitespace (C0, space, DEL, C1) or quote-like characters: never in a link the app opens. */
+const unsafeLinkChar = (char: string): boolean => {
+  const code = char.codePointAt(0) as number;
+  return code <= 0x20 || (code >= 0x7f && code <= 0x9f) || '"\'`<>\\'.includes(char);
+};
+
+/** Longest *Join* link accepted (as the server). */
+export const MAX_JOIN_URL = 2048;
+
+/**
+ * A meeting's *Join* link checked again on this computer (defence in depth, contract §23.8): https on the default port,
+ * no user info, no control, whitespace or quote characters, at most 2048 characters, and a host of the allow-list.
+ * Anything else is `null` ("This link cannot be opened from TimeTrack").
+ */
+export function meetingJoinUrl(url: unknown): { url: string; provider: JoinProvider } | null {
+  if (typeof url !== 'string' || url === '' || url.length > MAX_JOIN_URL || [...url].some(unsafeLinkChar)) return null;
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    return null;
+  }
+  if (target.protocol !== 'https:' || target.username !== '' || target.password !== '' || target.port !== '') return null;
+  const host = target.hostname.toLowerCase();
+  const found = JOIN_HOSTS.find(([, exact, suffixes]) => exact.includes(host) || suffixes.some((suffix) => host.endsWith(suffix) && host.length > suffix.length));
+  return found === undefined || target.href.length > MAX_JOIN_URL ? null : { url: target.href, provider: found[0] };
+}
 
 export function externalUrl(url: string | null | undefined, rule: LinkRule): string | null {
   if (typeof url !== 'string' || url === '') return null;
   if (rule.kind === 'beacon') return sameOriginHttps(url, rule.server) ?? loopbackSameOrigin(url, rule.server);
   if (rule.kind === 'device') return safeVerificationUri(url, rule.server);
+  if (rule.kind === 'meeting') return meetingJoinUrl(url)?.url ?? null;
   try {
     const target = new URL(url);
     return target.protocol === 'https:' && target.hostname !== '' && target.username === '' && target.password === '' ? target.href : null;

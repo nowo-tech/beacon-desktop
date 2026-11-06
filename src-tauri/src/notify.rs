@@ -9,7 +9,9 @@
 //! A click on the notification brings the main window forward. A working-hours reminder may carry one button
 //! (Start / Stop / Resume) and "Working without a timer?" two (Start last / Choose task), ids in `ACTION_IDS`:
 //! pressing one sends the main window a `notification-action` event with the id, and the UI starts or stops the
-//! timer ("Choose task" also brings the window forward); any other id from the UI is dropped. The pictures are compiled in (`pose_art.rs`) and
+//! timer ("Choose task" also brings the window forward); any other id from the UI is dropped. Meeting reminders add
+//! `meeting-<join|snooze|keep|pause|track|undo>:<16 hex>` (`meeting_action`): the main window opens the *Join* link
+//! itself through `browser::open_external`. The pictures are compiled in (`pose_art.rs`) and
 //! written once to the app's cache folder, since every OS API wants a file.
 
 use std::path::{Path, PathBuf};
@@ -53,8 +55,32 @@ pub const ACTION_IDS: [&str; 9] = [
     "meeting-back",
     "meeting-stop",
 ];
+/// Buttons of the meeting reminders (contract §23.4): `meeting-<kind>:<16 hex>`, the hex naming the meeting by the
+/// start of its dedupe key (never its id or title).
+pub const MEETING_ACTIONS: [&str; 6] = ["join", "snooze", "keep", "pause", "track", "undo"];
 /// Buttons that need the window (the task picker).
 const SHOWS_WINDOW: [&str; 1] = ["nudge-choose"];
+
+/// A meeting reminder's button id: a known kind and exactly 16 lowercase hex characters.
+pub fn meeting_action(id: &str) -> Option<&str> {
+    let (kind, key) = id.strip_prefix("meeting-")?.split_once(':')?;
+    let hex = key.len() == 16
+        && key
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
+    (hex && MEETING_ACTIONS.contains(&kind)).then_some(kind)
+}
+
+/// Whether the UI may put a button with this id on a notification.
+pub fn known_action(id: &str) -> bool {
+    ACTION_IDS.contains(&id) || meeting_action(id).is_some()
+}
+
+/// Whether pressing the button brings the window forward: the task picker, and "Track the meeting" (it may need the
+/// picker when the meeting has no linked task).
+fn shows_window(id: &str) -> bool {
+    SHOWS_WINDOW.contains(&id) || meeting_action(id) == Some("track")
+}
 /// At most this many buttons on one notification.
 pub const MAX_ACTIONS: usize = 2;
 
@@ -63,7 +89,7 @@ const LABEL_MAX: usize = 24;
 
 fn checked(action: &NoteAction) -> Option<NoteAction> {
     let label = cap(&action.label, LABEL_MAX);
-    (ACTION_IDS.contains(&action.id.as_str()) && !label.is_empty()).then(|| NoteAction {
+    (known_action(&action.id) && !label.is_empty()).then(|| NoteAction {
         id: action.id.clone(),
         label,
     })
@@ -91,7 +117,7 @@ pub fn checked_actions(note: &FriendlyNote) -> Vec<NoteAction> {
 
 /// Tells the main window that a notification button was pressed.
 fn dispatch(app: &AppHandle, id: &str) {
-    if SHOWS_WINDOW.contains(&id) {
+    if shows_window(id) {
         crate::show_main(app);
     }
     let _ = app.emit_to("main", "notification-action", id.to_string());
@@ -525,6 +551,48 @@ mod tests {
         .unwrap();
         assert_eq!(checked_actions(&single).len(), 1);
         assert!(SHOWS_WINDOW.iter().all(|id| ACTION_IDS.contains(id)));
+    }
+
+    #[test]
+    fn meeting_buttons_carry_a_known_kind_and_a_short_hex_key() {
+        for id in [
+            "meeting-join:0123456789abcdef",
+            "meeting-snooze:0123456789abcdef",
+            "meeting-keep:ffffffffffffffff",
+            "meeting-pause:0000000000000000",
+            "meeting-track:abcdefabcdefabcd",
+            "meeting-undo:1234567890abcdef",
+        ] {
+            assert!(known_action(id), "{id}");
+        }
+        for id in [
+            "meeting-join",
+            "meeting-join:",
+            "meeting-join:0123456789ABCDEF",
+            "meeting-join:0123456789abcde",
+            "meeting-join:0123456789abcdef0",
+            "meeting-open:0123456789abcdef",
+            "meeting-join:mtg_3f9c0d4e7a1b2c",
+            "meeting-join:0123456789abcdef https://evil.example",
+            "join:0123456789abcdef",
+        ] {
+            assert!(!known_action(id), "{id}");
+        }
+        assert!(shows_window("meeting-track:0123456789abcdef"));
+        assert!(shows_window("nudge-choose"));
+        assert!(!shows_window("meeting-join:0123456789abcdef"));
+        let note: FriendlyNote = serde_json::from_str(
+            r#"{"title":"Sprint review","body":"10:00-10:45","pose":"teamwork","actions":[{"id":"meeting-join:0123456789abcdef","label":"Join"},{"id":"meeting-snooze:0123456789abcdef","label":"Snooze"},{"id":"meeting-undo:0123456789abcdef","label":"Undo"}]}"#,
+        )
+        .unwrap();
+        let ids: Vec<String> = checked_actions(&note).into_iter().map(|a| a.id).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "meeting-join:0123456789abcdef",
+                "meeting-snooze:0123456789abcdef"
+            ]
+        );
     }
 
     #[test]

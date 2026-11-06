@@ -16,6 +16,8 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - The search text you type in the "Reassign" task picker (the same `tasks` search as the main search field).
 - The app version, platform, architecture and installer kind (for example `nsis` or `appimage`) when it checks for
   updates. The Microsoft Store build never checks with Beacon: the Store updates it.
+- With meeting reminders (TimeTrack 1.14), the request for your own meetings of today and tomorrow (`GET
+  me/meetings`: the time window and time zone only). Nothing about your meetings is sent back.
 - Nothing else: no screenshots, keystrokes, applications, window titles, URLs, activity or idle state. With meeting
   detection on, which meeting app holds the microphone is checked on this computer and never sent (below).
 
@@ -118,6 +120,26 @@ mismatch is logged locally with the server name only, never a token.
 - As desktop notifications, their title, line, picture and button label are handed to your operating system like the
   friendly messages. Pressing *Start* / *Stop* / *Resume* does what the same button in the app does (`timer/start`,
   `timer/stop`).
+
+## Meeting reminders (TimeTrack 1.14; on by default once a calendar is connected in Beacon)
+
+- **Data source**: Beacon, not your calendar. You connect a calendar in Beacon (Account → Integrations → Calendars,
+  covered by Beacon's privacy notice and its DPIA for spec 210); the app never talks to Google or Microsoft. It needs
+  the `meetings:read` permission, which you grant explicitly in Beacon (sessions from before 0.6 are asked once).
+- **What the app receives**: your own meetings of today and tomorrow, as Beacon's API shapes them: times, title (none
+  for a private meeting, shown as "Busy"), the join link of Teams / Meet / Zoom / Jitsi / Webex meetings, the first
+  names of attendees who are Beacon users you can already see, the number of other attendees (never their names,
+  e-mails or domains) and the tasks linked to the meeting that you can track.
+- **Stored on this computer**: that list, for offline reminders, until the end of tomorrow and never more than 48
+  hours; and which reminders were shown or snoozed, as a hash of the meeting id and start time with the times only
+  (no title, link or id), deleted 24 hours after the meeting. Signing out deletes the list; turning the reminders off
+  deletes it too; *Clear local data* deletes both.
+- **Never**: logged, sent to anyone else, or used for anything but the reminder, *Today's meetings* and the tray.
+- **Sent to Beacon**: nothing about your meetings; only the timer action you choose (*Pause* = `timer/stop`, *Track
+  the meeting* = `timer/switch` with `origin: meeting`). *Join* opens the link in your browser after checking it is
+  one of those video-call services.
+- **Opt-out**: Settings → Meeting reminders → *Remind me before my meetings* (per device), or disconnect the calendar
+  in Beacon.
 
 ## Meeting detection (off by default, dated consent)
 

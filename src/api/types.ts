@@ -6,12 +6,18 @@
  * they are the only place that knows the wire format.
  */
 
-export type Scope = 'timer:read' | 'timer:write' | 'tasks:read' | 'entries:read';
+export type Scope = 'timer:read' | 'timer:write' | 'tasks:read' | 'entries:read' | 'meetings:read';
 
 /** Closed enum sent as `source` on timer/start (contract §3, replaces free `metadata`). */
 export type ClientSource = 'extension' | 'desktop' | 'web';
 
 export const ALL_SCOPES: readonly Scope[] = ['timer:read', 'timer:write', 'tasks:read', 'entries:read'];
+
+/**
+ * `GET me/meetings` (TimeTrackBundle 1.14, contract §22.7): never granted implicitly. Desktop sign-ins ask for it on top
+ * of `ALL_SCOPES` and fall back to `ALL_SCOPES` when an older server refuses an unknown scope.
+ */
+export const MEETINGS_SCOPE: Scope = 'meetings:read';
 
 export interface LoginResult {
   token: string;
@@ -60,6 +66,21 @@ export interface Me {
   features?: Features | null;
   /** Policy numbers (1.10+; absent on 1.9). */
   limits?: Limits | null;
+  /** Meetings sync state (TimeTrackBundle 1.14, contract §22.8): `null` / absent when the feature is off or unknown. */
+  meetings?: MeMeetings | null;
+  /** Host pages (1.14): `calendars` = Beacon's *Account → Integrations → Calendars* (https), or null. */
+  links?: MeLinks | null;
+}
+
+/** `GET me.meetings` (1.14). */
+export interface MeMeetings {
+  status: 'connected' | 'not_connected' | 'needs_reconnect' | 'syncing' | string;
+  refreshAfterSeconds?: number | null;
+}
+
+/** `GET me.links` (1.14). */
+export interface MeLinks {
+  calendars?: string | null;
 }
 
 /** `GET me.features` (contract v0.3 §5): an object of booleans that may grow. */
@@ -75,6 +96,8 @@ export interface Features {
   workday?: boolean;
   /** Reserved, always false in 1.10. */
   monitoring?: boolean;
+  /** `GET me/meetings` is served for this user (TimeTrackBundle 1.14, contract §22.8). */
+  meetings?: boolean;
   [key: string]: boolean | undefined;
 }
 
@@ -227,4 +250,12 @@ export interface TaskQuery {
 export interface ExportResult {
   blob: Blob;
   filename: string;
+}
+
+/** `GET me/meetings` query (TimeTrackBundle 1.14). Sent in UTC; `tz` only shapes all-day dates. */
+export interface MeetingsQuery {
+  from: Date;
+  to: Date;
+  tz?: string | null;
+  limit?: number;
 }

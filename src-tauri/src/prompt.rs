@@ -39,7 +39,26 @@ const ACTIONS: &[&str] = &[
     "resume",
     "not-now",
     "escape",
+    // Meeting reminders without desktop notifications (contract §23.4), with `meeting` = the 16-hex short key.
+    "meeting-join",
+    "meeting-snooze",
+    "meeting-snooze-1",
+    "meeting-snooze-5",
+    "meeting-dismiss",
+    "meeting-keep",
+    "meeting-pause",
+    "meeting-track",
 ];
+
+/// `meeting` of an answer: the 16 lowercase hex characters naming a reminded meeting.
+fn short_key(value: &Value) -> bool {
+    value.as_str().is_some_and(|key| {
+        key.len() == 16
+            && key
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    })
+}
 
 /// Latest content, for a prompt window that is still loading (`prompt_view`).
 #[derive(Default)]
@@ -99,9 +118,13 @@ pub fn valid_answer(answer: &Value) -> bool {
         && short("note", 500)
         && short("taskId", 200)
         && short("query", 200)
-        && object
-            .keys()
-            .all(|key| matches!(key.as_str(), "action" | "note" | "taskId" | "query"))
+        && object.get("meeting").is_none_or(short_key)
+        && object.keys().all(|key| {
+            matches!(
+                key.as_str(),
+                "action" | "note" | "taskId" | "query" | "meeting"
+            )
+        })
 }
 
 fn theme_of(view: &Value) -> Option<Theme> {
@@ -327,6 +350,29 @@ mod tests {
         ));
         assert!(!valid_answer(&json!({ "action": "here", "taskId": 5 })));
         assert!(!valid_answer(&json!("here")));
+    }
+
+    #[test]
+    fn meeting_answers_name_the_meeting_by_its_short_key_only() {
+        assert!(valid_answer(
+            &json!({ "action": "meeting-join", "meeting": "0123456789abcdef" })
+        ));
+        assert!(valid_answer(
+            &json!({ "action": "meeting-snooze-5", "meeting": "0123456789abcdef" })
+        ));
+        assert!(valid_answer(&json!({ "action": "meeting-dismiss" })));
+        assert!(!valid_answer(
+            &json!({ "action": "meeting-join", "meeting": "mtg_3f9c0d4e7a1b2c5d" })
+        ));
+        assert!(!valid_answer(
+            &json!({ "action": "meeting-join", "meeting": "https://meet.google.com/abc" })
+        ));
+        assert!(!valid_answer(
+            &json!({ "action": "meeting-join", "meeting": 5 })
+        ));
+        assert!(!valid_answer(
+            &json!({ "action": "meeting-open-url", "meeting": "0123456789abcdef" })
+        ));
     }
 
     #[test]

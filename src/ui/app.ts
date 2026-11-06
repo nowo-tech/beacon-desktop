@@ -1,5 +1,5 @@
 import { ApiError, TimeTrackApi, normalizeServerUrl } from '../api/client';
-import type { DeviceCode, Entry, Me, Task, Timer } from '../api/types';
+import { ALL_SCOPES, type DeviceCode, type Entry, type Me, MEETINGS_SCOPE, type Task, type Timer } from '../api/types';
 import { dashboardUrl, myTimeUrl, sameOriginHttps, taskUrl } from '../lib/beacon';
 import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
 import { type ErrorStage, type ErrorView, describeError, isUntrustedCertificate } from '../lib/errors';
@@ -35,6 +35,7 @@ import {
   EMPTY_SCHEDULE,
   LEAD_CHOICES,
   WEEKDAYS,
+  addDays,
   allDaysOff,
   beaconDaysOff,
   beaconPart,
@@ -46,7 +47,58 @@ import {
   nextReminderAt,
   setOverride,
   toggleLocalDayOff,
+  weekdayOf,
+  zonedInstant,
 } from '../lib/schedule';
+import {
+  allowedAt,
+  cacheExpiry,
+  coveredByReminder,
+  dueNow,
+  fired,
+  FRESH_POLL,
+  GROUP_OVER,
+  groupNote,
+  isStale,
+  type KeyedMeeting,
+  LEAD_PRESETS,
+  MAX_CUSTOM_LEAD,
+  MAX_TRAY_MEETINGS,
+  MeetingStore,
+  type MeetingNote as ReminderMeetingNote,
+  type MeetingSupport,
+  meetingSupport,
+  meetingTitle,
+  MIN_CUSTOM_LEAD,
+  nextDueAt,
+  type NoteContext,
+  parseMeetingsPage,
+  parseReminderActionId,
+  pausedNote,
+  type PlanInput,
+  pollDue,
+  pollFailed,
+  pollStarted,
+  pollSucceeded,
+  type PollState,
+  putMark,
+  RECHECK_ME_MINUTES,
+  type ReminderActionKind,
+  type ReminderMark,
+  reminderNote,
+  remindersEnabled,
+  type ScheduleGate,
+  shortKey,
+  type SnoozeChoice,
+  snoozeChoices,
+  snoozeUntil,
+  START_WINDOW_MINUTES,
+  startNote,
+  todayMeetings,
+  withKeys,
+} from '../lib/meetingReminders';
+import { MEETING_REMINDERS } from '../lib/messages/meetingReminders';
+import { renderReminderSettings, renderReminderToast, renderTodayMeetings } from './meetingReminders';
 import { withinWorkingHours } from '../lib/workingHours';
 import { type LayoutMode, layoutFor, loadWindowMemory, otherMode, placeWindow, saveWindowMemory, WINDOW_KEY, type WindowMemory } from '../lib/layout';
 import { type DaySpan, todaySpans, weekByTask, weekDays } from '../lib/week';
@@ -275,6 +327,38 @@ export class DesktopApp {
   /** "Choose task" of the meeting question is open (for the meeting, or to set the generic meeting once). */
   meetingPicker: PickerMode | null = null;
   meetingQuery = '';
+  /** Meeting reminders (contract §23): what the server offers, today's and tomorrow's meetings, the dedupe marks. */
+  meetingSupport: MeetingSupport = { kind: 'unsupported' };
+  meetings: KeyedMeeting[] = [];
+  /** When the list was fetched and when it expires (Unix ms; `null` without a list). */
+  meetingsFetchedAt: number | null = null;
+  private meetingsExpireAt: number | null = null;
+  private meetingMarks: ReminderMark[] = [];
+  meetingPoll: PollState = FRESH_POLL;
+  /** Account (`server|identifier`) whose store is loaded. */
+  private meetingAccount: string | null = null;
+  /** Fetch at the next check even before the regular interval (wake from sleep, network back). */
+  private meetingsForce = false;
+  private meetingsPolling: Promise<void> | null = null;
+  /** The app was offline at the last check. */
+  private meetingsOffline = false;
+  /** Last `GET me` made only to see whether the meetings came back (no calendar, stopped). */
+  private meetingMeCheckAt = 0;
+  private readonly meetingStore: MeetingStore;
+  /** The reminder, start prompt, automatic pause or grouped reminder shown in the window, and until when. */
+  meetingReminder: ReminderMeetingNote | null = null;
+  private meetingReminderUntil = 0;
+  /** *Track the meeting* without a linked task: the picker of the reminder toast is open. */
+  meetingReminderPicker: { query: string } | null = null;
+  /** The timer paused automatically at a meeting's start: what *Undo* starts again. */
+  private pausedForMeeting: { key: string; task: Task } | null = null;
+  /** Settings: "Custom…" lead time chosen (the field shows even before a value), and a refused value. */
+  customLead = false;
+  leadError = false;
+  /** The "Reconnect your calendar" banner was closed (until the next start). */
+  reconnectDismissed = false;
+  /** A re-consent device flow is running (its Cancel goes back to the main window, not to the sign-in). */
+  private reconsent = false;
   /** "Daily done" toast after a daily-type timer stops. */
   dailyToast: { text: string; pose: PoseId; locale: string } | null = null;
   private dailyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -338,6 +422,7 @@ export class DesktopApp {
     this.state = loadLocal(this.storage);
     this.serverDraft = this.state.lastServer ?? deps.beaconUrl ?? '';
     this.queue = new OfflineQueue(this.storage);
+    this.meetingStore = new MeetingStore(this.storage);
     document.documentElement.lang = this.locale;
     applyTheme(this.state.settings.theme);
     this.header = h('header', { class: 'bar' });
@@ -376,7 +461,11 @@ export class DesktopApp {
     // Links the webview tried to open by itself (target=_blank, window.open, a navigation), refused by the host.
     this.platform.onOpenExternal((url) => this.openLink(url));
     // The regular check, woken by the host (on time while the window is hidden).
-    this.platform.onWake(() => void this.tick());
+    this.platform.onWake((reason) => {
+      // Back from sleep: today's meetings may have changed meanwhile (contract §23.5).
+      if (reason === 'resumed') this.meetingsForce = true;
+      void this.tick();
+    });
     // A button of a notification: working-hours reminder (Start / Stop / Resume), "Working without a timer?" or a
     // meeting question.
     this.platform.onNotificationAction((id) => void this.notificationAction(id));
@@ -542,6 +631,10 @@ export class DesktopApp {
           stage = 'deviceCode';
           const login = await runDeviceFlow(api, {
             clientName: `TimeTrack desktop (${await this.platform.hostName()})`,
+            // `meetings:read` (TimeTrack 1.14) is never granted implicitly; an older server refuses the unknown scope,
+            // and the sign-in goes on without it.
+            scopes: [...ALL_SCOPES, MEETINGS_SCOPE],
+            fallbackScopes: ALL_SCOPES,
             sleep: this.deps.sleep,
             signal: this.abort?.signal,
             onCode: async (code) => {
@@ -569,7 +662,9 @@ export class DesktopApp {
           });
           this.device = null;
           this.view = 'main';
-          this.welcome = true;
+          this.welcome = !this.reconsent;
+          this.reconsent = false;
+          this.meetingPoll = FRESH_POLL;
           this.setNotice(null);
           await this.load(api);
           await this.checkPinExpiry();
@@ -581,7 +676,9 @@ export class DesktopApp {
             return;
           }
           this.device = null;
-          this.view = 'login';
+          // A failed re-consent keeps the session it started from.
+          this.view = this.reconsent && this.state.session !== null ? 'main' : 'login';
+          this.reconsent = false;
           throw error;
         }
       },
@@ -604,7 +701,9 @@ export class DesktopApp {
   cancelDevice(): void {
     this.abort?.abort();
     this.device = null;
-    this.show('login');
+    const back = this.reconsent && this.state.session !== null;
+    this.reconsent = false;
+    this.show(back ? 'main' : 'login');
   }
 
   async logout(): Promise<void> {
@@ -639,6 +738,12 @@ export class DesktopApp {
     });
     this.reminderToast = null;
     this.meetingPicker = null;
+    // The meetings list goes with the session (contract §23.5); the dedupe marks (hashes and times) stay per account.
+    this.clearMeetings();
+    this.meetingSupport = { kind: 'unsupported' };
+    this.meetingAccount = null;
+    this.meetingPoll = FRESH_POLL;
+    this.reconnectDismissed = false;
     this.queue.clear();
     this.dailyToast = null;
     this.nativeNotice = null;
@@ -678,10 +783,13 @@ export class DesktopApp {
     this.setMe(me);
     this.entries = entries;
     await this.setTimer(timer);
+    // Start (or a refresh): today's meetings now, not at the next regular poll.
+    await this.pollMeetings(true);
   }
 
   private setMe(me: Me): void {
     this.me = me;
+    this.updateMeetingSupport(me);
     this.persist({ features: serverFeatures(me), schedule: { ...this.state.schedule, beacon: beaconPart(me) } });
     const minimum = isVersion(me.minSupportedVersion) ? me.minSupportedVersion : null;
     if (minimum !== this.meMinimum) {
@@ -755,7 +863,8 @@ export class DesktopApp {
     if (this.view === 'main' && query.trim() !== '' && this.query === query) this.announce(this.t('resultsCount', { count: this.visibleTasks().length }));
   }
 
-  async start(task: Task): Promise<void> {
+  /** Starts `task` (switching from the running timer). `meeting`: *Track the meeting* (metadata origin, 1.14 servers). */
+  async start(task: Task, options: { meeting?: boolean } = {}): Promise<void> {
     const running = this.state.activeTimer;
     this.welcome = false;
     if (running !== null) this.persist({ messages: afterStop(this.state.messages, this.timerKind(running), running.startedAt, this.now()) });
@@ -763,7 +872,8 @@ export class DesktopApp {
     await this.guard(
       async () => {
         const api = this.api();
-        await this.setTimer(running !== null ? (await api.switchTask(task.id, this.state.pendingNote ?? undefined)).timer : await api.start(task.id));
+        const meeting = options.meeting === true && this.me?.features?.meetings === true;
+        await this.setTimer(running !== null ? (await api.switchTask(task.id, this.state.pendingNote ?? undefined, { meeting })).timer : await api.start(task.id));
         if (running !== null) this.takeNote();
       },
       () => {
@@ -1145,7 +1255,9 @@ export class DesktopApp {
     const timer = this.state.activeTimer;
     const running = timer === null ? null : { id: timer.taskId, title: timer.taskTitle, meeting: this.timerKind(timer) !== null };
     const settings = this.state.settings;
-    const step = observeMic(this.state.meeting, signal, { minMinutes: settings.meetingMinMinutes, muted: settings.meetingMuted, running, quiet: this.meetingQuiet() });
+    let step = observeMic(this.state.meeting, signal, { minMinutes: settings.meetingMinMinutes, muted: settings.meetingMuted, running, quiet: this.meetingQuiet() });
+    // A reminded meeting starts around now: its reminder / start prompt is the one question (Q-O20).
+    if (step.effect === 'ask' && this.meetingRemindersOn() && coveredByReminder(this.meetings, this.meetingMarks, signal.at)) step = { state: ignoreCall(step.state), effect: 'none' };
     const changed = step.state !== this.state.meeting;
     if (changed) this.persist({ meeting: step.state });
     if (step.effect === 'clear') this.meetingPicker = null;
@@ -1248,6 +1360,532 @@ export class DesktopApp {
   setMeetingSetting(patch: Partial<Pick<LocalState['settings'], 'meetingMinMinutes' | 'meetingGeneric' | 'meetingMuted'>>): void {
     this.persist({ settings: { ...this.state.settings, ...patch } });
     this.render();
+  }
+
+  // ---- Meeting reminders (contract §23, local only) ---------------------------------------------------------------
+
+  /** `server|identifier` of the signed-in account: its own cache and dedupe marks. */
+  private meetingAccountKey(): string | null {
+    const session = this.state.session;
+    return session === null ? null : `${session.server}|${session.identifier}`;
+  }
+
+  /** Loads the signed-in account's store (cached list, marks) when the account changes. */
+  private syncMeetingAccount(): void {
+    const account = this.meetingAccountKey();
+    if (account === this.meetingAccount) return;
+    this.meetingAccount = account;
+    this.meetingPoll = FRESH_POLL;
+    this.meetingReminder = null;
+    this.pausedForMeeting = null;
+    const now = this.now().getTime();
+    const cache = account === null ? null : this.meetingStore.cache(account, now);
+    this.meetings = cache?.meetings ?? [];
+    this.meetingsFetchedAt = cache === null ? null : Date.parse(cache.fetchedAt);
+    this.meetingsExpireAt = cache === null ? null : Date.parse(cache.expiresAt);
+    this.meetingMarks = account === null ? [] : this.meetingStore.marks(account, now);
+    // Offline start: the cached list says the feature was on (GET me will say more once online).
+    if (cache !== null && this.me === null) this.meetingSupport = { kind: 'on', status: cache.status, refreshAfterSeconds: cache.refreshAfterSeconds, calendarsUrl: null };
+  }
+
+  /** `GET me` changed what the server offers: a list that no longer applies goes, a stop is lifted when it is back. */
+  private updateMeetingSupport(me: Me): void {
+    this.syncMeetingAccount();
+    this.meetingSupport = meetingSupport(me, this.state.session?.scopes ?? []);
+    if (this.meetingSupport.kind === 'on') {
+      if (this.meetingPoll.stopped !== null) this.meetingPoll = { ...this.meetingPoll, stopped: null };
+    } else if (this.meetings.length > 0 || this.meetingsFetchedAt !== null) {
+      this.clearMeetings();
+    }
+  }
+
+  /** Reminders on: signed in, offered and allowed by the server, switched on here (by default with a calendar). */
+  meetingRemindersOn(): boolean {
+    return this.state.session !== null && this.meetingPoll.stopped === null && remindersEnabled(this.state.settings.meetingReminders, this.meetingSupport);
+  }
+
+  /** Drops the list (memory and local storage) and what is shown about it. */
+  private clearMeetings(): void {
+    this.meetings = [];
+    this.meetingsFetchedAt = null;
+    this.meetingsExpireAt = null;
+    this.meetingReminder = null;
+    this.meetingReminderPicker = null;
+    this.pausedForMeeting = null;
+    this.meetingStore.saveCache(null);
+  }
+
+  private saveMarks(marks: ReminderMark[]): void {
+    this.meetingMarks = marks;
+    if (this.meetingAccount !== null) this.meetingStore.saveMarks(this.meetingAccount, marks);
+  }
+
+  /** Working hours and days off of Settings → My schedule, read at any instant (rule 3). */
+  private meetingGate(): ScheduleGate {
+    const view = this.scheduleView();
+    return {
+      working: (at) => {
+        const parts = zonedParts(new Date(at), view.timeZone);
+        return withinWorkingDay(view.merged.week[parts.day as Weekday], parts.minute, false);
+      },
+      dayOff: (at) => dayOffOn(zonedParts(new Date(at), view.timeZone).date, view.daysOff) !== null,
+    };
+  }
+
+  /** Start of the next working day's first slot after `now` (the fetch two hours before it), or null. */
+  private nextWorkingStart(now: number): number | null {
+    const view = this.scheduleView();
+    const today = zonedParts(new Date(now), view.timeZone).date;
+    for (let offset = 0; offset <= 7; offset++) {
+      const date = addDays(today, offset);
+      const plan = view.merged.week[weekdayOf(date)];
+      if (plan.off || plan.start === null || dayOffOn(date, view.daysOff) !== null) continue;
+      const at = zonedInstant(date, plan.start, view.timeZone).getTime();
+      if (at > now) return at;
+    }
+    return null;
+  }
+
+  /** Fetches the meetings when due (contract §23.5): `force` on start, wake from sleep, network back, settings. */
+  pollMeetings(force = false): Promise<void> {
+    if (this.meetingsPolling === null) {
+      this.meetingsPolling = this.runMeetingPoll(force).finally(() => {
+        this.meetingsPolling = null;
+      });
+    }
+    return this.meetingsPolling;
+  }
+
+  private async runMeetingPoll(force: boolean): Promise<void> {
+    this.syncMeetingAccount();
+    if (this.state.session === null || this.token === null) return;
+    const now = this.now().getTime();
+    const settings = this.state.settings;
+    const support = this.meetingSupport;
+    // Offered but nothing to fetch now (no calendar yet, stopped after a 403 / 404): GET me again now and then.
+    const waiting = support.kind !== 'unsupported' && settings.meetingReminders !== false && (this.meetingPoll.stopped !== null || (support.kind === 'on' && support.status === 'not_connected'));
+    if (waiting && now - this.meetingMeCheckAt >= RECHECK_ME_MINUTES * 60_000) {
+      this.meetingMeCheckAt = now;
+      try {
+        this.setMe(await this.api().me());
+      } catch {
+        // The regular refresh will tell.
+      }
+    }
+    const current = this.meetingSupport;
+    if (!this.meetingRemindersOn() || current.kind !== 'on' || current.status === 'not_connected') return;
+    const gate = this.meetingGate();
+    const due = pollDue({ now, state: this.meetingPoll, refreshAfterSeconds: current.refreshAfterSeconds, force: force || this.meetingsForce, outsideHours: false, working: allowedAt(now, settings, gate), nextSlotStart: this.nextWorkingStart(now) });
+    if (!due) return;
+    this.meetingsForce = false;
+    this.meetingPoll = pollStarted(this.meetingPoll, now);
+    const view = this.scheduleView();
+    // From 10 minutes ago (a meeting that just started) to the end of tomorrow, local time.
+    const windowEnd = zonedInstant(addDays(zonedParts(new Date(now), view.timeZone).date, 2), '00:00', view.timeZone).getTime();
+    try {
+      const page = parseMeetingsPage(await this.api().meetings({ from: new Date(now - START_WINDOW_MINUTES * 60_000), to: new Date(windowEnd), tz: view.timeZone }));
+      if (page === null) throw new ApiError(200, 'invalid_response', 'The server returned an invalid meetings list.');
+      const meetings = await withKeys(page.meetings);
+      const at = this.now().getTime();
+      this.meetings = meetings;
+      this.meetingsFetchedAt = at;
+      this.meetingsExpireAt = cacheExpiry(at, windowEnd);
+      this.meetingSupport = { ...current, status: page.status, refreshAfterSeconds: page.refreshAfterSeconds };
+      this.meetingPoll = pollSucceeded(this.meetingPoll, at, this.random);
+      if (this.meetingAccount !== null) {
+        this.meetingStore.saveCache({ account: this.meetingAccount, fetchedAt: new Date(at).toISOString(), expiresAt: new Date(this.meetingsExpireAt).toISOString(), status: page.status, refreshAfterSeconds: page.refreshAfterSeconds, meetings });
+      }
+    } catch (error) {
+      const failure = error instanceof ApiError ? error : new ApiError(0, 'network_error', 'Network error.');
+      const step = pollFailed(this.meetingPoll, this.now().getTime(), failure);
+      this.meetingPoll = step.state;
+      if (step.outcome === 'unauthorized') {
+        await this.signedOut(this.t('sessionExpired'));
+        return;
+      }
+      // 404: the feature went off (clear the list until GET me says otherwise); 403: Settings asks for the permission.
+      if (step.outcome === 'off') this.clearMeetings();
+    }
+    this.render();
+    void this.updateTray();
+  }
+
+  private planInput(now: number): PlanInput {
+    return { now, meetings: this.meetings, marks: this.meetingMarks, settings: this.state.settings, gate: this.meetingGate(), runningTaskId: this.state.activeTimer?.taskId ?? null };
+  }
+
+  /** The next reminder, snooze or start, for the host's wake-up (null with the reminders off). */
+  private nextMeetingAt(): number | null {
+    return this.meetingRemindersOn() ? nextDueAt(this.planInput(this.now().getTime())) : null;
+  }
+
+  private noteContext(now: number): NoteContext {
+    return { now, locale: this.messageLocale(), time: (at) => this.time(new Date(at)), stale: this.meetingsFetchedAt !== null && isStale({ fetchedAt: new Date(this.meetingsFetchedAt).toISOString() }, now) };
+  }
+
+  /**
+   * On every check: fetch when due, drop an expired list, then the reminders that are due (one notification each, or
+   * one grouped when more than three come at once) and the start prompt (or the automatic pause) of a meeting that
+   * starts while a timer runs. Each fires once per meeting and start (dedupe store).
+   */
+  private async checkMeetings(): Promise<void> {
+    if (this.state.session === null) return;
+    await this.pollMeetings();
+    const now = this.now().getTime();
+    if (this.meetingsExpireAt !== null && now >= this.meetingsExpireAt) {
+      this.clearMeetings();
+      this.render();
+      void this.updateTray();
+    }
+    if (this.meetingReminder !== null && now >= this.meetingReminderUntil) {
+      this.meetingReminder = null;
+      this.meetingReminderPicker = null;
+      this.render();
+    }
+    if (!this.meetingRemindersOn() || this.view === 'update-required' || this.meetings.length === 0) return;
+    const due = dueNow(this.planInput(now));
+    if (due.reminders.length === 0 && due.starts.length === 0) return;
+    const ctx = this.noteContext(now);
+    let marks = this.meetingMarks;
+    if (due.reminders.length > 0) {
+      marks = fired(marks, due.reminders, now, { firedAt: new Date(now).toISOString(), snoozedUntil: null });
+      this.saveMarks(marks);
+      if (due.reminders.length > GROUP_OVER) {
+        this.deliverMeetingNote(groupNote(due.reminders, ctx), Math.min(...due.reminders.map((meeting) => meeting.start)));
+      } else {
+        for (const meeting of due.reminders) this.deliverMeetingNote(reminderNote(meeting, ctx), meeting.start);
+      }
+    }
+    const timer = this.state.activeTimer;
+    const meeting = due.starts[0];
+    if (meeting === undefined || timer === null) return;
+    // One prompt per meeting start, even when several start at once (and even if microphone detection fires, Q-O20).
+    this.saveMarks(fired(marks, due.starts, now, { prompted: true }));
+    const until = meeting.start + START_WINDOW_MINUTES * 60_000;
+    if (!this.state.settings.meetingAutoPause) {
+      this.deliverMeetingNote(startNote(meeting, timer.taskTitle, ctx), until);
+      return;
+    }
+    const task = this.timerTask(timer);
+    await this.stop();
+    if (this.state.activeTimer !== null) return;
+    this.pausedForMeeting = { key: meeting.key, task };
+    this.deliverMeetingNote(pausedNote(meeting, task.title, ctx), until);
+  }
+
+  /** In the window (a toast with every choice) and, when the OS shows them, as a desktop notification with ≤ 2 buttons. */
+  private deliverMeetingNote(note: ReminderMeetingNote, visibleUntil: number): void {
+    this.meetingReminder = note;
+    this.meetingReminderUntil = Math.max(visibleUntil, this.now().getTime() + 60_000);
+    this.meetingReminderPicker = null;
+    this.announce(`${note.title}. ${note.body}`);
+    if (this.nativeUsable()) void this.sendNativeNote({ title: note.title, body: note.body, pose: note.pose, actions: note.native });
+    this.render();
+  }
+
+  meetingByShort(short: string | undefined): KeyedMeeting | undefined {
+    return short === undefined ? undefined : this.meetings.find((meeting) => shortKey(meeting.key) === short);
+  }
+
+  /** *Join*: the link is checked again here (allow-list, §23.8) and opened in the "Open Beacon in" browser. */
+  async joinMeeting(meeting: KeyedMeeting): Promise<void> {
+    if (externalUrl(meeting.joinUrl, { kind: 'meeting' }) === null) {
+      this.setNotice(this.t('meetingLinkRefused'));
+      return;
+    }
+    await this.openExternal(meeting.joinUrl, { kind: 'meeting' });
+    if (this.meetingReminder?.key === meeting.key && this.meetingReminder.kind === 'reminder') this.closeMeetingReminder();
+  }
+
+  closeMeetingReminder(): void {
+    this.meetingReminder = null;
+    this.meetingReminderPicker = null;
+    this.render();
+  }
+
+  /** A choice on a reminder or start prompt (notification button, toast, prompt window). Stale answers are ignored. */
+  async meetingReminderAction(kind: ReminderActionKind | 'dismiss', short: string | undefined, snooze: SnoozeChoice = 'default'): Promise<void> {
+    if (kind === 'dismiss') return this.closeMeetingReminder();
+    const meeting = this.meetingByShort(short);
+    if (meeting === undefined || this.state.session === null) return;
+    const shown = this.meetingReminder?.key === meeting.key;
+    switch (kind) {
+      case 'join':
+        return this.joinMeeting(meeting);
+      case 'snooze': {
+        const until = snoozeUntil(meeting, this.now().getTime(), snooze);
+        const mark = this.meetingMarks.find((item) => item.key === meeting.key);
+        if (until !== null) this.saveMarks(putMark(this.meetingMarks, { key: meeting.key, start: new Date(meeting.start).toISOString(), firedAt: mark?.firedAt ?? null, snoozedUntil: new Date(until).toISOString(), prompted: mark?.prompted ?? false }));
+        if (shown) this.closeMeetingReminder();
+        this.syncWakePlan();
+        return;
+      }
+      case 'keep':
+        if (shown) this.closeMeetingReminder();
+        return;
+      case 'pause':
+        if (shown) this.closeMeetingReminder();
+        if (this.state.activeTimer !== null) await this.stop();
+        return;
+      case 'track': {
+        const link = meeting.taskLinks[0];
+        if (link === undefined) {
+          // No linked task: pick one in the window (the host brought it forward).
+          if (!shown) this.meetingReminder = startNote(meeting, this.state.activeTimer?.taskTitle ?? '', this.noteContext(this.now().getTime()));
+          this.meetingReminderUntil = Math.max(this.meetingReminderUntil, this.now().getTime() + START_WINDOW_MINUTES * 60_000);
+          this.meetingReminderPicker = { query: '' };
+          this.render();
+          return;
+        }
+        if (shown) this.closeMeetingReminder();
+        await this.start(this.findTask(link.taskId) ?? { id: link.taskId, title: link.key }, { meeting: true });
+        return;
+      }
+      case 'undo': {
+        const paused = this.pausedForMeeting;
+        if (paused === null || paused.key !== meeting.key) return;
+        this.pausedForMeeting = null;
+        if (shown) this.closeMeetingReminder();
+        if (this.state.activeTimer === null) await this.start(paused.task);
+        return;
+      }
+    }
+  }
+
+  /** *Track the meeting* → a task picked in the reminder toast. */
+  async trackMeetingAs(task: Task): Promise<void> {
+    this.closeMeetingReminder();
+    await this.start(task, { meeting: true });
+  }
+
+  /** Today's remaining meetings (Today list and tray), in order. */
+  todayMeetings(): KeyedMeeting[] {
+    if (!this.meetingRemindersOn()) return [];
+    const now = this.now();
+    const view = this.scheduleView();
+    const dayEnd = zonedInstant(addDays(zonedParts(now, view.timeZone).date, 1), '00:00', view.timeZone).getTime();
+    return todayMeetings(this.meetings, now.getTime(), dayEnd);
+  }
+
+  /** The tray's "Today's meetings ▸" submenu (absent when there is none). */
+  private trayMeetings(): Pick<TrayMenu, 'meetingsLabel' | 'meetings'> {
+    const list = this.todayMeetings().slice(0, MAX_TRAY_MEETINGS);
+    if (list.length === 0) return {};
+    const locale = this.messageLocale();
+    return { meetingsLabel: this.t('meetingsTodayTitle'), meetings: list.map((meeting) => ({ id: `meeting:${shortKey(meeting.key)}`, label: `${this.time(new Date(meeting.start))} ${meetingTitle(meeting, locale)}` })) };
+  }
+
+  /** Settings → Meeting reminders: the switch. On asks the OS for notifications (macOS: never at first launch). */
+  async setMeetingReminders(on: boolean): Promise<void> {
+    this.persist({ settings: { ...this.state.settings, meetingReminders: on } });
+    if (!on) {
+      this.clearMeetings();
+      this.render();
+      return;
+    }
+    this.render();
+    if (this.state.settings.desktopNotifications) {
+      try {
+        if ((await this.platform.notificationPermission()) === 'prompt') {
+          const answer = await this.platform.requestNotificationPermission();
+          this.persist({ settings: { ...this.state.settings, nativeStatus: answer === 'granted' ? 'granted' : answer === 'unsupported' ? 'unsupported' : 'denied' } });
+        }
+      } catch {
+        // Asked again with the first reminder.
+      }
+    }
+    // Now, or at the first check the 60-second rule allows.
+    this.meetingsForce = true;
+    await this.pollMeetings(true);
+    this.render();
+  }
+
+  /** Settings → Meeting reminders → lead time: a preset or a whole 1–120 ("Custom…"); 0 = not before the meeting. */
+  setMeetingLead(minutes: number): void {
+    if (!Number.isInteger(minutes) || (minutes !== 0 && (minutes < MIN_CUSTOM_LEAD || minutes > MAX_CUSTOM_LEAD))) {
+      this.leadError = true;
+      this.render();
+      return;
+    }
+    this.leadError = false;
+    // A preset typed in "Custom…" shows as that preset.
+    this.customLead = !LEAD_PRESETS.includes(minutes);
+    this.persist({ settings: { ...this.state.settings, meetingLeadMinutes: minutes } });
+    this.render();
+  }
+
+  chooseCustomLead(): void {
+    this.customLead = true;
+    this.leadError = false;
+    this.render();
+    this.body.querySelector<HTMLInputElement>('#meeting-lead-custom')?.focus();
+  }
+
+  setReminderSetting(patch: Partial<Pick<LocalState['settings'], 'meetingOutsideHours' | 'meetingDaysOff' | 'meetingAskOnStart' | 'meetingAutoPause'>>): void {
+    this.persist({ settings: { ...this.state.settings, ...patch } });
+    // Outside hours or days off on: today's list may be due now.
+    this.meetingsForce = true;
+    this.render();
+  }
+
+  /**
+   * "Allow TimeTrack to read your upcoming meetings" (§23.7): the device flow again with `meetings:read` on top of the
+   * current scopes. Cancel goes back to the main window; the session stays as it was until the new sign-in is approved.
+   */
+  async allowMeetings(): Promise<void> {
+    const server = this.state.session?.server;
+    if (server === undefined) return;
+    this.persist({ settings: { ...this.state.settings, meetingConsentSeen: true } });
+    this.reconsent = true;
+    await this.connect(server);
+  }
+
+  dismissMeetingConsent(): void {
+    this.persist({ settings: { ...this.state.settings, meetingConsentSeen: true } });
+    this.render();
+  }
+
+  /** The re-consent card of the main window: once, while the server offers meetings and this sign-in lacks the scope. */
+  private meetingConsentDue(): boolean {
+    const needs = this.meetingSupport.kind === 'consent' || this.meetingPoll.stopped === 'scope';
+    return this.state.session !== null && needs && this.state.settings.meetingReminders !== false && !this.state.settings.meetingConsentSeen;
+  }
+
+  /** Last update of an outdated list ("Last updated at 09:12: this list may be outdated."), else null. */
+  private meetingsOutdated(): string | null {
+    const at = this.meetingsFetchedAt;
+    return at !== null && isStale({ fetchedAt: new Date(at).toISOString() }, this.now().getTime()) ? this.t('meetingsTodayOutdated', { time: this.time(new Date(at)) }) : null;
+  }
+
+  private renderMeetingBanners(): Child[] {
+    const t = this.t;
+    const support = this.meetingSupport;
+    const today = this.meetingRemindersOn() ? this.todayMeetings() : [];
+    const calendars = support.kind === 'on' ? support.calendarsUrl : null;
+    return [
+      this.meetingConsentDue() &&
+        h(
+          'section',
+          { class: 'card meeting-consent', id: 'meeting-consent-card', attrs: { 'aria-labelledby': 'meeting-consent-title' } },
+          h('h2', { id: 'meeting-consent-title' }, t('meetingRemindersConsentTitle')),
+          h('p', { class: 'muted' }, t('meetingRemindersConsent')),
+          h(
+            'div',
+            { class: 'row-actions' },
+            h('button', { class: 'primary small', id: 'meeting-consent-allow', key: 'meeting-consent-allow', attrs: { type: 'button' }, on: { click: () => void this.allowMeetings() } }, t('meetingRemindersConsentButton')),
+            h('button', { class: 'link', id: 'meeting-consent-later', key: 'meeting-consent-later', attrs: { type: 'button' }, on: { click: () => this.dismissMeetingConsent() } }, t('meetingRemindersConsentLater')),
+          ),
+        ),
+      this.meetingRemindersOn() &&
+        support.kind === 'on' &&
+        support.status === 'needs_reconnect' &&
+        !this.reconnectDismissed &&
+        h(
+          'section',
+          { class: 'card meeting-reconnect', id: 'meeting-reconnect', attrs: { role: 'region', 'aria-label': t('meetingRemindersTitle') } },
+          h('p', {}, t('meetingRemindersReconnect')),
+          h(
+            'div',
+            { class: 'row-actions' },
+            calendars !== null && h('button', { class: 'secondary small', id: 'meeting-reconnect-open', key: 'meeting-reconnect-open', attrs: { type: 'button' }, on: { click: () => void this.openExternal(calendars, this.beaconRule()) } }, t('meetingRemindersReconnectButton')),
+            h('button', { class: 'link', id: 'meeting-reconnect-dismiss', key: 'meeting-reconnect-dismiss', attrs: { type: 'button' }, on: { click: () => { this.reconnectDismissed = true; this.render(); } } }, t('toastDismiss')),
+          ),
+        ),
+      today.length > 0 &&
+        renderTodayMeetings({ t, locale: this.messageLocale(), meetings: today, now: this.now().getTime(), time: (at) => this.time(new Date(at)), outdated: this.meetingsOutdated(), onJoin: (meeting) => void this.joinMeeting(meeting) }),
+    ];
+  }
+
+  private renderMeetingReminderToast(note: ReminderMeetingNote): HTMLElement {
+    const meeting = note.key === null ? undefined : this.meetings.find((item) => item.key === note.key);
+    const short = meeting === undefined ? undefined : shortKey(meeting.key);
+    const picker = this.meetingReminderPicker;
+    const known = [...this.tasks, ...this.state.pinned];
+    return renderReminderToast({
+      t: this.t,
+      note,
+      joinable: meeting?.joinUrl != null,
+      snoozes: meeting === undefined ? [] : snoozeChoices(meeting, this.now().getTime()),
+      picker: picker === null ? null : { query: picker.query, tasks: picker.query.trim() === '' ? this.meetingTasks() : searchTasks(meetingCandidates([known], () => false, null, Number.MAX_SAFE_INTEGER), picker.query) },
+      onJoin: () => void this.meetingReminderAction('join', short),
+      onSnooze: (choice) => void this.meetingReminderAction('snooze', short, choice),
+      onKeep: () => void this.meetingReminderAction('keep', short),
+      onPause: () => void this.meetingReminderAction('pause', short),
+      onTrack: () => void this.meetingReminderAction('track', short),
+      onUndo: () => void this.meetingReminderAction('undo', short),
+      onPick: (task) => void this.trackMeetingAs(task),
+      onQuery: (query) => {
+        this.meetingReminderPicker = { query };
+        this.render();
+      },
+      onDismiss: () => this.closeMeetingReminder(),
+    });
+  }
+
+  /**
+   * Without desktop notifications (refused, failing, turned off) the reminder also goes to the always-on-top prompt
+   * window when the host has one (contract §23.4 / §23.7), after any "Still there?" question.
+   */
+  private meetingPromptView(): PromptView | null {
+    const note = this.meetingReminder;
+    if (note === null || note.kind === 'group' || !this.promptInWindow() || this.nativeUsable()) return null;
+    const meeting = this.meetings.find((item) => item.key === note.key);
+    if (meeting === undefined) return null;
+    const t = this.t;
+    const labels = MEETING_REMINDERS[note.locale].actions;
+    const short = shortKey(meeting.key);
+    const button = (id: string, label: string, style: PromptButton['style'], action: PromptButton['action']): PromptButton => ({ kind: 'button', id, label, style, action, meeting: short });
+    const snoozes = snoozeChoices(meeting, this.now().getTime());
+    const items: PromptButton[] =
+      note.kind === 'reminder'
+        ? [
+            ...(meeting.joinUrl !== null ? [button('meeting-prompt-join', labels.join, 'primary', 'meeting-join')] : []),
+            ...(snoozes.includes('default') ? [button('meeting-prompt-snooze', labels.snooze, 'secondary', 'meeting-snooze')] : []),
+            ...(snoozes.includes(1) ? [button('meeting-prompt-snooze-1', labels.snooze1, 'ghost', 'meeting-snooze-1')] : []),
+            ...(snoozes.includes(5) ? [button('meeting-prompt-snooze-5', labels.snooze5, 'ghost', 'meeting-snooze-5')] : []),
+          ]
+        : note.kind === 'start'
+          ? [button('meeting-prompt-track', labels.track, 'primary', 'meeting-track'), button('meeting-prompt-pause', labels.pause, 'secondary', 'meeting-pause'), button('meeting-prompt-keep', labels.keep, 'ghost', 'meeting-keep')]
+          : [];
+    return {
+      id: 'meeting-prompt',
+      moment: 'about',
+      pose: note.pose,
+      title: note.title,
+      blocks: [
+        { kind: 'text', id: 'meeting-prompt-text', text: note.body, lang: note.locale },
+        { kind: 'choices', layout: 'row', items: [...items, button('meeting-prompt-dismiss', labels.dismiss, 'link', 'meeting-dismiss')] },
+      ],
+      windowTitle: t('meetingReminderLabel'),
+      lang: this.locale,
+      theme: forcedTheme(this.state.settings.theme),
+      escapeHint: t('promptEscapeHint'),
+      openApp: t('promptOpenApp'),
+      focus: null,
+      focusSeq: 0,
+    };
+  }
+
+  /** Settings → Meeting reminders (`ui/meetingReminders.ts`). */
+  private renderReminderSettings(): HTMLElement {
+    const settings = this.state.settings;
+    const support = this.meetingSupport;
+    return renderReminderSettings({
+      t: this.t,
+      support,
+      stopped: this.meetingPoll.stopped,
+      enabled: this.meetingRemindersOn(),
+      settings,
+      notificationsOff: settings.nativeStatus === 'denied' || !settings.desktopNotifications,
+      customLead: this.customLead,
+      leadError: this.leadError,
+      onToggle: (on) => void this.setMeetingReminders(on),
+      onLead: (minutes) => this.setMeetingLead(minutes),
+      onCustomLead: () => this.chooseCustomLead(),
+      onSetting: (patch) => this.setReminderSetting(patch),
+      onConsent: () => void this.allowMeetings(),
+      onOpenCalendars: (url) => void this.openExternal(url, this.beaconRule()),
+    });
   }
 
   /** Settings → My schedule: one value of one day (a value equal to Beacon's drops the override). */
@@ -1453,6 +2091,7 @@ export class DesktopApp {
         : pausedAt(this.state.messages, this.now())
           ? { id: 'resume-friendly', label: t('trayFriendlyPaused', { time: this.time(this.state.messages.pausedUntil as string) }) }
           : { id: 'pause-friendly', label: t('trayPauseFriendly') },
+      ...this.trayMeetings(),
       settings: t('traySettings'),
       quit: t('trayQuit'),
     };
@@ -1476,6 +2115,11 @@ export class DesktopApp {
     else if (action === 'check-updates' && this.state.session !== null) {
       if (this.view !== 'update-required') this.show('main');
       await this.checkUpdates(true);
+    }
+    else if (action.startsWith('meeting:')) {
+      // *Today* in the tray: the window is shown by the host; join when the meeting has a link.
+      const meeting = this.meetingByShort(action.slice(8));
+      if (meeting?.joinUrl != null) await this.joinMeeting(meeting);
     }
     else if (action.startsWith('switch:')) {
       const task = this.quickTasks().find((item) => item.id === action.slice(7));
@@ -1529,6 +2173,8 @@ export class DesktopApp {
 
   /** A notification button: a working-hours reminder's, or one of "Working without a timer?". */
   async notificationAction(id: string): Promise<void> {
+    const reminder = parseReminderActionId(id);
+    if (reminder !== null) return this.meetingReminderAction(reminder.kind, reminder.short);
     const meeting = meetingActionOfId(id);
     if (meeting !== null) return this.meetingAction(meeting);
     const nudge = nudgeActionOf(id);
@@ -1555,6 +2201,7 @@ export class DesktopApp {
    * three-choice question about that time (`lockReturn`). The events themselves are never stored or sent.
    */
   private async onSessionEvent(event: SessionEvent): Promise<void> {
+    if (event === 'resume') this.meetingsForce = true;
     if (event === 'lock' || event === 'unlock') this.session.locked = event === 'lock';
     else this.session.asleep = event === 'suspend';
     if (this.session.locked || this.session.asleep) {
@@ -1697,9 +2344,13 @@ export class DesktopApp {
   private ticking: Promise<void> = Promise.resolve();
 
   private async check(): Promise<void> {
+    // The connection came back since the last check: fetch today's meetings again (contract §23.5).
+    if (this.meetingsOffline && !this.offline) this.meetingsForce = true;
+    this.meetingsOffline = this.offline;
     await this.updateTray();
     if (this.view === 'main' && this.longRunning() !== (this.main?.banners.querySelector('#long-running') !== null)) this.render();
     this.checkReminders();
+    await this.checkMeetings();
     this.checkFriendly();
     await this.checkNudge();
     // The next reminder instant moves as the day goes by (and when one was skipped).
@@ -2174,12 +2825,17 @@ export class DesktopApp {
     } catch {
       this.browserChoice = SYSTEM_BROWSER;
     }
+    this.clearMeetings();
     for (const key of [...LOCAL_KEYS, WINDOW_KEY]) this.storage.removeItem(key);
     this.windowMemory = loadWindowMemory(this.storage);
     this.section = 'tasks';
     this.selectedTaskId = null;
     this.token = null;
     this.state = emptyState();
+    this.meetingMarks = [];
+    this.meetingSupport = { kind: 'unsupported' };
+    this.meetingAccount = null;
+    this.meetingPoll = FRESH_POLL;
     this.serverDraft = this.deps.beaconUrl ?? '';
     this.tasks = [];
     this.entries = null;
@@ -2498,7 +3154,7 @@ export class DesktopApp {
    */
   wakePlan(): WakePlan {
     const state = this.state.idleCheck;
-    const reminderAt = this.nextReminderAt();
+    const reminderAt = [this.nextReminderAt(), this.nextMeetingAt()].reduce<number | null>((min, at) => (at === null ? min : min === null ? at : Math.min(min, at)), null);
     // Meeting detection: the host looks at the microphone only while it is on.
     const mic = this.meetingOn() ? { micEverySeconds: MIC_POLL_SECONDS } : {};
     if (!this.idleCheckEnabled()) return { deadlineAt: null, idleAfterSeconds: null, reminderAt, ...mic };
@@ -2979,10 +3635,12 @@ export class DesktopApp {
     const reminder = this.view === 'main' ? this.visibleReminder() : null;
     const nudge = this.view === 'main' ? this.visibleNudge() : null;
     const meeting = this.view === 'main' ? this.meetingNote() : null;
-    const key = `${card === null ? '' : `${card.kind}:${card.line}:${card.shownAt}`}|${daily?.text ?? ''}|${reminder === null ? '' : `${reminder.slot}:${reminder.shownAt}:${this.reminderActionable(reminder)}`}|${nudge?.shownAt ?? ''}|${meeting === null ? '' : `${meeting.text}:${meeting.actions.join()}:${this.meetingPicker}:${this.meetingQuery}:${this.tasks.length}`}`;
+    const upcoming = this.view === 'main' ? this.meetingReminder : null;
+    const key = `${upcoming === null ? '' : `${upcoming.kind}:${upcoming.key}:${upcoming.body}:${JSON.stringify(this.meetingReminderPicker)}:${this.tasks.length}`}|${card === null ? '' : `${card.kind}:${card.line}:${card.shownAt}`}|${daily?.text ?? ''}|${reminder === null ? '' : `${reminder.slot}:${reminder.shownAt}:${this.reminderActionable(reminder)}`}|${nudge?.shownAt ?? ''}|${meeting === null ? '' : `${meeting.text}:${meeting.actions.join()}:${this.meetingPicker}:${this.meetingQuery}:${this.tasks.length}`}`;
     if (key === this.toastKey) return;
     this.toastKey = key;
     patch(this.toastRegion, [
+      upcoming !== null && this.renderMeetingReminderToast(upcoming),
       meeting !== null && this.renderMeetingQuestion(meeting),
       reminder !== null && this.renderReminder(reminder),
       nudge !== null && this.renderNudge(nudge),
@@ -3081,6 +3739,7 @@ export class DesktopApp {
       this.nativeNotice !== null && this.renderNativeNotice(),
       this.pinExpired && this.renderPinExpired(),
       this.renderUpdateCard(),
+      ...this.renderMeetingBanners(),
       this.welcome && this.error === null && this.renderWelcome(),
       this.longRunning() && this.renderLongRunning(),
       this.updateMessage !== null &&
@@ -3497,7 +4156,7 @@ export class DesktopApp {
   promptView(): PromptView | null {
     const t = this.t;
     const state = this.state.idleCheck;
-    if (state.phase === 'watching') return null;
+    if (state.phase === 'watching') return this.meetingPromptView();
     // The "Still there?" phrasing of this prompt (Fun messages), with its own pose; the facts and buttons stay the same.
     // During a meeting-like task: the softer "Still in the meeting?" and the teamwork pose.
     const locale = this.messageLocale();
@@ -3670,6 +4329,17 @@ export class DesktopApp {
         return this.resumeAfterGap(true);
       case 'not-now':
         return this.resumeAfterGap(false);
+      case 'meeting-join':
+      case 'meeting-keep':
+      case 'meeting-pause':
+      case 'meeting-track':
+        return this.meetingReminderAction(answer.action.slice(8) as ReminderActionKind, answer.meeting);
+      case 'meeting-snooze':
+      case 'meeting-snooze-1':
+      case 'meeting-snooze-5':
+        return this.meetingReminderAction('snooze', answer.meeting, answer.action === 'meeting-snooze' ? 'default' : answer.action === 'meeting-snooze-1' ? 1 : 5);
+      case 'meeting-dismiss':
+        return this.closeMeetingReminder();
       case 'escape':
       case 'open-app':
         // Never a dismissal: the prompt stays until it is answered ("Open TimeTrack" is handled by its window).
@@ -3896,6 +4566,7 @@ export class DesktopApp {
       this.renderSchedule(),
       this.renderFriendlySettings(),
       this.renderMeetingSettings(),
+      this.renderReminderSettings(),
       this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText'),
       // Store (MSIX) builds cannot register the login item the autostart plugin writes: no switch there.
       this.channel === 'direct' && this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
@@ -4324,7 +4995,7 @@ export class DesktopApp {
       { id: 'privacy' },
       h('p', {}, t('privacyIntro')),
       section('privacy-sent', 'privacySentTitle', ['privacySentSignIn', 'privacySentTimer', 'privacySentIdle', 'privacySentUpdates']),
-      section('privacy-local', 'privacyLocalTitle', ['privacyLocalToken', 'privacyLocalState', 'privacyLocalWindow', 'privacyLocalIdle', 'privacyLocalMeetings', 'privacyLocalTotals', 'privacyLocalBrowser']),
+      section('privacy-local', 'privacyLocalTitle', ['privacyLocalToken', 'privacyLocalState', 'privacyLocalWindow', 'privacyLocalIdle', 'privacyLocalMeetings', 'privacyLocalReminders', 'privacyLocalTotals', 'privacyLocalBrowser']),
       section('privacy-never', 'privacyNeverTitle', ['privacyNever']),
       h('p', {}, t('privacyRights')),
       h(

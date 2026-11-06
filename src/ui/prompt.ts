@@ -33,7 +33,16 @@ export type PromptAction =
   | 'not-now'
   | 'escape'
   /** "Open TimeTrack" in the prompt window: brings the main window forward; the prompt stays. */
-  | 'open-app';
+  | 'open-app'
+  /** Meeting reminders without desktop notifications (`meeting` = the meeting's short key, lib/meetingReminders.ts). */
+  | 'meeting-join'
+  | 'meeting-snooze'
+  | 'meeting-snooze-1'
+  | 'meeting-snooze-5'
+  | 'meeting-dismiss'
+  | 'meeting-keep'
+  | 'meeting-pause'
+  | 'meeting-track';
 
 export interface PromptAnswer {
   action: PromptAction;
@@ -43,6 +52,8 @@ export interface PromptAnswer {
   taskId?: string;
   /** Task search of the picker (`reassign-search`); the main window runs it. */
   query?: string;
+  /** Meeting reminder answers: the meeting's short key (16 hex). */
+  meeting?: string;
 }
 
 export interface PromptButton {
@@ -56,6 +67,8 @@ export interface PromptButton {
   expanded?: boolean;
   /** Sent with the answer (the quick "Meeting" choice of the picker). */
   taskId?: string;
+  /** Sent with the answer (meeting reminders: the meeting's short key). */
+  meeting?: string;
 }
 
 export interface PromptText {
@@ -184,7 +197,7 @@ function button(item: PromptButton, answer: (answer: PromptAnswer) => void): HTM
       id: item.id,
       key: item.id,
       attrs: { type: 'button', 'aria-expanded': item.expanded === undefined ? undefined : String(item.expanded) },
-      on: { click: () => answer({ action: item.action, ...(item.taskId !== undefined ? { taskId: item.taskId } : {}) }) },
+      on: { click: () => answer({ action: item.action, ...(item.taskId !== undefined ? { taskId: item.taskId } : {}), ...(item.meeting !== undefined ? { meeting: item.meeting } : {}) }) },
     },
     item.play === true && icon('play'),
     item.label,
