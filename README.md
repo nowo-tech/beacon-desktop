@@ -79,10 +79,13 @@ a ghost Windows removes when the mouse passes over it.
 
 ### Sign in
 
-1. Enter your Beacon URL and click **Connect**.
+1. Enter your Beacon URL and click **Connect**. The app asks *Sign in to <host>?* in a system dialog: check the host
+   and click **Sign in** (if you did not just ask to sign in, click **Cancel**).
 2. The app shows a code like `BCDF-GHJK` and opens Beacon's *Connect a device* page in your browser.
 3. Check the code, approve. The app is now listed in Beacon under Account → Security → Time tracking apps, where you
-   can revoke it. The session token is stored in the OS keychain only.
+   can revoke it. The session token is stored in the OS keychain only, and only Rust reads it: the app's web view
+   never sees it. A system notification confirms every sign-in. If the app ever signs you out because the saved
+   server no longer matches the session, revoke the old device there too.
 
 ## Features
 
@@ -269,6 +272,34 @@ state (app id, start, end, the answer) in local storage, and nothing is sent (on
 shows what the last check found. `pnpm screenshots:meetings` (`MEETING_SCREENS=<dir>`) renders the questions and the
 settings in Spanish, light and dark.
 
+### Meeting reminders (TimeTrack 1.14)
+
+With a Beacon on TimeTrack 1.14 or later and a calendar connected there, the app reminds you before each meeting,
+on this computer only (contract §23). Settings → **Meeting reminders**: *Remind me before my meetings* (on by default
+once a calendar is connected), *Remind me* 5 minutes before (not before, 1, 2, 5, 10, 15, 30 or a custom 1–120),
+*Remind me outside working hours* and *on days off* (both off), *When a meeting starts and a timer is running, ask
+what to record* (on) and *Pause my timer automatically when a meeting starts* (off).
+
+- The reminder is a desktop notification — title (*Busy* for a private meeting), local time range, "in 5 min", up to
+  three internal attendees and the count of external ones — with **Join** (Teams, Google Meet, Zoom, Jitsi Meet and
+  Webex links only, opened in your "Open Beacon in" browser) and **Snooze** (until a minute before the start). The
+  window shows it too, with *Snooze 1 / 5 min*; without desktop notifications it also opens the always-on-top prompt
+  window. More than three at once become one notification.
+- When a meeting starts while a timer runs: *Keep timing*, *Pause* or *Track the meeting* (its linked task, or one you
+  pick). With the automatic pause, the timer stops and a notification offers *Undo*.
+- *Today's meetings* lists the rest of the day in the main window and in the tray, with *Join*.
+- Only meetings inside your working hours (Settings → My schedule) and never on days off, unless switched on; free,
+  all-day and past meetings never remind; each meeting reminds once per start time (a moved meeting reminds again).
+- The list (today and tomorrow) is fetched on start, on wake, when the network comes back and every 5 minutes (or
+  Beacon's `refreshAfterSeconds`), honouring `429 Retry-After`; it is kept for at most 48 hours so reminders work
+  offline ("may be outdated" after an hour) and deleted when you sign out or turn the reminders off.
+- Sessions signed in before 0.6 lack the `meetings:read` permission: one card offers *Sign in again to allow meeting
+  reminders*. It is a new sign-in: the app revokes the current session in Beacon, signs out, asks *Sign in to <host>?*
+  and runs the device sign-in with the new permission. If you cancel, you stay signed out. Older servers simply have no reminders (Settings says why).
+
+The mock server serves `GET me/meetings` (`POST /__mock/config {"meetings": {"status": "connected", "list": [...]}}`;
+`"meetingsScope": false` makes it an older server that refuses the scope).
+
 Everything stays on this computer except the entries you confirm — see [PRIVACY.md](PRIVACY.md). What comes next, and
 what TimeTrack deliberately will not do: [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -283,14 +314,43 @@ required" screen send you to the Store listing instead.
 
 <img src="docs/images/desktop-store-about.png" alt="Settings, About: Updates come from the Microsoft Store" width="200"> <img src="docs/images/desktop-store-update-required.png" alt="Update required in the Store build: Open Microsoft Store" width="200">
 
+## Security
+
+- **TLS public-key pinning.** Traffic to the official Beacon host (`beacon.nowo.tech`) cannot be read or modified
+  even on a network with a TLS-inspecting proxy or a rogue CA trusted by the OS: the Rust HTTP client
+  (`src-tauri/src/net.rs`, `src-tauri/src/pinning.rs`) validates the chain against the compiled-in Mozilla roots and
+  then requires one of the pinned CA keys (`src-tauri/pins.json`: Let's Encrypt / ISRG roots plus Google Trust
+  Services as the backup CA; never the leaf, so certificate renewals every 60–90 days need nothing). On a mismatch the
+  app sends nothing and shows *La conexión con Beacon no es de confianza (certificado inesperado)* / *The connection
+  to Beacon is not trusted (unexpected certificate)*, with no way to continue. Self-hosted servers keep standard TLS
+  validation, shown as *Connection not pinned* in Settings; `localhost` is never pinned. The update check and the
+  updater use the same pinned client. Rotation runbook: [docs/PINNING.md](docs/PINNING.md).
+- **Self-hosted servers need a publicly trusted certificate.** The app trusts only the Mozilla root store compiled
+  into it (`webpki-roots`), never the OS trust store. A self-hosted Beacon behind a private or corporate CA (or a
+  self-signed certificate) is **not supported**: sign-in, API calls, the update check and in-app updates all fail
+  with a certificate error. Use a certificate that chains to the Mozilla root store (for example Let's Encrypt).
+- **Bound to your server.** Every request the app makes and the updater go to the origin (scheme, host, port) of the
+  server you signed in to, and nowhere else; switching servers means signing out first. The session token stays
+  in Rust with the server that issued it, so even script running in the window cannot read it or send it elsewhere;
+  script itself is prevented by the CSP and the text-only DOM (SECURITY.md, *Credentials*). Plain `http://` to `localhost`,
+  `127.0.0.1` or `[::1]` works in development (debug) builds only; release builds require `https://`.
+- Reporting and design notes: [SECURITY.md](SECURITY.md).
+
 ## Tauri capabilities
 
 - **Every app command is ACL-scoped.** `src-tauri/build.rs` declares them in the app manifest
   (`tauri_build::AppManifest::commands`, list in `src-tauri/app-commands.rs`), so Tauri only lets a window call the
   commands its capability grants (`allow-<command>`); without a manifest any local window could call any command.
   A Rust test checks the list against `generate_handler!` and that each command is granted to exactly one window.
-- `src-tauri/capabilities/default.json`, window `main`: core defaults, HTTP to your server, `clipboard-manager:allow-write-text` (*Copy link*), `notification:default`, no autostart permission (*Start at login* goes through the app commands `set_autostart` / `get_autostart`), process restart, set theme, and the app commands
-  `secret_get` / `secret_set` / `secret_delete`, `idle_seconds`, `set_tray_status`, `set_tray_menu`,
+- `src-tauri/capabilities/default.json`, window `main`: core defaults, `beacon_fetch` (every request to your server,
+  through the pinned Rust client, only to the origin bound with `beacon_bind` at sign-in; there is no HTTP plugin
+  permission), `beacon_bind` and `connection_security`,
+  `clipboard-manager:allow-write-text` (*Copy link*), `notification:default`, no autostart permission (*Start at
+  login* goes through the app commands `set_autostart` / `get_autostart`), process restart, set theme, and the app
+  commands
+  `secret_status` / `sign_in_begin` / `secret_delete` (whether a session token is stored, start a sign-in, sign-out;
+  no command returns the token, which Rust keeps with the origin that issued it and adds only to requests to that
+  origin, `src-tauri/src/secret.rs`), `idle_seconds`, `set_tray_status`, `set_tray_menu`,
   `set_global_shortcut`, `check_update`, `install_update`, `set_wake_plan`, `notify_friendly`, `prompt_open`,
   `prompt_focus`, `prompt_close`, `open_external`, `list_browsers`, `get_browser`, `set_browser`, `pick_browser` (every
   link, in the system default or the chosen browser, launched with an argv array from Rust; no opener permission for
@@ -304,6 +364,10 @@ required" screen send you to the Store listing instead.
   Meeting detection adds no command and no permission either: the UI turns it on with `set_wake_plan`
   (`micEverySeconds`), the heartbeat sends `mic` events (known app ids only) to the `main` window, and its
   notification buttons (`meeting-generic`, `meeting-switch`, `meeting-back`, `meeting-stop`) join `notify::ACTION_IDS`.
+  Meeting reminders add no command and no permission: their buttons are `meeting-<join|snooze|keep|pause|track|undo>:<16
+  hex>` (`notify::meeting_action`), the prompt window's answers `meeting-join`, `meeting-snooze`, `meeting-dismiss`, … with a
+  16-hex `meeting` field (`prompt::valid_answer`), the tray's *Today's meetings* items `meeting:<16 hex>`; *Join* goes
+  through `open_external` from the main window after the meeting-link allow-list (`src/lib/links.ts`).
 - No tray permission for any window: `default.json` lists the core defaults one by one (`core:app`, `event`, `image`,
   `menu`, `path`, `resources`, `webview`, `window`) instead of `core:default`, which includes `core:tray:default` and
   would let the webview create a second tray icon. The tray is built once, in Rust (a Rust test checks both).
@@ -358,6 +422,7 @@ steps: [docs/RELEASE-PLAN-0.4.0.md](docs/RELEASE-PLAN-0.4.0.md).
 | `TIME_TRACK_MIN_SUPPORTED_VERSION` | variable (optional) | `min_supported_version` in `stable.json` |
 | `LINUX_RUNNER`, `WINDOWS_RUNNER`, `MACOS_RUNNER` | variables (optional) | JSON `runs-on` value per platform, e.g. `["self-hosted","linux","x64","tauri-build"]`; default `"ubuntu-22.04"`, `"windows-latest"`, `"macos-latest"` |
 | `WINDOWS_BUILD`, `MACOS_BUILD` | variables (optional) | `false` skips that platform (no entries for it in that version's `stable.json`) |
+| `MACOS_CI_ENABLED` | variable (optional) | macOS is **off** unless this is `true` (owner decision 2026-11-06): `release.yml` skips `build-macos` and publishes Linux and Windows only (no macOS entries in `stable.json`), and `platforms.yml` runs Windows only |
 
 Self-hosted runners (build runner spec in `nowo-tech/devops`, spec 024): ephemeral, scoped to this repository, never
 the production deploy runner (`prod-vps`). Linux images must carry the Tauri system libraries (webkit2gtk-4.1,
@@ -367,4 +432,5 @@ requests.
 
 Docs: [CHANGELOG](CHANGELOG.md) · [PRIVACY](PRIVACY.md) · [ROADMAP](docs/ROADMAP.md) · [SECURITY](SECURITY.md) · [CONTRIBUTING](CONTRIBUTING.md)
 
-License: [MIT](LICENSE).
+License: [MIT](LICENSE). Third-party notices (`webpki-roots`, CDLA-Permissive-2.0):
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

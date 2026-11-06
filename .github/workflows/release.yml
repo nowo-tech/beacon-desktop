@@ -17,6 +17,8 @@ name: Release
 #   WINDOWS_RUNNER  JSON runs-on value, e.g. ["self-hosted","windows","x64","tauri-build"] (default "windows-latest")
 #   MACOS_RUNNER    JSON runs-on value, e.g. ["self-hosted","macos","tauri-build"]         (default "macos-latest")
 #   WINDOWS_BUILD / MACOS_BUILD = false skip that platform: stable.json then has no entries for it in this version.
+#   MACOS_CI_ENABLED  macOS is off unless this is 'true' (owner decision 2026-11-06, Actions budget): build-macos is
+#                   skipped, publish goes on with Linux and Windows, and stable.json has no macOS entries.
 # Self-hosted runners must be ephemeral and repo-scoped (no pull_request trigger here, so forks never reach them);
 # Linux ones need the Tauri system libraries, rustup and the AWS CLI preinstalled (the apt step runs on hosted only).
 on:
@@ -41,8 +43,8 @@ jobs:
       updater: ${{ steps.flags.outputs.updater }}
       s3: ${{ steps.flags.outputs.s3 }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - id: flags
@@ -61,6 +63,8 @@ jobs:
           flag() { if have "${@:3}"; then echo "$1=true" >> "$GITHUB_OUTPUT"; else echo "$1=false" >> "$GITHUB_OUTPUT"; echo "::notice title=Skipped::$2 (missing: ${*:3})"; fi; }
           [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo "::error::TAURI_SIGNING_PRIVATE_KEY is missing: updater artifacts are required since 0.4.0"; exit 1; }
           node scripts/release/check-updater-key.mjs
+          # TLS pin set gate (docs/PINNING.md, FY-L2): a build must keep its pinning for most of its life.
+          node scripts/release/check-pin-expiry.mjs --min-days 180
           echo "updater=true" >> "$GITHUB_OUTPUT"
           flag s3 "S3 upload skipped: bundles stay as workflow artifacts" TIME_TRACK_S3_ENDPOINT TIME_TRACK_S3_BUCKET TIME_TRACK_S3_ACCESS_KEY_ID TIME_TRACK_S3_SECRET_ACCESS_KEY
 
@@ -75,7 +79,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.RELEASE_LINUX_RUNNER || vars.LINUX_RUNNER || '"ubuntu-22.04"') }}
     timeout-minutes: 45
     steps: &build-steps
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Self-hosted Linux runners ship these libraries in their image (no sudo there).
       - if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         run: |
@@ -85,8 +89,8 @@ jobs:
       # pnpm/action-setup and the actions cache for the pnpm store are skipped on self-hosted Linux (image pnpm via
       # corepack, persistent store), kept elsewhere.
       - if: runner.environment == 'github-hosted' || runner.os != 'Linux'
-        uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
@@ -134,7 +138,7 @@ jobs:
       - name: Collect bundles and stable.json entries
         shell: bash
         run: scripts/release/collect-desktop.sh ${{ matrix.os }} "${{ needs.prepare.outputs.version }}" out "${{ matrix.bundle }}" "${{ needs.prepare.outputs.updater }}"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-${{ matrix.os }}
           path: out/
@@ -159,11 +163,12 @@ jobs:
     timeout-minutes: 45
     steps: *build-steps
 
-  # Last: macOS minutes count ×10, so it only runs after Linux and Windows succeeded (or Windows was switched off).
+  # Last: macOS minutes count ×10, so it only runs after Linux and Windows succeeded (or Windows was switched off),
+  # and only while vars.MACOS_CI_ENABLED == 'true' (off by default: skipped, never blocking publish).
   build-macos:
     needs: [prepare, build-linux, build-windows]
     if: >-
-      ${{ !cancelled() && vars.MACOS_BUILD != 'false' && needs.build-linux.result == 'success'
+      ${{ !cancelled() && vars.MACOS_CI_ENABLED == 'true' && vars.MACOS_BUILD != 'false' && needs.build-linux.result == 'success'
       && contains(fromJSON('["success","skipped"]'), needs.build-windows.result) }}
     strategy:
       matrix:
@@ -187,12 +192,12 @@ jobs:
       MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
       TIMETRACK_STORE_URL: ${{ vars.TIMETRACK_STORE_URL }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # pnpm/action-setup and the actions cache for the pnpm store are skipped on self-hosted Linux (image pnpm via
       # corepack, persistent store), kept elsewhere.
       - if: runner.environment == 'github-hosted' || runner.os != 'Linux'
-        uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
@@ -220,7 +225,7 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
       - run: pwsh scripts/store/build-msix.ps1 -Arch x64
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-store-msix
           path: out/store/*.msix
@@ -231,6 +236,8 @@ jobs:
         run: rm -rf src-tauri/target out node_modules dist
 
   # A switched-off (skipped) Windows / macOS build simply leaves its platform out of stable.json for this version.
+  # A skipped build-macos (MACOS_CI_ENABLED not 'true') does not block publishing; with no desktop-darwin artifact,
+  # stable.json gets no macOS entries.
   publish:
     needs: [prepare, build-linux, build-windows, build-macos]
     if: >-
@@ -246,11 +253,11 @@ jobs:
       TIME_TRACK_S3_REGION: ${{ secrets.TIME_TRACK_S3_REGION }}
       MIN_SUPPORTED_VERSION: ${{ vars.TIME_TRACK_MIN_SUPPORTED_VERSION }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: desktop-*
           path: out
@@ -273,7 +280,7 @@ jobs:
             scripts/release/s3-put.sh "out/$(basename "$key")" "$key"
           done
           scripts/release/s3-put.sh stable.json time-track-clients/desktop/channel/stable.json application/json
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-stable-json
           path: stable.json

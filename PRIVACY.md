@@ -16,8 +16,17 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - The search text you type in the "Reassign" task picker (the same `tasks` search as the main search field).
 - The app version, platform, architecture and installer kind (for example `nsis` or `appimage`) when it checks for
   updates. The Microsoft Store build never checks with Beacon: the Store updates it.
+- With meeting reminders (TimeTrack 1.14), the request for your own meetings of today and tomorrow (`GET
+  me/meetings`: the time window and time zone only). Nothing about your meetings is sent back.
 - Nothing else: no screenshots, keystrokes, applications, window titles, URLs, activity or idle state. With meeting
   detection on, which meeting app holds the microphone is checked on this computer and never sent (below).
+
+How it travels: always over HTTPS. For the official Beacon server, the app only accepts certificates from the
+certificate authorities whose keys are built into it (TLS public-key pinning): a network that intercepts encrypted
+traffic (a TLS-inspecting proxy, antivirus or a rogue certificate) cannot read or change what is sent, and the app
+sends nothing and shows "La conexión con Beacon no es de confianza (certificado inesperado)" instead. Other servers
+use standard TLS validation (Settings says "Connection not pinned"). Nothing about this check is sent anywhere; a
+mismatch is logged locally with the server name only, never a token.
 
 ## Stored on this computer
 
@@ -32,6 +41,10 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
   Entries are named by their task id and start time (`<task id>@<start>`). All of it is in the app's local storage. Signing out deletes the token, the timer, the queue, the idle-check state, the friendly-message
   history, the last task, the pinned tasks, the "Working without a timer?" state and the generic meeting task, so the
   next person never sees your task titles (in the app or in a desktop notification) or starts one of your tasks.
+  The same happens without an explicit sign-out: when the app starts and finds a saved account without its session
+  token (signed out elsewhere, or a re-sign-in for meeting reminders that was denied, expired or left open), when the
+  saved server no longer matches the stored session, and whenever someone signs in as another account (or on another
+  server) than the saved one.
 - **Clear local data** (Settings → What we collect) signs you out and deletes all of the above, and turns "start at
   login" off.
 - "Open Beacon in" (Settings): which browser opens your links, by the id the system gives it, or the path of a browser
@@ -111,6 +124,27 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - As desktop notifications, their title, line, picture and button label are handed to your operating system like the
   friendly messages. Pressing *Start* / *Stop* / *Resume* does what the same button in the app does (`timer/start`,
   `timer/stop`).
+
+## Meeting reminders (TimeTrack 1.14; on by default once a calendar is connected in Beacon)
+
+- **Data source**: Beacon, not your calendar. You connect a calendar in Beacon (Account → Integrations → Calendars,
+  covered by Beacon's privacy notice and its DPIA for spec 210); the app never talks to Google or Microsoft. It needs
+  the `meetings:read` permission, which you grant explicitly in Beacon (sessions from before 0.6 are asked once).
+- **What the app receives**: your own meetings of today and tomorrow, as Beacon's API shapes them: times, title (none
+  for a private meeting, shown as "Busy"), the join link of Teams / Meet / Zoom / Jitsi / Webex meetings, the first
+  names of attendees who are Beacon users you can already see, the number of other attendees (never their names,
+  e-mails or domains) and the tasks linked to the meeting that you can track.
+- **Stored on this computer**: that list, for offline reminders, until the end of tomorrow and never more than 48
+  hours; and which reminders were shown or snoozed, as a hash of the meeting id and start time with the times only
+  (no title, link or id), deleted 24 hours after the meeting, filed under a hash of your server and account (never
+  your e-mail). Signing out deletes the list and your account's marks, and so does every case above where the app
+  drops a saved account; turning the reminders off deletes the list; *Clear local data* deletes both.
+- **Never**: logged, sent to anyone else, or used for anything but the reminder, *Today's meetings* and the tray.
+- **Sent to Beacon**: nothing about your meetings; only the timer action you choose (*Pause* = `timer/stop`, *Track
+  the meeting* = `timer/switch` with `origin: meeting`). *Join* opens the link in your browser after checking it is
+  one of those video-call services.
+- **Opt-out**: Settings → Meeting reminders → *Remind me before my meetings* (per device), or disconnect the calendar
+  in Beacon.
 
 ## Meeting detection (off by default, dated consent)
 

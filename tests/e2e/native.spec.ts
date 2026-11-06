@@ -1,5 +1,5 @@
-import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { axe } from './axe';
 
 /**
  * Native shell (0.5.0) with the OS mocked by the browser platform's hooks: friendly messages as desktop
@@ -27,11 +27,6 @@ interface Hooks {
   trayAction(action: string): void;
 }
 type Tt = { __timeTrack: { app: { tick(): Promise<void>; refresh(): Promise<void>; updateTray(): Promise<void> }; hooks: Hooks } };
-
-const axe = async (page: Page) => {
-  const { violations } = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
-  return violations.map((v) => `${v.id} ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`);
-};
 
 async function signIn(page: Page) {
   await page.goto('/');

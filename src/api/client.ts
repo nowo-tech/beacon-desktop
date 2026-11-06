@@ -22,6 +22,7 @@ import type {
   IdleAction,
   LoginResult,
   Me,
+  MeetingsQuery,
   Scope,
   StartResult,
   StopResult,
@@ -96,12 +97,23 @@ export function originPattern(serverUrl: string): string {
   return `${new URL(serverUrl).origin}/*`;
 }
 
-function parseRetryAfter(value: string | null): number | null {
+/** Longest `Retry-After` honoured, in seconds (30 minutes): a larger value or a far date is capped (audit GO-I1). */
+export const MAX_RETRY_AFTER_SECONDS = 1800;
+
+/** `Retry-After` in seconds: an integer of seconds or an HTTP date (RFC 9110 §10.2.3), else `null`; at most 30 min. */
+export function parseRetryAfter(value: string | null, now: number = Date.now()): number | null {
   if (value === null || value.trim() === '') {
     return null;
   }
   const seconds = Number(value);
-  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+  if (Number.isFinite(seconds)) return seconds >= 0 ? Math.min(seconds, MAX_RETRY_AFTER_SECONDS) : null;
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? null : Math.min(Math.max(0, Math.ceil((at - now) / 1000)), MAX_RETRY_AFTER_SECONDS);
+}
+
+/** RFC 3339 in UTC without fractions (`2026-11-05T08:00:00Z`), as `GET me/meetings` wants it. */
+function utcSeconds(value: Date): string {
+  return value.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function blankToUndefined(value: string | undefined): string | undefined {
@@ -191,7 +203,19 @@ export class TimeTrackApi {
       minSupportedVersion: typeof data.minSupportedVersion === 'string' ? data.minSupportedVersion : null,
       features: typeof data.features === 'object' && data.features !== null ? data.features : null,
       limits: typeof data.limits === 'object' && data.limits !== null ? data.limits : null,
+      meetings: typeof data.meetings === 'object' && data.meetings !== null ? data.meetings : null,
+      links: typeof data.links === 'object' && data.links !== null ? data.links : null,
     };
+  }
+
+  /**
+   * The caller's own meetings overlapping `[from, to)` (TimeTrackBundle 1.14, scope `meetings:read`). The body is
+   * returned as received: `lib/meetingReminders.ts` (`parseMeetingsPage`) checks every field. 404 = feature off.
+   */
+  async meetings(query: MeetingsQuery): Promise<unknown> {
+    return this.json<unknown>('me/meetings', {
+      query: { from: utcSeconds(query.from), to: utcSeconds(query.to), tz: blankToUndefined(query.tz ?? undefined), limit: query.limit },
+    });
   }
 
   async tasks(query: TaskQuery = {}): Promise<Task[]> {
@@ -247,11 +271,15 @@ export class TimeTrackApi {
     }
   }
 
-  /** Stops the running timer (if any) and starts `taskId` atomically. `note` goes to the stopped entry. */
-  async switchTask(taskId: string, note?: string): Promise<TimerChange> {
+  /**
+   * Stops the running timer (if any) and starts `taskId` atomically. `note` goes to the stopped entry; `meeting` marks
+   * the new timer as "Track the meeting" (send it only to a 1.14 server: `features.meetings`).
+   */
+  async switchTask(taskId: string, note?: string, options: { meeting?: boolean } = {}): Promise<TimerChange> {
     const data = await this.json<Partial<TimerChange>>('timer/switch', {
       method: 'POST',
-      body: { taskId, note: blankToUndefined(note), source: this.source },
+      // "Track the meeting" (TimeTrackBundle 1.14, Q-B22): the only metadata the server accepts on a switch.
+      body: { taskId, note: blankToUndefined(note), source: this.source, metadata: options.meeting === true ? { origin: 'meeting' } : undefined },
     });
     return { entry: data.entry ?? null, timer: data.timer ?? null };
   }

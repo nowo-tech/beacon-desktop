@@ -144,4 +144,10 @@ pub const POSE_ART: &[(&str, &[u8])] = &[
         "teamwork",
         include_bytes!("../notification-art/pose-teamwork.png"),
     ),
+    (
+        "beach",
+        include_bytes!("../notification-art/pose-beach.png"),
+    ),
+    ("sofa", include_bytes!("../notification-art/pose-sofa.png")),
+    ("park", include_bytes!("../notification-art/pose-park.png")),
 ];

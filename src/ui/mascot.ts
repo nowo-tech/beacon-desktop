@@ -109,9 +109,6 @@ export const POSE_ART: ReadonlySet<string> = new Set(imported as string[]);
 
 /** Closest existing pose for the friendly-message poses whose own art is not imported yet. */
 export const POSE_FALLBACK: Partial<Record<PoseId, Pose | `pose-${PoseId}`>> = {
-  beach: 'mascot',
-  sofa: 'mascot-small',
-  park: 'mascot',
   // Empty states (src/lib/emptyStates.ts) until their own art (`pose-empty-*`) is imported.
   'empty-pinned': 'pose-peek-3',
   'empty-recent': 'pose-focus',

@@ -4,8 +4,8 @@
 
 /// Commands only the main window may call (capabilities/default.json).
 pub const MAIN_COMMANDS: &[&str] = &[
-    "secret_get",
-    "secret_set",
+    "secret_status",
+    "sign_in_begin",
     "secret_delete",
     "idle_seconds",
     "set_tray_status",
@@ -13,6 +13,9 @@ pub const MAIN_COMMANDS: &[&str] = &[
     "set_global_shortcut",
     "check_update",
     "install_update",
+    "beacon_fetch",
+    "beacon_bind",
+    "connection_security",
     "set_wake_plan",
     "notify_friendly",
     "prompt_open",
@@ -31,8 +34,8 @@ pub const MAIN_COMMANDS: &[&str] = &[
 pub const PROMPT_COMMANDS: &[&str] = &["prompt_view", "prompt_answer", "prompt_show_main"];
 
 pub const APP_COMMANDS: &[&str] = &[
-    "secret_get",
-    "secret_set",
+    "secret_status",
+    "sign_in_begin",
     "secret_delete",
     "idle_seconds",
     "set_tray_status",
@@ -40,6 +43,9 @@ pub const APP_COMMANDS: &[&str] = &[
     "set_global_shortcut",
     "check_update",
     "install_update",
+    "beacon_fetch",
+    "beacon_bind",
+    "connection_security",
     "set_wake_plan",
     "notify_friendly",
     "prompt_open",

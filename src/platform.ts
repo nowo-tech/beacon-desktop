@@ -1,6 +1,7 @@
 import type { Rect, Screens } from './lib/layout';
 import type { BrowserChoice, BrowserRequest, DetectedBrowser, OpenOutcome } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
+import { SIGN_IN_DECLINED } from './lib/nativeFetch';
 
 /**
  * What the UI needs from the host. In the Tauri app it is backed by Rust commands and plugins (platform-tauri.ts);
@@ -78,6 +79,12 @@ export interface TrayMenu {
   checkUpdates: string | null;
   /** "Pause friendly messages for 1 h" (`pause-friendly`) / "Paused until … — resume" (`resume-friendly`); absent with both switches off. */
   pauseFriendly: TrayMenuItem | null;
+  /**
+   * "Today's meetings ▸" (meeting reminders): label and today's remaining meetings, ids `meeting:<16 hex>` (the host
+   * opens the window; the UI joins when the meeting has a link). Absent when there is nothing to show.
+   */
+  meetingsLabel?: string | null;
+  meetings?: TrayMenuItem[];
   settings: string;
   quit: string;
 }
@@ -142,6 +149,16 @@ export function notificationBody(text: string, os: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * How the connection to the server is protected (Settings). `pinned`: the official Beacon host, TLS public keys pinned
+ * in the app (docs/PINNING.md); `unpinned`: another server, standard TLS validation; `expired`: this build's pin set
+ * expired (update the app); `local`: loopback development server.
+ */
+export interface ConnectionSecurity {
+  status: 'pinned' | 'unpinned' | 'expired' | 'local';
+  pinSetVersion: number;
+}
+
 /** The main window's size and position, in physical pixels (lib/layout.ts). */
 export interface WindowHost {
   /** Outer position and inner size; `null` while maximised or minimised (nothing worth remembering). */
@@ -181,9 +198,28 @@ export function defaultResumeShortcut(os: HostOs = hostOs()): string {
 export interface Platform {
   readonly kind: 'tauri' | 'browser';
   fetch: typeof fetch;
+  /** TLS pinning state for `server`; `null` when the host does not know (plain browser: the browser validates TLS). */
+  connectionSecurity(server: string): Promise<ConnectionSecurity | null>;
+  /**
+   * Binds `fetch` and the updater to `server`'s origin (Rust `beacon_bind`): before the sign-in requests and at
+   * start-up. Requests to any other origin are refused; switching servers needs `secretDelete` first.
+   */
+  bindServer(server: string): Promise<void>;
+  /**
+   * Starts a sign-in to `server` (Rust `sign_in_begin`): the host asks the person in a native "Sign in to <host>?"
+   * dialog, then binds it like `bindServer` and keeps the token of the sign-in answer that follows. Rejects while a
+   * token is stored (`secretDelete` first), and with `SIGN_IN_DECLINED` (lib/nativeFetch.ts) when the person declines.
+   */
+  beginSignIn(server: string): Promise<void>;
   appVersion(): Promise<string>;
   hostName(): Promise<string>;
+  /**
+   * The stored session token, `null` when signed out. In the Tauri app it is never the token itself, which stays in
+   * Rust (src-tauri/src/secret.rs), but `SESSION_HANDLE` (lib/nativeFetch.ts): `fetch` and the updater add the real
+   * `Authorization` in Rust.
+   */
   secretGet(): Promise<string | null>;
+  /** Keeps the token of a sign-in answer. The Tauri app already stored it in Rust and only accepts `SESSION_HANDLE`. */
   secretSet(token: string): Promise<void>;
   secretDelete(): Promise<void>;
   /** Seconds since the last input, read locally from the OS. Never sent. */
@@ -229,6 +265,7 @@ export interface Platform {
   setWindowTheme(theme: 'light' | 'dark' | null): Promise<void>;
   autostartEnabled(): Promise<boolean>;
   setAutostart(enabled: boolean): Promise<void>;
+  /** `token` is what `secretGet` returned; the Tauri app ignores it and uses the token kept in Rust. */
   checkUpdate(server: string, token: string): Promise<UpdateCheck>;
   /**
    * Downloads, verifies the signature, installs and relaunches (the promise only settles on failure in the real app,
@@ -307,6 +344,13 @@ export interface BrowserHooks {
   promptFocused: number;
   /** The fake prompt window cannot be opened. */
   promptFails: boolean;
+  /** What the fake host answers for the connection's TLS pinning (`null`: unknown, nothing shown). */
+  connectionSecurity: ConnectionSecurity | null;
+  /** Servers the fake host's native "Sign in to …?" dialog was shown for; `declineSignIn` answers it with Cancel. */
+  signInConfirmations: string[];
+  declineSignIn: boolean;
+  /** The server the app bound (`bindServer`), `null` after `secretDelete`. */
+  boundServer: string | null;
   shortcutPressed(): void;
   resumeShortcutPressed(): void;
   /** The fake OS locks / unlocks the screen or sleeps / wakes. */
@@ -324,6 +368,7 @@ export interface BrowserHooks {
 
 export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o) => globalThis.fetch(i, o)): Platform & { hooks: BrowserHooks } {
   let secret: string | null = null;
+  let secretOrigin: string | null = null;
   let autostart = false;
   const shortcutHandlers: (() => void)[] = [];
   const resumeHandlers: (() => void)[] = [];
@@ -377,6 +422,10 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     promptOpened: 0,
     promptFocused: 0,
     promptFails: false,
+    connectionSecurity: null,
+    signInConfirmations: [],
+    declineSignIn: false,
+    boundServer: null,
     shortcutPressed: () => shortcutHandlers.forEach((handler) => handler()),
     resumeShortcutPressed: () => resumeHandlers.forEach((handler) => handler()),
     sessionEvent: (event) => sessionHandlers.forEach((handler) => handler(event)),
@@ -400,11 +449,33 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     kind: 'browser',
     hooks,
     fetch: fetchImpl,
+    connectionSecurity: async () => hooks.connectionSecurity,
     appVersion: async () => version,
     hostName: async () => 'Browser',
     secretGet: async () => secret,
-    secretSet: async (token) => void (secret = token),
-    secretDelete: async () => void (secret = null),
+    // Same rules as the Rust session (src-tauri/src/secret.rs): a stored token binds only its own origin.
+    bindServer: async (server) => {
+      if (secret !== null && secretOrigin !== null && secretOrigin !== new URL(server).origin) {
+        throw new Error('signed in to another server: sign out first');
+      }
+      if (secret !== null && secretOrigin === null) secretOrigin = new URL(server).origin;
+      hooks.boundServer = server;
+    },
+    beginSignIn: async (server) => {
+      if (secret !== null) throw new Error('already signed in: sign out first');
+      hooks.signInConfirmations.push(server);
+      if (hooks.declineSignIn) throw new Error(SIGN_IN_DECLINED);
+      hooks.boundServer = server;
+    },
+    secretSet: async (token) => {
+      secret = token;
+      secretOrigin = hooks.boundServer === null ? null : new URL(hooks.boundServer).origin;
+    },
+    secretDelete: async () => {
+      secret = null;
+      secretOrigin = null;
+      hooks.boundServer = null;
+    },
     idleSeconds: async () => hooks.idleSeconds,
     openExternal: async (url) => {
       if (hooks.openFails) throw new Error('no browser');

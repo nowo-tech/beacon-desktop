@@ -1,4 +1,4 @@
-name: Rust on Windows and macOS
+name: Rust on Windows (and macOS when enabled)
 
 # The Windows / macOS code paths (`cfg(windows)`, `cfg(target_os = "macos")`: registry and LaunchServices browser
 # detection, meeting detection, session events, their FFI) are not compiled by ci.yml, which runs Rust on Linux only.
@@ -6,6 +6,9 @@ name: Rust on Windows and macOS
 # requests that touch the Rust side, and by hand (Actions → Run workflow, or
 # `gh workflow run platforms.yml --ref <branch>`). Hosted Windows minutes count ×2 and macOS ×10, so it stays off
 # every other PR. Read-only, no secrets, uploads nothing.
+#
+# macOS is off (owner decision 2026-11-06, Actions budget): only the Windows job runs. Set the repository variable
+# MACOS_CI_ENABLED to 'true' (Settings → Secrets and variables → Actions → Variables) to run the macOS job again.
 on:
   pull_request:
     paths:
@@ -26,7 +29,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        # macOS: the `macos` job below, only with vars.MACOS_CI_ENABLED == 'true'.
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     defaults:
@@ -34,11 +38,36 @@ jobs:
         shell: bash
         working-directory: src-tauri
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # head of the stable branch (commit 2026-10-16, pinned 2026-11-05); not tracked by Dependabot, refresh by hand
         with:
+          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+      - name: Placeholder frontend (generate_context! needs ../dist)
+        run: mkdir -p ../dist && echo '<!doctype html><title>TimeTrack</title>' > ../dist/index.html
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+
+  # Off unless the repository variable MACOS_CI_ENABLED is 'true' (macOS minutes count ×10): same steps as above.
+  macos:
+    name: Rust (clippy, tests) on macos-latest
+    if: vars.MACOS_CI_ENABLED == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # head of the stable branch (commit 2026-10-16, pinned 2026-11-05); not tracked by Dependabot, refresh by hand
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
       - name: Placeholder frontend (generate_context! needs ../dist)

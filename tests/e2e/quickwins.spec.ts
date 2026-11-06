@@ -1,5 +1,5 @@
-import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { axe } from './axe';
 
 /**
  * Quick wins (desktop 0.5): "Continue last" (button and global shortcut), the three answers on return from idle with
@@ -26,11 +26,6 @@ interface App {
   state: { nudge: { activeSince: string | null; measured: boolean; lastAt: string | null; recent: number[] } };
 }
 type Tt = { __timeTrack: { app: App; hooks: Hooks } };
-
-const axe = async (page: Page) => {
-  const { violations } = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
-  return violations.map((v) => `${v.id} ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`);
-};
 
 async function signIn(page: Page) {
   await page.goto('/');

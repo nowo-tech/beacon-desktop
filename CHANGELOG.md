@@ -3,9 +3,187 @@
 All notable changes to this project are documented here ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/)).
 
-## [Unreleased]
+## [0.6.0] - unreleased
 
-Likely 0.5.1.
+Everything after 0.5.1: meeting reminders, the session token out of the webview (security review appendices FY
+and GM) and the backlog fixes. Not released yet (release freeze).
+
+### Added
+
+- **Meeting reminders** (contract §23, spec 210 FR-008 / FR-009 / FR-011; needs TimeTrack 1.14 with calendars on in
+  Beacon). The app reads the person's own meetings from `GET /api/time-track/me/meetings` (scope `meetings:read`)
+  and reminds on this computer only:
+  - **Before each meeting**: 5 minutes by default (Settings → Meeting reminders: not before, 1, 2, 5, 10, 15, 30
+    minutes, or a custom whole 1–120). A desktop notification with the meeting's title (*Busy* for a private one), the
+    local time range, "in N min", up to three internal attendees' first names and the count of external ones, and
+    the buttons **Join** (only for an allow-listed Teams / Meet / Zoom / Jitsi / Webex link) and **Snooze** (until a
+    minute before the start; the window also offers 1 or 5 minutes; never past the start). More than three at once
+    become one notification ("4 meetings at 10:00"). The window shows the same as a toast with every choice.
+  - **When a meeting starts while a timer runs** (on by default): "Sprint review has started. Keep timing "Docs",
+    pause, or track the meeting?" — *Keep*, *Pause* (`timer/stop`) or *Track the meeting* (`timer/switch` to the
+    meeting's linked task with `metadata.origin = "meeting"`, or a task picked in the window). Opt-in **automatic
+    pause** with an *Undo* notification. One prompt per meeting, also when microphone detection fires (Q-O20).
+  - **Gates**: only for meetings inside your working hours (Settings → My schedule, local overrides included) and
+    never on days off, unless *Remind me outside working hours* / *Remind me on days off* are on; free, all-day and
+    past meetings never remind; the OS's Do Not Disturb / Focus is respected.
+  - **Dedupe** by meeting id + start (a moved meeting reminds again, a new title does not): a local store of
+    `sha256(id|start)` hashes and times only, per account, pruned 24 h after the start, at most 500.
+  - **Today's meetings** in the main window and in the tray (*Today's meetings ▸*), with *Join*.
+  - **Polling**: on start, wake from sleep, network back and settings changes, then every
+    `max(refreshAfterSeconds, 300 s)` ± 10 %, never twice within 60 s; outside working hours only one fetch two
+    hours before the next working slot. `429` / `503` honour `Retry-After` (seconds or an HTTP date, now parsed by
+    the API client) and then back off ×2 up to 30 minutes; `401` signs in again; `403` asks for the permission again
+    and stops; `404` (feature off) clears the list and stops until `GET me` says otherwise. Reminders are scheduled
+    locally from the last list and the heartbeat's wake plan (`reminderAt`), so a poll gap does not delay them.
+  - **Offline**: the last list is kept in memory and local storage until the end of tomorrow (never past 48 h) and
+    reminders still fire from it, marked "(may be outdated)" after an hour. Signing out, switching account and
+    turning the reminders off delete it; *Clear local data* deletes the whole store.
+  - **Server support is feature-detected**: `GET me.features.meetings`, `GET me.meetings` (`status`,
+    `refreshAfterSeconds`) and `GET me.links.calendars`. Older servers show "Your Beacon does not offer meeting
+    reminders yet"; *No calendar connected* and *Reconnect* point to Beacon's Calendars page; reminders are on by
+    default only when a calendar is connected (Q-O18).
+  - **Re-consent**: sign-ins now ask for `meetings:read` on top of the usual scopes, and fall back to the usual ones
+    when an older server refuses the unknown scope. A session without it gets one card (*Sign in again to allow
+    meeting reminders*): a re-sign-in that revokes the current session on the server (as sign-out does), deletes it
+    locally, then shows the native *Sign in to <host>?* confirmation and runs the device flow with the new scope. The
+    stored token is never replaced in place (audit GM-L2) and never reaches the webview. Declining, cancelling or a
+    failure leaves the person signed out, and the card and a notice say so; the account's local data is kept for the
+    same account and cleared if another account is approved.
+  - Account data (pinned and last tasks, schedule, message history, offline queue, meeting list and reminder marks) is
+    cleared whenever the app drops a saved account: at start-up when its session token is missing (signed out
+    elsewhere, or a re-sign-in left denied or expired), when the saved server no longer matches the stored session,
+    and on any sign-in as another account or server than the saved one (audit GO-L1). Reminder marks are filed under
+    a hash of the account, never the e-mail, and deleted on sign-out (GO-I6). `Retry-After` is honoured up to 30
+    minutes (GO-I1). Tray items for tasks and meetings are capped at 60 characters, without control, bidi or
+    zero-width characters, and `&` is never a menu mnemonic; meeting texts also lose LRM / RLM / ALM marks (GO-I5).
+  - Notification texts in the seven message languages (`src/lib/messages/meetingReminders.ts`), Settings and Today
+    in English and Spanish. Mock server: `GET me/meetings`, the 1.14 `GET me` keys, `meetings:read` and the
+    *Track the meeting* metadata on `timer/switch` (`POST /__mock/config {"meetings": …, "meetingsScope": …}`).
+
+- **The last three mascot poses**: beach (deck chair under a parasol), sofa (with the remote) and park (walking with a
+  balloon), in the app's messages and in the native notifications, instead of the standing robot they borrowed.
+
+### Security
+
+- Meeting reminders: *Join* opens the link only through `open_external` from the main window, after the same host
+  allow-list as TimeTrackBundle's `MeetingLinkDetector` (defence in depth; anything else: "This link cannot be opened
+  from TimeTrack"). Notification buttons are `meeting-<join|snooze|keep|pause|track|undo>:<16 hex>` (the start of the
+  dedupe hash, never the meeting's id or title), allow-listed in `notify.rs`; the prompt window accepts
+  `meeting-join`, `meeting-snooze(-1|-5)`, `meeting-dismiss`, `meeting-keep`, `meeting-pause` and `meeting-track` with
+  a 16-hex `meeting` field only; tray items `meeting:<16 hex>`. No title, link, attendee or meeting id is logged.
+
+- **The session token never reaches the webview** (known limitation after the security review 2026-11-05, appendix
+  FY: a script running in the main webview could call `secret_get` and read the token; follow-up review appendix GM).
+  The token now stays in Rust (`src-tauri/src/secret.rs`):
+  - `beacon_fetch`, the update check and the updater read it from the OS keychain (kept in Rust memory after the first
+    read) and set `Authorization` themselves. The UI marks a request as authenticated (`auth: true`); an
+    `Authorization` header from the webview is dropped (`authorization` is no longer an allow-listed header). Without
+    a token for that server an authenticated request gets `401 invalid_token` and nothing is sent.
+  - The keychain entry now holds the token and the origin that issued it (`{"v":1,"origin":…,"token":…}`). While a
+    token is stored only that origin can be bound, including at start-up, so a server changed in local storage is
+    refused (the app then deletes the token and asks to sign in again), and the bearer goes only to that origin. A
+    keychain that cannot be read refuses the binding (GM-M1). A 0.5.1 entry adopts the server of the first start-up
+    after the upgrade, so the session is kept.
+  - Rust keeps the token of a 2xx sign-in answer (`POST …/api/time-track/device/token`) only for a sign-in started
+    with the new command `sign_in_begin` (signed out only, that server only, 30 minutes) and never replaces a stored
+    token (GM-L2). `sign_in_begin` first shows a native dialog the webview cannot answer, "Sign in to <host>?" /
+    "¿Iniciar sesión en <host>?" with the full host; **Cancel** refuses the sign-in and the app goes back to the
+    sign-in view. Cancel is the first, default button, so a stray Enter declines (three buttons: *Cancel*, *Sign in*,
+    *Not now*; the dialog plugin cannot make Cancel the default of two); a host other than the official one adds
+    "This is not beacon.nowo.tech" / "Este servidor no es beacon.nowo.tech"; the dialog is shown only while the main
+    window is focused with input in the last 30 seconds, else it is refused unseen (`sign_in_not_present`) without
+    starting a pause (GO-I3; where the OS cannot report idle time, as on some Wayland sessions, only the focus counts,
+    GO-I7); after a decline `sign_in_begin` refuses (`sign_in_wait`, no dialog) for 10 seconds, doubling up to 5
+    minutes, and neither sign-out nor a restart resets it (kept in `sign-in-pause.json` in the app data folder, GO-I2; a pause longer than 5 minutes from now, as
+    after the clock was set back, counts as over, GO-D-1);
+    only the exact *Sign in* button result confirms (GO-I4) (GM-D2-1, GM-D2-2). Every stored sign-in is announced by an OS notification from Rust naming the server. The password
+    route (`…/login`) is no longer captured: the app is device-flow only (GM-D-1). The UI gets the answer with the
+    token replaced by a fixed handle (`stored-in-os-keychain`). The sign-in route is matched on the percent-decoded
+    path, and paths escaping unreserved characters (`to%6Ben`) are refused (GM-L1).
+  - Token fields (`token`, `access_token` / `accessToken`, `refresh_token` / `refreshToken`, `session_token` /
+    `sessionToken`, `id_token`, `bearer`, any case) are scrubbed from every JSON answer, a UTF-8 BOM included, at any
+    depth and on any status; only the response headers the UI reads reach the webview (`Content-Type`, `Content-Disposition`,
+    `Retry-After`, `X-Min-Supported-Version`) (GM-I1, GM-D-3, GM-D2-3).
+  - When the saved server does not match the stored session at start-up, the app signs out locally and says the old
+    device can be revoked in Beacon (Account → Security → Time tracking apps) (GM-D-2).
+  - Keychain calls and the sign-in dialog run with `spawn_blocking`, off the async workers and the main thread; the
+    session lock is never held across a keychain call or the dialog; sign-out recovers a poisoned lock (GM-D-4).
+  - Sign-out is atomic: one lock over the in-memory token, the binding and the keychain; the keychain entry is deleted
+    first, and a refused delete keeps the token and the binding and reports the error (GM-L3).
+  - Commands: `secret_get` and `secret_set` are removed; new `secret_status` (whether a token is stored) and
+    `sign_in_begin` (start a sign-in after the native confirmation; binds the server; `locale` only picks the dialog's
+    language), both `main` window only; `secret_status`, `sign_in_begin`, `secret_delete` and `beacon_bind` are async; `secret_delete` (sign-out) is
+    unchanged for the UI. `check_update` and `install_update` no longer take a `token` argument. Capability
+    `default.json`: `allow-secret-get` / `allow-secret-set` replaced by `allow-secret-status` and `allow-sign-in-begin`.
+    The UI's `Platform` gains `beginSignIn(server)`, used by the sign-in instead of `bindServer`.
+  - Keychain and header errors are fixed texts that never quote the token; the header value is marked sensitive.
+    Rust tests cover origin binding, the locked keychain, the 0.5.1 entry, capture, encoded paths, scrubbing and
+    sign-out failures and races; Vitest covers the bridge.
+  - Still possible for a script in the main webview: authenticated requests to the signed-in server while the app
+    runs, sending data it read elsewhere (for example through `open_external`), and signing you out and asking you,
+    in the native dialog, to sign in to another server. SECURITY.md lists it.
+
+- **Weekly live pin check** (audit FY-D-3): `pins.yml` also connects to the official host and fails when no CA key of
+  the served chain is in `pins.json` (`scripts/release/check-pin-chain.mjs`), a second signal next to Beacon's
+  pinned SSL monitor.
+- Dependabot waits seven days before proposing a new GitHub Actions release; the `dtolnay/rust-toolchain` pin comment
+  names its commit date and the manual refresh (audit FY-D-4).
+
+### Changed
+
+- CI / release: macOS jobs are off unless the repository variable `MACOS_CI_ENABLED` is `true` (owner decision
+  2026-11-06, GitHub Actions budget). `platforms.yml` runs Rust on Windows only; `release.yml` skips `build-macos`
+  and publishes Linux and Windows without macOS entries in `stable.json`. `installer-upgrade-test.yml` defaults to
+  0.6.0.
+
+### Fixed
+
+- **Dark theme: the antenna arcs of the "nothing pinned yet" robot are visible again.** Its white outline filled the
+  gaps between the arcs, so they blurred into one pale shape; the arcs now sit on the dark background (at least 6:1,
+  WCAG 1.4.11 asks for 3:1) and the rest of the outline is unchanged.
+- **New "no tasks yet" robot**, cheering next to a clipboard with a check mark (owner's art), light and dark. The old
+  picture's antenna arcs merged into one pale fan in the dark theme; the new arcs stay apart and reach at least 4.3:1
+  against the dark background.
+
+## [0.5.1] - 2026-11-06
+
+### Security
+
+- **TLS public-key pinning for the official Beacon host** (`beacon.nowo.tech`, docs/PINNING.md). Every Beacon request
+  (API calls, update check, updater) now goes through a Rust HTTP client (reqwest + rustls, `src-tauri/src/net.rs`)
+  instead of the Tauri HTTP plugin, which is removed (crate, npm package and `http:default` permission). Validation:
+  WebPKI against the compiled-in Mozilla roots (the OS store is not consulted), then, on the pinned host, a valid
+  chain must contain a pinned CA key (SPKI SHA-256; pin set v1: ISRG Root YR / YE / X1 / X2, Let's Encrypt YR1, and
+  Google Trust Services R1 / R4 as the backup CA; never a leaf key). On mismatch the app fails closed before sending
+  anything: "La conexión con Beacon no es de confianza (certificado inesperado)", no offline queueing, no "continue
+  anyway"; a non-sensitive event (host, pin set version) goes to stderr. Self-hosted servers keep standard WebPKI and
+  Settings says "Connection not pinned"; loopback is never pinned. The pin set (`src-tauri/pins.json`) has a version
+  and an expiry (2028-05-01); past it the app falls back to WebPKI and asks for an update, and CI fails 90 days
+  before. New commands `beacon_fetch` and `connection_security`, granted to `main` only. The pin set is the one the
+  review (FY) checked: Let's Encrypt and Google Trust Services only. It also accepts a Cloudflare edge certificate
+  from either of them, but not one from SSL.com or Sectigo, so `beacon.nowo.tech` stays *DNS only* (docs/PINNING.md,
+  *Cloudflare proxy*). Server side (DEVOPS runbook DNS-CAA, S17 / S18): CAA `0 issue "letsencrypt.org"` at the
+  `nowo.tech` apex, no per-host CAA, and a pinned SSL monitor on `beacon.nowo.tech` with the same pins.
+- Pinning follow-ups (security review 2026-11-05, appendix FY):
+  - `beacon_fetch`, the update check and the updater only talk to the origin (scheme, host, port) of the server being
+    signed in to: new command `beacon_bind` (main window only), called before the sign-in requests and at start-up;
+    other origins are refused, so `Authorization` never leaves that origin; switching servers needs a sign-out
+    (`secret_delete` clears the binding). Plain `http://` to `localhost` / `127.0.0.1` / `[::1]` is accepted in debug
+    builds only (FY-L1).
+  - Pin set expiry tripwire: `.github/workflows/pins.yml` runs `scripts/release/check-pin-expiry.mjs` every Monday and
+    on demand (fails within 90 days), and `release.yml` refuses to build when the set expires within 180 days (FY-L2).
+  - An expired pin set is shown in the main view (card) and once per pin set version as a desktop notification, not
+    only in Settings (FY-I1).
+  - Updater error details no longer carry URL query strings (pre-signed artifact URLs) into "Copy details" (FY-I2).
+  - THIRD-PARTY-NOTICES.md lists `webpki-roots` (CDLA-Permissive-2.0) (FY-I6). README / SECURITY.md say that
+    self-hosted servers behind a private or corporate CA are not supported, updater included (FY-I7).
+    docs/PINNING.md lists the server-side preconditions: CAA for `letsencrypt.org` at the zone apex, an explicit ACME
+    issuer (never ZeroSSL), and a pinned chain monitor (FY-M1).
+- Every GitHub Action in `.github/workflows/*.yml` (`release.yml` included) is pinned to a full commit SHA, with its
+  version in a trailing comment, instead of a movable tag such as `@v7`, `@v2` or the `@stable` branch (security
+  review 2026-11-05, GC-I9). Dependabot (`github-actions`, monthly) keeps the SHAs and comments up to date;
+  `dtolnay/rust-toolchain` now gets `toolchain: stable` as an input, since the ref no longer names it. That action is
+  pinned to a head of its `stable` branch, which Dependabot cannot track: refresh it by hand (CONTRIBUTING.md).
 
 ### Fixed
 
@@ -53,6 +231,8 @@ Likely 0.5.1.
   Two new scenarios: an entry disabled in Task Manager (stays disabled) and another vendor's "TimeTrack" entries
   (left untouched).
 - README → *Two TimeTrack icons in the tray*: how to check and remove duplicates by hand on Windows.
+- The `@tauri-apps/plugin-autostart` npm package is removed (Settings uses the app commands `set_autostart` /
+  `get_autostart`); the Rust plugin stays for macOS and Linux.
 
 ## [0.5.0] - 2026-11-05
 

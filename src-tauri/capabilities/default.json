@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: API calls to the user's own server only (HTTPS, or loopback for development), and the app's own commands (keychain, tray, updater, heartbeat, notifications, the prompt window, links through open_external in the browser chosen with set_browser / pick_browser (the custom-browser file dialog is opened from Rust, so the webview has no dialog permission), writing copied links to the clipboard); the main window may resize and move itself (\"Compact view\" / \"Full view\"). Each app command is declared in build.rs and granted here per window.",
+  "description": "Main window: API calls to the user's own server through beacon_fetch only (Rust HTTP client with TLS public-key pinning for the official Beacon host, docs/PINNING.md; HTTPS, or loopback for development; no HTTP plugin), and the app's own commands (keychain: whether a session token is stored, starting a sign-in and sign-out only, never the token itself, which Rust keeps with its origin and adds to requests to that origin only; tray, updater, heartbeat, notifications, the prompt window, links through open_external in the browser chosen with set_browser / pick_browser (the custom-browser file dialog is opened from Rust, so the webview has no dialog permission), writing copied links to the clipboard); the main window may resize and move itself (\"Compact view\" / \"Full view\"). Each app command is declared in build.rs and granted here per window.",
   "windows": ["main"],
   "permissions": [
     "core:app:default",
@@ -16,15 +16,11 @@
     "core:window:allow-set-size",
     "core:window:allow-set-position",
     "core:window:allow-unmaximize",
-    {
-      "identifier": "http:default",
-      "allow": [{ "url": "https://*" }, { "url": "https://*:*" }, { "url": "http://localhost:*" }, { "url": "http://127.0.0.1:*" }]
-    },
     "clipboard-manager:allow-write-text",
     "notification:default",
     "process:allow-restart",
-    "allow-secret-get",
-    "allow-secret-set",
+    "allow-secret-status",
+    "allow-sign-in-begin",
     "allow-secret-delete",
     "allow-idle-seconds",
     "allow-set-tray-status",
@@ -32,6 +28,9 @@
     "allow-set-global-shortcut",
     "allow-check-update",
     "allow-install-update",
+    "allow-beacon-fetch",
+    "allow-beacon-bind",
+    "allow-connection-security",
     "allow-set-wake-plan",
     "allow-notify-friendly",
     "allow-prompt-open",

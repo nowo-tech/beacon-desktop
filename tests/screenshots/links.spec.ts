@@ -21,8 +21,10 @@ type App = {
   persist(patch: unknown): void;
   start(task: { id: string; title: string }): Promise<void>;
   browsers: unknown;
+  loadBrowserChoice(): Promise<void>;
 };
-type Tt = { __timeTrack: { app: App; hooks: { browsers: { id: string; name: string }[] } } };
+type Choice = { kind: 'detected'; id: string; name: string };
+type Tt = { __timeTrack: { app: App; hooks: { browsers: { id: string; name: string }[]; browserChoice: Choice } } };
 /** Runs `fn` in the page with the app and the fake platform hooks (and `arg`). */
 const run = <A, T>(page: Page, fn: (tt: Tt['__timeTrack'], arg: A) => T | Promise<T>, arg: A) =>
   page.evaluate(([source, value]) => new Function('tt', 'arg', `return (${source})(tt, arg);`)((window as unknown as Tt).__timeTrack, value), [fn.toString(), arg] as const) as Promise<T>;
@@ -70,14 +72,17 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.locator('#tasks li').first()).toBeVisible();
     await run(
       page,
-      (tt, browsers) => {
+      async (tt, browsers) => {
         tt.hooks.browsers = browsers;
-        tt.app.persist({ settings: { ...tt.app.state.settings, browser: { kind: 'detected', id: 'win:brave', name: 'Brave' } } });
+        // The choice is kept by the host since 0.5.0 (browser.rs; here the fake platform's hook), not in settings.
+        tt.hooks.browserChoice = { kind: 'detected', id: 'win:brave', name: 'Brave' };
+        await tt.app.loadBrowserChoice();
         tt.app.show('settings');
       },
       BROWSERS,
     );
     await expect(page.locator('#browser option')).toHaveCount(7);
+    await expect(page.locator('#browser')).toHaveValue('detected:win:brave');
     await page.evaluate(() => (document.querySelector('#theme') as HTMLElement | null)?.scrollIntoView({ block: 'start' }));
     await save('browser-setting');
     // The chosen browser was uninstalled: the small notice.
