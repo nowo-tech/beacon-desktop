@@ -95,8 +95,9 @@ export interface MeetingsPage {
 
 const text = (value: unknown, max: number): string | null => {
   if (typeof value !== 'string') return null;
-  // Control and bidi-override characters out (the server strips them too).
-  const clean = value.replace(/[\p{Cc}‪-‮⁦-⁩]/gu, '').trim();
+  // Control, bidi (overrides, isolates and the LRM / RLM / ALM marks) and zero-width characters out (the server strips
+  // most of them too); they could reorder or hide text in notifications and the tray (audit GO-I5).
+  const clean = value.replace(/[\p{Cc}\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/gu, '').trim();
   return clean === '' ? null : clean.slice(0, max);
 };
 const instant = (value: unknown): number | null => (typeof value === 'string' && UTC.test(value) ? Date.parse(value) : null);
@@ -489,7 +490,8 @@ export function pollFailed(state: PollState, now: number, error: { status: numbe
   if (error.status === 403) return { state: { ...state, stopped: 'scope' }, outcome: 'scope' };
   if (error.status === 404) return { state: { ...state, stopped: 'off' }, outcome: 'off' };
   const doubled = state.backoffSeconds > 0 ? Math.min(state.backoffSeconds * 2, MAX_BACKOFF_SECONDS) : FIRST_BACKOFF_SECONDS;
-  const wait = Math.max(error.retryAfter ?? 0, doubled);
+  // A server's `Retry-After` is honoured up to the longest backoff, never beyond (audit GO-I1).
+  const wait = Math.min(Math.max(error.retryAfter ?? 0, doubled), MAX_BACKOFF_SECONDS);
   return { state: { ...state, backoffSeconds: Math.min(wait, MAX_BACKOFF_SECONDS), notBefore: now + wait * 1000 }, outcome: 'retry' };
 }
 
@@ -559,7 +561,8 @@ export class MeetingStore {
       const raw = JSON.parse(this.storage.getItem(MEETINGS_KEY) ?? '{}') as Partial<Record<keyof Stored, unknown>>;
       const marks: Record<string, ReminderMark[]> = {};
       if (typeof raw.marks === 'object' && raw.marks !== null) {
-        for (const [account, list] of Object.entries(raw.marks).slice(-MAX_ACCOUNTS)) marks[account] = sanitizeMarks(list);
+        // Accounts are hashed (contract §23.6); a plain `server|e-mail` key from an earlier build is dropped (GO-I6).
+        for (const [account, list] of Object.entries(raw.marks).filter(([account]) => !account.includes('|')).slice(-MAX_ACCOUNTS)) marks[account] = sanitizeMarks(list);
       }
       return { cache: (raw.cache as MeetingCache | null | undefined) ?? null, marks };
     } catch {
@@ -586,6 +589,12 @@ export class MeetingStore {
 
   marks(account: string, now: number): ReminderMark[] {
     return pruneMarks(this.read().marks[account] ?? [], now);
+  }
+
+  /** Forgets `account`'s marks (sign-out, audit GO-I6). */
+  dropMarks(account: string): void {
+    const stored = this.read();
+    this.write({ ...stored, marks: Object.fromEntries(Object.entries(stored.marks).filter(([key]) => key !== account)) });
   }
 
   saveMarks(account: string, marks: readonly ReminderMark[]): void {

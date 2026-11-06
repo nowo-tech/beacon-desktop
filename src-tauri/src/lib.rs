@@ -104,6 +104,31 @@ struct TrayMenuSpec {
     quit: String,
 }
 
+/// Longest tray item text (task and meeting titles come from the server, up to 200 characters).
+const MENU_LABEL_MAX: usize = 60;
+
+/// A server-provided text as a tray menu item (audit GO-I5): control, bidi and zero-width characters removed, at most
+/// [`MENU_LABEL_MAX`] characters (an ellipsis marks the cut), and `&` doubled so it is never a mnemonic (the menu
+/// library maps `&&` to a literal `&` and escapes `_` for GTK itself).
+fn menu_label(text: &str) -> String {
+    let clean: String = text
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{061C}' | '\u{FEFF}')
+        })
+        .collect();
+    let clean = clean.trim();
+    let cut: String = if clean.chars().count() > MENU_LABEL_MAX {
+        let mut short: String = clean.chars().take(MENU_LABEL_MAX - 1).collect();
+        short.push('…');
+        short
+    } else {
+        clean.to_string()
+    };
+    cut.replace('&', "&&")
+}
+
 /// A meeting of the tray's *Today* submenu: `meeting:` and the first 16 hex characters of its dedupe key (never the
 /// meeting's id or title).
 fn tray_meeting_id(id: &str) -> bool {
@@ -277,7 +302,7 @@ fn set_tray_menu(app: AppHandle, window: tauri::Window, menu: TrayMenuSpec) -> R
         .into_iter()
         .filter(|task| tray_action_allowed(&task.id))
         .take(7)
-        .map(|task| MenuItem::with_id(&app, task.id, &task.label, true, None::<&str>))
+        .map(|task| MenuItem::with_id(&app, task.id, menu_label(&task.label), true, None::<&str>))
         .collect::<Result<_, _>>()
         .map_err(err)?;
     if !tasks.is_empty() {
@@ -293,7 +318,7 @@ fn set_tray_menu(app: AppHandle, window: tauri::Window, menu: TrayMenuSpec) -> R
         .into_iter()
         .filter(|item| tray_meeting_id(&item.id))
         .take(7)
-        .map(|item| MenuItem::with_id(&app, item.id, &item.label, true, None::<&str>))
+        .map(|item| MenuItem::with_id(&app, item.id, menu_label(&item.label), true, None::<&str>))
         .collect::<Result<_, _>>()
         .map_err(err)?;
     if let (Some(label), false) = (menu.meetings_label.as_deref(), meetings.is_empty()) {
@@ -1119,9 +1144,13 @@ pub fn run() {
             app.manage(HeartbeatState(Mutex::new(heartbeat::Heartbeat::new())));
             app.manage(MainFocus::default());
             app.manage(prompt::PromptState::default());
-            app.manage(std::sync::Arc::new(secret::Session::new(Box::new(
-                secret::Keychain,
-            ))));
+            // The pause after a declined sign-in survives a restart (audit GO-I2).
+            let session = secret::Session::new(Box::new(secret::Keychain));
+            let session = match app.path().app_data_dir() {
+                Ok(dir) => session.with_declines_file(dir.join("sign-in-pause.json")),
+                Err(_) => session,
+            };
+            app.manage(std::sync::Arc::new(session));
             // "Open Beacon in" lives on this side (browser.json in the app's config folder), see browser.rs.
             browser::manage(app.handle());
             create_main_window(app.handle())?;
@@ -1434,6 +1463,22 @@ mod tests {
         )
         .expect("store spec");
         assert!(store.check_updates.is_none());
+    }
+
+    #[test]
+    fn tray_labels_are_capped_cleaned_and_never_mnemonics() {
+        assert_eq!(menu_label("10:00 R&D sync"), "10:00 R&&D sync");
+        assert_eq!(menu_label("snake_case_title"), "snake_case_title");
+        assert_eq!(
+            menu_label("\u{200F}10:00\u{202E} Review\u{200E}\u{2066}x\u{2069}\n"),
+            "10:00 Reviewx"
+        );
+        let long = "a".repeat(200);
+        let label = menu_label(&long);
+        assert_eq!(label.chars().count(), MENU_LABEL_MAX);
+        assert!(label.ends_with('…'));
+        // The cap counts characters, not bytes.
+        assert_eq!(menu_label(&"é".repeat(80)).chars().count(), MENU_LABEL_MAX);
     }
 
     #[test]

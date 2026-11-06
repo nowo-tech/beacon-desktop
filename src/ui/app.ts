@@ -88,6 +88,7 @@ import {
   reminderNote,
   remindersEnabled,
   type ScheduleGate,
+  sha256Hex,
   shortKey,
   type SnoozeChoice,
   snoozeChoices,
@@ -337,6 +338,7 @@ export class DesktopApp {
   meetingPoll: PollState = FRESH_POLL;
   /** Account (`server|identifier`) whose store is loaded. */
   private meetingAccount: string | null = null;
+  private accountHash: { source: string; hash: string } | null = null;
   /** Fetch at the next check even before the regular interval (wake from sleep, network back). */
   private meetingsForce = false;
   private meetingsPolling: Promise<void> | null = null;
@@ -483,6 +485,12 @@ export class DesktopApp {
     if (this.state.session === null || this.token === null) {
       // A token without a saved session (local data cleared) cannot be used or replaced: sign in again.
       if (this.token !== null) await this.forgetToken();
+      // A saved session without its token (signed out elsewhere, a re-sign-in quit half way): the person is signed
+      // out, so the account's local data goes now, before anyone else signs in (audit GO-L1).
+      if (this.state.session !== null) {
+        await this.prepareMeetingAccount();
+        this.clearAccountData();
+      }
       this.show('login');
       await this.updateTray();
       return;
@@ -494,11 +502,14 @@ export class DesktopApp {
       // that issued the stored token (the host refuses it): sign in again. The old session cannot be revoked from
       // here (its server is not bound), so the notice points to Beacon (audit GM-D-2).
       await this.forgetToken();
+      await this.prepareMeetingAccount();
+      this.clearAccountData();
       this.show('login');
       this.setNotice(this.t('signedOutRevoke'));
       await this.updateTray();
       return;
     }
+    await this.prepareMeetingAccount();
     this.show('main');
     await this.refresh();
     await this.checkUpdates();
@@ -659,13 +670,16 @@ export class DesktopApp {
           this.token = login.token;
           api.setToken(login.token);
           const me = await api.me();
-          // A re-sign-in approved for another account: the previous account's local data goes, as on sign-out.
-          if (this.reconsent && this.state.session !== null && this.state.session.identifier !== me.identifier) this.clearAccountData();
+          // Another account than the saved one (a re-sign-in approved for someone else, or any sign-in after a
+          // session that was left behind): the previous account's local data goes, as on sign-out (audit GO-L1).
+          const previous = this.state.session;
+          if (previous !== null && (previous.server !== server || previous.identifier !== me.identifier)) this.clearAccountData();
           this.me = me;
           this.persist({
             lastServer: server,
             session: { server, identifier: me.identifier, displayName: me.displayName ?? null, scopes: login.scopes, expiresAt: login.expiresAt },
           });
+          await this.prepareMeetingAccount();
           this.device = null;
           this.view = 'main';
           this.welcome = !this.reconsent;
@@ -753,6 +767,8 @@ export class DesktopApp {
     // notifications and buttons can show (audit GC-L2): the last task ("Continue last", "Back to {task}?", "Start
     // {task}"), the pinned tasks, the "Working without a timer?" stretch and the generic meeting task — the next
     // person (maybe on another Beacon) never sees them or starts the previous account's task.
+    // The account's store key, before the session goes.
+    const account = this.meetingAccount ?? this.meetingAccountKey();
     this.persist({
       session: null,
       activeTimer: null,
@@ -768,8 +784,9 @@ export class DesktopApp {
     });
     this.reminderToast = null;
     this.meetingPicker = null;
-    // The meetings list goes with the session (contract §23.5); the dedupe marks (hashes and times) stay per account.
+    // The meetings list goes with the session (contract §23.5), and so do the account's dedupe marks (audit GO-I6).
     this.clearMeetings();
+    if (account !== null) this.meetingStore.dropMarks(account);
     this.meetingSupport = { kind: 'unsupported' };
     this.meetingAccount = null;
     this.meetingPoll = FRESH_POLL;
@@ -1392,10 +1409,22 @@ export class DesktopApp {
 
   // ---- Meeting reminders (contract §23, local only) ---------------------------------------------------------------
 
-  /** `server|identifier` of the signed-in account: its own cache and dedupe marks. */
+  /**
+   * The signed-in account's key for its cache and dedupe marks: `sha256(server|identifier)`, never the e-mail itself
+   * (contract §23.6, audit GO-I6). `null` until `prepareMeetingAccount` hashed the current account.
+   */
   private meetingAccountKey(): string | null {
     const session = this.state.session;
-    return session === null ? null : `${session.server}|${session.identifier}`;
+    if (session === null) return null;
+    return this.accountHash?.source === `${session.server}|${session.identifier}` ? this.accountHash.hash : null;
+  }
+
+  /** Hashes the signed-in account's key (once per account), before its reminders load. */
+  private async prepareMeetingAccount(): Promise<void> {
+    const session = this.state.session;
+    if (session === null) return;
+    const source = `${session.server}|${session.identifier}`;
+    if (this.accountHash?.source !== source) this.accountHash = { source, hash: await sha256Hex(source) };
   }
 
   /** Loads the signed-in account's store (cached list, marks) when the account changes. */

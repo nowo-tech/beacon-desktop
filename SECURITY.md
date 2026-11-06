@@ -26,8 +26,11 @@ Only the latest release receives fixes. The server can force an update with `min
     out only) shows a native dialog, "Sign in to <host>?" with the full host (IDN hosts as `xn--…`), that the webview
     cannot answer. **Cancel** is the first, default button (Enter declines; Esc and closing decline too), any host
     other than the official one gets the line "This is not beacon.nowo.tech", the dialog is only shown while the main
-    window is focused and there was keyboard or mouse input in the last 30 seconds, and after a decline it is not
-    shown again for 10 seconds, doubling up to 5 minutes (sign-out does not reset that). Only after **Sign in** is the
+    window is focused and there was keyboard or mouse input in the last 30 seconds (otherwise it is refused unseen,
+    `sign_in_not_present`, without starting a pause; where the OS cannot report idle time, as on some Wayland
+    sessions, this reduces to "the main window is focused"), and after a decline it is not shown again for 10 seconds,
+    doubling up to 5 minutes; neither sign-out nor a restart resets that (the pause is kept by Rust in
+    `sign-in-pause.json` in the app data folder). Only after **Sign in** is the
     answer stored, for that server, within 30 minutes, and every stored
     sign-in is announced by an OS notification from Rust. A stored token is never replaced. The app signs in with the
     device flow only, so the password route (`…/login`) is never stored. The UI gets a fixed handle in place of the

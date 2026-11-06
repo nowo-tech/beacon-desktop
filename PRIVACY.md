@@ -41,6 +41,10 @@ mismatch is logged locally with the server name only, never a token.
   Entries are named by their task id and start time (`<task id>@<start>`). All of it is in the app's local storage. Signing out deletes the token, the timer, the queue, the idle-check state, the friendly-message
   history, the last task, the pinned tasks, the "Working without a timer?" state and the generic meeting task, so the
   next person never sees your task titles (in the app or in a desktop notification) or starts one of your tasks.
+  The same happens without an explicit sign-out: when the app starts and finds a saved account without its session
+  token (signed out elsewhere, or a re-sign-in for meeting reminders that was denied, expired or left open), when the
+  saved server no longer matches the stored session, and whenever someone signs in as another account (or on another
+  server) than the saved one.
 - **Clear local data** (Settings → What we collect) signs you out and deletes all of the above, and turns "start at
   login" off.
 - "Open Beacon in" (Settings): which browser opens your links, by the id the system gives it, or the path of a browser
@@ -132,8 +136,9 @@ mismatch is logged locally with the server name only, never a token.
   e-mails or domains) and the tasks linked to the meeting that you can track.
 - **Stored on this computer**: that list, for offline reminders, until the end of tomorrow and never more than 48
   hours; and which reminders were shown or snoozed, as a hash of the meeting id and start time with the times only
-  (no title, link or id), deleted 24 hours after the meeting. Signing out deletes the list; turning the reminders off
-  deletes it too; *Clear local data* deletes both.
+  (no title, link or id), deleted 24 hours after the meeting, filed under a hash of your server and account (never
+  your e-mail). Signing out deletes the list and your account's marks, and so does every case above where the app
+  drops a saved account; turning the reminders off deletes the list; *Clear local data* deletes both.
 - **Never**: logged, sent to anyone else, or used for anything but the reminder, *Today's meetings* and the tray.
 - **Sent to Beacon**: nothing about your meetings; only the timer action you choose (*Pause* = `timer/stop`, *Track
   the meeting* = `timer/switch` with `origin: meeting`). *Join* opens the link in your browser after checking it is

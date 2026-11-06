@@ -31,6 +31,8 @@ const USER_CODE_ALPHABET = 'BCDFGHJKLMNPQRSTVWXZ';
 
 const USERS = [
   { id: 1, email: 'ada@example.com', password: 'app-password-123', displayName: 'Ada Lovelace' },
+  // A second account for "another person signs in on this computer" (device/approve {"userId": 2}).
+  { id: 2, email: 'grace@example.com', password: 'app-password-456', displayName: 'Grace Hopper' },
 ];
 
 const TASKS = [
@@ -571,7 +573,7 @@ export function createMockServer(options = {}) {
           return error(res, 400, 'access_denied', 'The user denied the request.');
         }
         device.used = true;
-        return send(res, 200, issue(USERS[0].id, device.clientType, device.scopes));
+        return send(res, 200, issue(device.userId ?? USERS[0].id, device.clientType, device.scopes));
       }
       case 'POST heartbeat':
         return error(res, 410, 'deprecated', 'heartbeat is deprecated; clients must not send idle state.');
@@ -591,10 +593,11 @@ export function createMockServer(options = {}) {
       }
     }
   }
-  function approveDevice(code, approve) {
+  function approveDevice(code, approve, userId) {
     for (const device of state.devices.values()) {
       if (!device.used && device.userCode === String(code).toUpperCase().replace(/[^A-Z]/g, '')) {
         device.approved = approve;
+        device.userId = userId;
         return true;
       }
     }
@@ -621,7 +624,7 @@ export function createMockServer(options = {}) {
         state.tokens.clear();
         return send(res, 204);
       case 'POST device/approve':
-        return approveDevice(body.userCode, body.approve !== false) ? send(res, 204) : error(res, 404, 'not_found', 'Unknown code.');
+        return approveDevice(body.userCode, body.approve !== false, USERS.some((u) => u.id === body.userId) ? body.userId : undefined) ? send(res, 204) : error(res, 404, 'not_found', 'Unknown code.');
       // Finished entries of the demo user ({entries: [{taskId, startedAt, endedAt}]}), for the week / today views.
       case 'POST entries/seed': {
         const list = state.entries.get(USERS[0].id) ?? [];

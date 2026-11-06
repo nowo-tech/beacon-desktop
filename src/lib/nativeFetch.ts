@@ -26,9 +26,13 @@ export function isSignInWait(error: unknown): boolean {
   return (error instanceof Error ? error.message : String(error)) === SIGN_IN_WAIT;
 }
 
-/** The person declined the native sign-in confirmation: back to the sign-in view, no error. */
+/** What `sign_in_begin` rejects with, without a dialog, when nobody is at the app (Rust `secret::SIGN_IN_NOT_PRESENT`). */
+export const SIGN_IN_NOT_PRESENT = 'sign_in_not_present';
+
+/** The person declined the native sign-in confirmation, or the host did not show it (nobody at the app): back to the sign-in view, no error. */
 export function isSignInDeclined(error: unknown): boolean {
-  return (error instanceof Error ? error.message : String(error)) === SIGN_IN_DECLINED;
+  const text = error instanceof Error ? error.message : String(error);
+  return text === SIGN_IN_DECLINED || text === SIGN_IN_NOT_PRESENT;
 }
 
 /** What `beacon_fetch` receives. */

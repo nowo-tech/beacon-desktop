@@ -9,6 +9,10 @@ import { nodeFetch, startMock } from './helpers';
 
 let env: Awaited<ReturnType<typeof startMock>>;
 const tick = (ms = 40) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Waits (up to 3 s) until `ready` holds: the re-sign-in steps go over the network and timing varies under coverage. */
+const until = async (ready: () => boolean) => {
+  for (let waited = 0; !ready() && waited < 3000; waited += 20) await tick(20);
+};
 
 beforeAll(async () => {
   env = await startMock();
@@ -403,13 +407,13 @@ describe('meeting reminders in the app', () => {
     expect(await tokens()).toBe(1);
     await env.control('config', { meetingsScope: true });
     ui.$('#meeting-consent-allow').click();
-    await tick();
+    await until(() => ui.app.view === 'device' && ui.$('#user-code') !== null);
     // The old session is revoked on the server and deleted locally before the new sign-in (audit GM-L2).
     expect(await tokens()).toBe(0);
     expect(ui.platform.hooks.signInConfirmations).toEqual([env.url, env.url]);
     expect(ui.app.view).toBe('device');
     await env.control('device/approve', { userCode: ui.$('#user-code').textContent });
-    await tick(300);
+    await until(() => ui.app.view === 'main' && ui.app.meetings.length > 0);
     expect(ui.app.view).toBe('main');
     expect(ui.app.welcome).toBe(false);
     expect(ui.app.meetingSupport.kind).toBe('on');
@@ -425,7 +429,7 @@ describe('meeting reminders in the app', () => {
     const ui = await signedIn({ scope: false });
     ui.platform.hooks.declineSignIn = true;
     ui.$('#meeting-consent-allow').click();
-    await tick(80);
+    await until(() => ui.app.state.session === null);
     expect(ui.app.view).toBe('login');
     expect(ui.app.state.session).toBeNull();
     expect(await ui.platform.secretGet()).toBeNull();
@@ -437,10 +441,10 @@ describe('meeting reminders in the app', () => {
     const again = await signedIn({ scope: false });
     again.app.show('settings');
     again.$('#meeting-reminders-consent').click();
-    await tick();
+    await until(() => again.app.view === 'device');
     expect(again.app.view).toBe('device');
     again.app.cancelDevice();
-    await tick(80);
+    await until(() => again.app.state.session === null);
     expect(again.app.view).toBe('login');
     expect(again.app.state.session).toBeNull();
     expect(await again.platform.secretGet()).toBeNull();
@@ -449,12 +453,89 @@ describe('meeting reminders in the app', () => {
 
   it('re-consent failing on the server: signed out with the error shown', async () => {
     const ui = await signedIn({ scope: false });
-    // The revocation succeeds; the preflight of the new sign-in fails.
+    // The revocation succeeds; starting the new sign-in fails (not a decline).
+    ui.platform.beginSignIn = () => Promise.reject(new Error('the keychain is locked'));
     ui.$('#meeting-consent-allow').click();
-    await env.control('config', { failNext: { status: 500, error: 'server_error' } });
-    await tick(120);
+    await until(() => ui.app.state.session === null && ui.$('#error-title') !== null);
     expect(ui.app.state.session).toBeNull();
     expect(ui.app.view).toBe('login');
+    expect(ui.$('#error-title')).not.toBeNull();
+    ui.app.destroy();
+  });
+
+  /** Quits and starts the app again on the same computer (same storage and keychain). */
+  async function restart(ui: Ui) {
+    ui.app.destroy();
+    document.body.replaceChildren();
+    const root = document.createElement('div');
+    document.body.append(root);
+    const app = new DesktopApp(root, ui.platform, { storage: localStorage, locale: 'en', sleep: () => new Promise((resolve) => setTimeout(resolve, 5)), searchDelayMs: 5, now: () => new Date(TEN), random: () => 0.5 });
+    await app.init();
+    return { app, root };
+  }
+
+  async function signInAs(app: DesktopApp, root: HTMLElement, userId: number) {
+    const done = app.connect(env.url);
+    await tick();
+    await env.control('device/approve', { userCode: root.querySelector('#user-code')?.textContent, userId });
+    await done;
+  }
+
+  it('GO-L1: a re-sign-in denied and then quit leaves nothing for the next account', async () => {
+    const ui = await signedIn({ scope: false });
+    ui.app.togglePin(ui.app.tasks[0]);
+    expect(ui.app.state.pinned).toHaveLength(1);
+    ui.$('#meeting-consent-allow').click();
+    await until(() => ui.app.view === 'device' && ui.$('#user-code') !== null);
+    expect(ui.app.view).toBe('device');
+    await env.control('device/approve', { userCode: ui.$('#user-code').textContent, approve: false });
+    await tick(300);
+    // Denied: still on the device screen, the old session saved but its token gone. The person quits.
+    expect(ui.app.view).toBe('device');
+    const again = await restart(ui);
+    expect(again.app.view).toBe('login');
+    expect(again.app.state.session).toBeNull();
+    expect(loadLocal(localStorage).pinned).toEqual([]);
+    await signInAs(again.app, again.root, 2);
+    expect(again.app.state.session?.identifier).toBe('grace@example.com');
+    expect(again.app.state.pinned).toEqual([]);
+    expect(again.app.state.lastTask).toBeNull();
+    again.app.destroy();
+  });
+
+  it('GO-L1 / GO-I6: a saved session without its token is cleared at start-up, meeting cache and marks included', async () => {
+    const ui = await signedIn();
+    await ui.at(25);
+    const stored = JSON.parse(localStorage.getItem(MEETINGS_KEY) ?? '{}') as { cache: { account: string } | null; marks: Record<string, unknown[]> };
+    const account = await sha256Hex(`${env.url}|ada@example.com`);
+    // The store is keyed by a hash of the account, never the e-mail.
+    expect(stored.cache?.account).toBe(account);
+    expect(Object.keys(stored.marks)).toEqual([account]);
+    expect(stored.marks[account]?.length).toBeGreaterThan(0);
+    expect(localStorage.getItem(MEETINGS_KEY)).not.toContain('ada@example.com');
+    // Signed out elsewhere (the token is gone); the app starts again.
+    await ui.platform.secretDelete();
+    const again = await restart(ui);
+    expect(again.app.view).toBe('login');
+    expect(again.app.state.session).toBeNull();
+    const after = JSON.parse(localStorage.getItem(MEETINGS_KEY) ?? '{}') as { cache: unknown; marks: Record<string, unknown> };
+    expect(after.cache).toBeNull();
+    expect(after.marks).toEqual({});
+    again.app.destroy();
+  });
+
+  it('GO-L1: any sign-in as another account clears the previous account, a sign-out drops its marks', async () => {
+    const ui = await signedIn();
+    ui.app.togglePin(ui.app.tasks[0]);
+    await ui.platform.secretDelete();
+    await signInAs(ui.app, ui.root, 2);
+    expect(ui.app.state.session?.identifier).toBe('grace@example.com');
+    expect(ui.app.state.pinned).toEqual([]);
+    await ui.at(25);
+    await ui.app.logout();
+    const after = JSON.parse(localStorage.getItem(MEETINGS_KEY) ?? '{}') as { cache: unknown; marks: Record<string, unknown> };
+    expect(after.cache).toBeNull();
+    expect(after.marks).toEqual({});
     ui.app.destroy();
   });
 

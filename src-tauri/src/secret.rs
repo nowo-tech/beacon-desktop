@@ -22,8 +22,9 @@
 //!
 //! Error texts never carry the token: keychain errors are reduced to fixed texts per kind.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use reqwest::header::HeaderValue;
 use serde_json::Value;
@@ -293,8 +294,7 @@ impl SignInTexts {
             MessageDialogResult::Custom(label) => {
                 *label == self.sign_in && self.sign_in != self.stay_out
             }
-            // The second slot of Yes / No / Cancel is "Sign in" on every backend.
-            MessageDialogResult::No => true,
+            // Only the exact "Sign in" label: a `No`, `Yes`, `Ok` or `Cancel` from a future backend declines (GO-I4).
             _ => false,
         }
     }
@@ -306,6 +306,10 @@ pub const DECLINE_PAUSE_MAX: Duration = Duration::from_secs(5 * 60);
 
 /// Refusal of `sign_in_begin` while that pause runs (no dialog is shown).
 pub const SIGN_IN_WAIT: &str = "sign_in_wait";
+
+/// Refusal of `sign_in_begin` when nobody is at the app (window not focused, no recent input): no dialog, and it does
+/// not count as a decline, so a script cannot start the pause for the person's own next sign-in (GO-I3).
+pub const SIGN_IN_NOT_PRESENT: &str = "sign_in_not_present";
 
 /// The sign-in dialog is only shown for a person at the app: the main window focused and some keyboard or mouse input
 /// in the last [`RECENT_INPUT_SECS`] seconds (an OS that cannot tell reports 0). Otherwise it is declined unseen.
@@ -399,12 +403,44 @@ pub struct Session {
     /// a script can call) never resets it.
     declines: Mutex<Declines>,
     decline_pause: Duration,
+    /// Where the pause is kept across restarts (GO-I2): `sign-in-pause.json` in the app data folder.
+    declines_file: Option<PathBuf>,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, PartialEq, Eq)]
 struct Declines {
     count: u32,
-    until: Option<Instant>,
+    until: Option<SystemTime>,
+}
+
+/// Declines in a row are capped (the pause is capped long before).
+const MAX_DECLINES: u32 = 32;
+
+impl Declines {
+    fn encode(&self) -> String {
+        let until = self
+            .until
+            .and_then(|until| until.duration_since(UNIX_EPOCH).ok())
+            .map(|since| since.as_millis() as u64);
+        serde_json::json!({"count": self.count, "until": until}).to_string()
+    }
+
+    /// A saved pause; anything malformed, or ending further away than the longest pause, is ignored.
+    fn decode(text: &str, now: SystemTime, longest: Duration) -> Self {
+        let Ok(Value::Object(saved)) = serde_json::from_str::<Value>(text) else {
+            return Self::default();
+        };
+        let count = saved
+            .get("count")
+            .and_then(Value::as_u64)
+            .map_or(0, |count| count.min(MAX_DECLINES as u64) as u32);
+        let until = saved
+            .get("until")
+            .and_then(Value::as_u64)
+            .map(|ms| UNIX_EPOCH + Duration::from_millis(ms))
+            .filter(|until| *until <= now + longest);
+        Self { count, until }
+    }
 }
 
 /// The pause after the `count`-th decline in a row: `base`, doubling, at most [`DECLINE_PAUSE_MAX`] scaled like `base`.
@@ -451,6 +487,30 @@ impl Session {
             sign_in_window,
             declines: Mutex::new(Declines::default()),
             decline_pause,
+            declines_file: None,
+        }
+    }
+
+    /// Keeps the pause after a decline in `path` (read now, written on every change), so a restart does not end it.
+    pub fn with_declines_file(mut self, path: PathBuf) -> Self {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let longest = decline_pause(self.decline_pause, MAX_DECLINES);
+            *self
+                .declines
+                .get_mut()
+                .unwrap_or_else(PoisonError::into_inner) =
+                Declines::decode(&text, SystemTime::now(), longest);
+        }
+        self.declines_file = Some(path);
+        self
+    }
+
+    fn save_declines(&self, declines: &Declines) {
+        if let Some(path) = &self.declines_file {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(path, declines.encode());
         }
     }
 
@@ -532,15 +592,23 @@ impl Session {
         &self,
         server: &url::Url,
         locale: Option<&str>,
+        present: bool,
         confirm: impl FnOnce() -> bool,
     ) -> Result<(), String> {
         if self.current()?.is_some() {
             return Err(ALREADY_SIGNED_IN.into());
         }
+        // Nobody at the app: no dialog, and no pause either (GO-I3).
+        if !present {
+            return Err(SIGN_IN_NOT_PRESENT.into());
+        }
         // Declined recently: no dialog until the pause ends (a script cannot re-raise it in a loop).
         {
             let declines = self.declines.lock().map_err(|_| UNAVAILABLE.to_string())?;
-            if declines.until.is_some_and(|until| Instant::now() < until) {
+            if declines
+                .until
+                .is_some_and(|until| SystemTime::now() < until)
+            {
                 return Err(SIGN_IN_WAIT.into());
             }
         }
@@ -550,10 +618,11 @@ impl Session {
             if confirmed {
                 *declines = Declines::default();
             } else {
-                declines.count += 1;
+                declines.count = (declines.count + 1).min(MAX_DECLINES);
                 declines.until =
-                    Some(Instant::now() + decline_pause(self.decline_pause, declines.count));
+                    Some(SystemTime::now() + decline_pause(self.decline_pause, declines.count));
             }
+            self.save_declines(&declines);
         }
         if !confirmed {
             return Err(SIGN_IN_DECLINED.into());
@@ -704,10 +773,7 @@ pub async fn sign_in_begin(
         crate::read_idle_seconds(),
     );
     blocking(move || {
-        session.begin_sign_in(&url, locale.as_deref(), || {
-            if !present {
-                return false;
-            }
+        session.begin_sign_in(&url, locale.as_deref(), present, || {
             let mut dialog = app
                 .dialog()
                 .message(texts.body.clone())
@@ -819,7 +885,7 @@ pub mod tests {
 
     /// `begin_sign_in` with the person pressing "Sign in".
     pub fn begin(session: &Session, server: &str) -> Result<(), String> {
-        session.begin_sign_in(&url::Url::parse(server).unwrap(), Some("en"), || true)
+        session.begin_sign_in(&url::Url::parse(server).unwrap(), Some("en"), true, || true)
     }
 
     fn url(value: &str) -> url::Url {
@@ -920,7 +986,7 @@ pub mod tests {
         // Locked: no binding without knowing the token's origin, no sign-in (nor its dialog), no bearer.
         assert!(session.bind(&url(B)).is_err());
         assert!(session
-            .begin_sign_in(&url(B), None, || {
+            .begin_sign_in(&url(B), None, true, || {
                 asked = true;
                 true
             })
@@ -1016,7 +1082,7 @@ pub mod tests {
         // Declined in the native dialog: refused, nothing bound for the sign-in, nothing captured.
         assert_eq!(
             session
-                .begin_sign_in(&url(B), Some("es"), || false)
+                .begin_sign_in(&url(B), Some("es"), true, || false)
                 .unwrap_err(),
             SIGN_IN_DECLINED
         );
@@ -1029,7 +1095,7 @@ pub mod tests {
             .is_none());
         // Confirmed for A: stored with A's origin, the handle in its place, a notification (Spanish), only once.
         session
-            .begin_sign_in(&url(A), Some("es-ES"), || true)
+            .begin_sign_in(&url(A), Some("es-ES"), true, || true)
             .unwrap();
         let out = session.capture(&login, ANSWER).unwrap();
         assert_eq!(out.stored_for, Some((A.to_string(), true)));
@@ -1050,7 +1116,7 @@ pub mod tests {
         // Signed in: no new sign-in (and no dialog) until sign-out.
         assert_eq!(
             session
-                .begin_sign_in(&url(A), None, || panic!("no dialog while signed in"))
+                .begin_sign_in(&url(A), None, true, || panic!("no dialog while signed in"))
                 .unwrap_err(),
             ALREADY_SIGNED_IN
         );
@@ -1175,8 +1241,8 @@ pub mod tests {
         use tauri_plugin_dialog::MessageDialogResult;
         let texts = confirm_texts(&url(A), None, None);
         assert!(texts.confirmed(&MessageDialogResult::Custom("Sign in".into())));
-        assert!(texts.confirmed(&MessageDialogResult::No), "second slot");
         for declined in [
+            MessageDialogResult::No,
             MessageDialogResult::Custom("Cancel".into()),
             MessageDialogResult::Custom("Not now".into()),
             MessageDialogResult::Custom("anything".into()),
@@ -1213,7 +1279,7 @@ pub mod tests {
         let mut shown = 0;
         assert_eq!(
             session
-                .begin_sign_in(&url(A), None, || {
+                .begin_sign_in(&url(A), None, true, || {
                     shown += 1;
                     false
                 })
@@ -1224,7 +1290,7 @@ pub mod tests {
         session.sign_out().unwrap();
         assert_eq!(
             session
-                .begin_sign_in(&url(A), None, || {
+                .begin_sign_in(&url(A), None, true, || {
                     shown += 1;
                     true
                 })
@@ -1236,7 +1302,7 @@ pub mod tests {
         // Second decline: twice as long.
         assert_eq!(
             session
-                .begin_sign_in(&url(A), None, || {
+                .begin_sign_in(&url(A), None, true, || {
                     shown += 1;
                     false
                 })
@@ -1245,19 +1311,108 @@ pub mod tests {
         );
         std::thread::sleep(Duration::from_millis(60));
         assert_eq!(
-            session.begin_sign_in(&url(A), None, || true).unwrap_err(),
+            session
+                .begin_sign_in(&url(A), None, true, || true)
+                .unwrap_err(),
             SIGN_IN_WAIT
         );
         std::thread::sleep(Duration::from_millis(40));
         // Confirmed: allowed, and the count starts again.
         session
-            .begin_sign_in(&url(A), None, || {
+            .begin_sign_in(&url(A), None, true, || {
                 shown += 1;
                 true
             })
             .unwrap();
         assert_eq!(shown, 3);
         assert_eq!(session.declines.lock().unwrap().count, 0);
+    }
+
+    // GO-I3
+    #[test]
+    fn nobody_at_the_app_is_refused_without_a_dialog_or_a_pause() {
+        let store = MemoryStore::default();
+        let session = Session::with_timing(
+            Box::new(store.clone()),
+            SIGN_IN_WINDOW,
+            Duration::from_secs(60),
+        );
+        for _ in 0..5 {
+            assert_eq!(
+                session
+                    .begin_sign_in(&url(A), None, false, || panic!("no dialog"))
+                    .unwrap_err(),
+                SIGN_IN_NOT_PRESENT
+            );
+        }
+        assert_eq!(*session.declines.lock().unwrap(), Declines::default());
+        // The person's own sign-in right after: shown, no wait.
+        session.begin_sign_in(&url(A), None, true, || true).unwrap();
+    }
+
+    // GO-I2
+    #[test]
+    fn the_pause_after_a_decline_survives_a_restart() {
+        let dir = std::env::temp_dir().join(format!(
+            "ttd-sign-in-pause-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let file = dir.join("sign-in-pause.json");
+        let store = MemoryStore::default();
+        let first = Session::with_timing(
+            Box::new(store.clone()),
+            SIGN_IN_WINDOW,
+            Duration::from_secs(60),
+        )
+        .with_declines_file(file.clone());
+        assert_eq!(
+            first
+                .begin_sign_in(&url(A), None, true, || false)
+                .unwrap_err(),
+            SIGN_IN_DECLINED
+        );
+        // Restart (process:allow-restart): the pause is still there.
+        let again = Session::with_timing(
+            Box::new(store.clone()),
+            SIGN_IN_WINDOW,
+            Duration::from_secs(60),
+        )
+        .with_declines_file(file.clone());
+        assert_eq!(again.declines.lock().unwrap().count, 1);
+        assert_eq!(
+            again
+                .begin_sign_in(&url(A), None, true, || panic!("no dialog"))
+                .unwrap_err(),
+            SIGN_IN_WAIT
+        );
+        // A tampered or far-future file is ignored; garbage too.
+        let now = SystemTime::now();
+        let longest = Duration::from_secs(300);
+        let far = (now + Duration::from_secs(10 * 365 * 86_400))
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        assert_eq!(
+            Declines::decode(&format!(r#"{{"count":9999,"until":{far}}}"#), now, longest),
+            Declines {
+                count: MAX_DECLINES,
+                until: None
+            }
+        );
+        assert_eq!(
+            Declines::decode("not json", now, longest),
+            Declines::default()
+        );
+        let saved = Declines {
+            count: 2,
+            until: Some(UNIX_EPOCH + Duration::from_millis(1_700_000_000_000)),
+        };
+        assert_eq!(Declines::decode(&saved.encode(), now, longest), saved);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     // GM-L3
@@ -1339,7 +1494,7 @@ pub mod tests {
         begin(&session, A).unwrap();
         session.sign_out().unwrap();
         session
-            .begin_sign_in(&url(A), None, move || {
+            .begin_sign_in(&url(A), None, true, move || {
                 // Other commands (status, the binding, sign-out) still answer while the dialog is open.
                 assert!(!inner.signed_in().unwrap());
                 assert!(inner.bound_origin().is_none());

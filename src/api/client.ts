@@ -97,15 +97,18 @@ export function originPattern(serverUrl: string): string {
   return `${new URL(serverUrl).origin}/*`;
 }
 
-/** `Retry-After` in seconds: an integer of seconds or an HTTP date (RFC 9110 §10.2.3), else `null`. */
+/** Longest `Retry-After` honoured, in seconds (30 minutes): a larger value or a far date is capped (audit GO-I1). */
+export const MAX_RETRY_AFTER_SECONDS = 1800;
+
+/** `Retry-After` in seconds: an integer of seconds or an HTTP date (RFC 9110 §10.2.3), else `null`; at most 30 min. */
 export function parseRetryAfter(value: string | null, now: number = Date.now()): number | null {
   if (value === null || value.trim() === '') {
     return null;
   }
   const seconds = Number(value);
-  if (Number.isFinite(seconds)) return seconds >= 0 ? seconds : null;
+  if (Number.isFinite(seconds)) return seconds >= 0 ? Math.min(seconds, MAX_RETRY_AFTER_SECONDS) : null;
   const at = Date.parse(value);
-  return Number.isNaN(at) ? null : Math.max(0, Math.ceil((at - now) / 1000));
+  return Number.isNaN(at) ? null : Math.min(Math.max(0, Math.ceil((at - now) / 1000)), MAX_RETRY_AFTER_SECONDS);
 }
 
 /** RFC 3339 in UTC without fractions (`2026-11-05T08:00:00Z`), as `GET me/meetings` wants it. */

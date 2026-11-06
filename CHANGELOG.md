@@ -49,6 +49,13 @@ and GM) and the backlog fixes. Not released yet (release freeze).
     stored token is never replaced in place (audit GM-L2) and never reaches the webview. Declining, cancelling or a
     failure leaves the person signed out, and the card and a notice say so; the account's local data is kept for the
     same account and cleared if another account is approved.
+  - Account data (pinned and last tasks, schedule, message history, offline queue, meeting list and reminder marks) is
+    cleared whenever the app drops a saved account: at start-up when its session token is missing (signed out
+    elsewhere, or a re-sign-in left denied or expired), when the saved server no longer matches the stored session,
+    and on any sign-in as another account or server than the saved one (audit GO-L1). Reminder marks are filed under
+    a hash of the account, never the e-mail, and deleted on sign-out (GO-I6). `Retry-After` is honoured up to 30
+    minutes (GO-I1). Tray items for tasks and meetings are capped at 60 characters, without control, bidi or
+    zero-width characters, and `&` is never a menu mnemonic; meeting texts also lose LRM / RLM / ALM marks (GO-I5).
   - Notification texts in the seven message languages (`src/lib/messages/meetingReminders.ts`), Settings and Today
     in English and Spanish. Mock server: `GET me/meetings`, the 1.14 `GET me` keys, `meetings:read` and the
     *Track the meeting* metadata on `timer/switch` (`POST /__mock/config {"meetings": …, "meetingsScope": …}`).
@@ -84,8 +91,11 @@ and GM) and the backlog fixes. Not released yet (release freeze).
     sign-in view. Cancel is the first, default button, so a stray Enter declines (three buttons: *Cancel*, *Sign in*,
     *Not now*; the dialog plugin cannot make Cancel the default of two); a host other than the official one adds
     "This is not beacon.nowo.tech" / "Este servidor no es beacon.nowo.tech"; the dialog is shown only while the main
-    window is focused with input in the last 30 seconds; after a decline `sign_in_begin` refuses (`sign_in_wait`, no
-    dialog) for 10 seconds, doubling up to 5 minutes, and sign-out does not reset it (GM-D2-1, GM-D2-2). Every stored sign-in is announced by an OS notification from Rust naming the server. The password
+    window is focused with input in the last 30 seconds, else it is refused unseen (`sign_in_not_present`) without
+    starting a pause (GO-I3; where the OS cannot report idle time, as on some Wayland sessions, only the focus counts,
+    GO-I7); after a decline `sign_in_begin` refuses (`sign_in_wait`, no dialog) for 10 seconds, doubling up to 5
+    minutes, and neither sign-out nor a restart resets it (kept in `sign-in-pause.json` in the app data folder, GO-I2);
+    only the exact *Sign in* button result confirms (GO-I4) (GM-D2-1, GM-D2-2). Every stored sign-in is announced by an OS notification from Rust naming the server. The password
     route (`…/login`) is no longer captured: the app is device-flow only (GM-D-1). The UI gets the answer with the
     token replaced by a fixed handle (`stored-in-os-keychain`). The sign-in route is matched on the percent-decoded
     path, and paths escaping unreserved characters (`to%6Ben`) are refused (GM-L1).

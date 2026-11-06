@@ -132,6 +132,8 @@ describe('meetings answer', () => {
     expect(odd).toMatchObject({ busy: true, title: 'evil title', attendees: [], taskLinks: [{ taskId: 'T-7', key: 'T-7' }], externalCount: null, joinUrl: null, joinProvider: null });
     expect(parseMeeting(raw('f', 10, { busy: false, allDay: true, attendees: 'x', taskLinks: 'y' }))).toMatchObject({ busy: false, allDay: true, attendees: [], taskLinks: [] });
     expect(parseMeeting(null)).toBeNull();
+    // Bidi marks and zero-width characters go too (audit GO-I5).
+    expect((parseMeeting(raw('b', 10, { title: '\u200FStand\u200E\u061Cup\u200B \uFEFFsync\u2067' })) as Meeting).title).toBe('Standup sync');
   });
 
   it('the join link is opened only for the allow-listed video-call hosts (contract §22.4 vectors)', () => {
@@ -439,6 +441,10 @@ describe('polling', () => {
     expect(parseRetryAfter('-5')).toBeNull();
     expect(parseRetryAfter('soon')).toBeNull();
     expect(parseRetryAfter(null)).toBeNull();
+    // Capped at 30 minutes, whatever the server says (audit GO-I1).
+    expect(parseRetryAfter('1e12')).toBe(1800);
+    expect(parseRetryAfter('Thu, 05 Nov 2099 09:00:00 GMT', TEN)).toBe(1800);
+    expect(pollFailed(FRESH_POLL, TEN, { status: 429, code: 'rate_limited', retryAfter: 1e12 }).state.notBefore).toBe(TEN + 1800_000);
   });
 });
 
@@ -479,6 +485,12 @@ describe('local store', () => {
     for (const account of ['b', 'c', 'd', 'e']) store.saveMarks(account, []);
     expect(store.marks('a', TEN)).toEqual([]);
     expect(store.marks('e', TEN)).toEqual([]);
+    // Sign-out forgets an account's marks; a plain `server|e-mail` key from an earlier build is dropped (GO-I6).
+    store.saveMarks('e', fired([], meetings, TEN, { firedAt: iso(TEN) }));
+    store.dropMarks('e');
+    expect(store.marks('e', TEN)).toEqual([]);
+    storage.setItem(MEETINGS_KEY, JSON.stringify({ cache: null, marks: { 'https://b.example|ada@example.com': fired([], meetings, TEN, { firedAt: iso(TEN) }) } }));
+    expect(store.marks('https://b.example|ada@example.com', TEN)).toEqual([]);
     store.saveCache({ account: 'a', fetchedAt: iso(TEN), expiresAt: iso(TEN + 50 * 3600_000), status: 'syncing', refreshAfterSeconds: 300, meetings });
     expect(store.cache('a', TEN)).toBeNull();
     storage.setItem(MEETINGS_KEY, JSON.stringify({ cache: { account: 'a', fetchedAt: iso(TEN), expiresAt: iso(windowEnd), status: 'weird', meetings: [{ ...meetings[0], key: 'bad' }, meetings[1], null] } }));
