@@ -9,7 +9,7 @@ import type { ReminderAction, ReminderLineKind } from '../schedule';
 /**
  * Mascot poses of the friendly messages. Each id is drawn as `public/mascot/pose-<id>.webp` (+ `@2x`) once its art is
  * imported (`scripts/mascot/import-poses.sh`); until then `POSE_FALLBACK` in `src/ui/mascot.ts` shows the closest
- * existing pose. beach, sofa and park have no art yet.
+ * existing pose. Every id has its own art since beach, sofa and park arrived (owner, 2026-11-06).
  */
 export const POSE_IDS = [
   'peek',

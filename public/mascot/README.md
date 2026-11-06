@@ -62,8 +62,12 @@ here, imported from a transparent (or white) `pose-<id>.png`, for example 1024 Ã
    character, with their glow; props close to it (steam, sparkles, a leaf, the antenna arcs) stay;
 3. trimmed, 96 / 192 px high, WebP quality 80.
 
-The script also rewrites `src/ui/pose-art.json`, the list of ids that have their own art (40 today). beach, sofa and
-park have no art yet and show their fallback (`POSE_FALLBACK` in `src/ui/mascot.ts`).
+The script also rewrites `src/ui/pose-art.json`, the list of ids that have their own art (49 today, every id of
+`POSE_IDS`). beach (deck chair under a parasol), sofa (with the remote) and park (walking with a balloon) arrived on
+2026-11-06 and were imported with `IMPORT_POSES_KEEP_DISTANCE=200`, like the empty states: with the default 64 px the
+top antenna arc is taken for a stray fragment and only its glow stays. `scripts/mascot/notification-art.sh` then adds
+their notification pictures. `POSE_FALLBACK` (`src/ui/mascot.ts`) keeps only the empty states' entries, for a build
+without their art.
 
 | Use | Poses |
 |---|---|

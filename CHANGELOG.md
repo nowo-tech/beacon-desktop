@@ -11,6 +11,11 @@ All notable changes to this project are documented here ([Keep a Changelog](http
   gaps between the arcs, so they blurred into one pale shape; the arcs now sit on the dark background (at least 6:1,
   WCAG 1.4.11 asks for 3:1) and the rest of the outline is unchanged.
 
+### Added
+
+- **The last three mascot poses**: beach (deck chair under a parasol), sofa (with the remote) and park (walking with a
+  balloon), in the app's messages and in the native notifications, instead of the standing robot they borrowed.
+
 ### Security
 
 - **Weekly live pin check** (audit FY-D-3): `pins.yml` also connects to the official host and fails when no CA key of
