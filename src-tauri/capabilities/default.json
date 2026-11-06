@@ -22,8 +22,6 @@
     },
     "clipboard-manager:allow-write-text",
     "notification:default",
-    "autostart:allow-enable",
-    "autostart:allow-disable",
     "autostart:allow-is-enabled",
     "process:allow-restart",
     "allow-secret-get",
@@ -44,6 +42,7 @@
     "allow-list-browsers",
     "allow-get-browser",
     "allow-set-browser",
-    "allow-pick-browser"
+    "allow-pick-browser",
+    "allow-set-autostart"
   ]
 }

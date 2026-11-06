@@ -28,8 +28,18 @@ Likely 0.5.1.
     app's entries existed. The installer (`windows/installer-hooks.nsh`) now moves the app's value pointing at the
     0.1.0 copy to this install also when that copy is kept, and removes the app's per-machine `TimeTrack` value when
     it runs with administrator rights; both only for a command starting the app's executable in a `TimeTrack` folder.
+  - *Start at login* in Settings no longer goes through the autostart plugin on Windows (new command
+    `set_autostart`, main window only; `autostart:allow-enable` / `allow-disable` removed from the capability): the
+    plugin wrote the path unquoted, and from an elevated process to HKLM (its "dynamic" mode), for every user of the
+    machine. Now on = one quoted HKCU value for the running executable (any install folder), marked enabled in Task
+    Manager, the app's other entries (other names, HKLM) removed; off = every entry of the app removed; refused when
+    another product uses the value name. macOS and Linux still use the plugin. At start, a copy installed in a
+    custom folder (the one the installer records, or any copy whose HKCU value already starts it) gets its value
+    quoted; the installer writes the path quoted (`"<install dir>\time-track-desktop.exe" --hidden`) and only
+    matches commands that *start* with one of the app's executables.
   - macOS: the plugin's socket lives in the shared `/tmp` (not configurable upstream): another local account could
-    keep TimeTrack from starting. Documented in SECURITY.md → *Known limitations* and reported upstream.
+    keep TimeTrack from starting. Documented in SECURITY.md → *Known limitations*; upstream issue drafted, not
+    yet filed.
   - Tray created twice in one process: it never was (one `TrayIconBuilder`, from `setup`), now guarded by id, and the
     main window no longer gets `core:tray:default` through `core:default` (the core defaults are listed one by one
     without the tray), so the webview cannot create another tray icon. Rust tests check all three.

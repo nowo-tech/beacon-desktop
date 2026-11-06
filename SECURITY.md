@@ -34,5 +34,5 @@ Only the latest release receives fixes. The server can force an update with `min
   TimeTrack exit at launch for the other users (it hands its arguments, and its working folder, to that process),
   or, with a plain file there, start without the guard. Only on Macs shared with an untrusted local account;
   availability only, no access to the session token or the data. Windows (mutex in the user's session) and Linux
-  (the user's D-Bus session bus) are per user. Reported upstream (a per-user `$TMPDIR` socket); the app will move
-  to it once the plugin allows it.
+  (the user's D-Bus session bus) are per user. An upstream issue asking for a per-user `$TMPDIR` socket is drafted,
+  not yet filed (filing needs the owner's OK); the app will move to it once the plugin allows it.

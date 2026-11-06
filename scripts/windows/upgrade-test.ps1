@@ -21,6 +21,9 @@
                              entry left must be disabled too
                 foreign      the app's value plus another vendor's "TimeTrack" entries (HKCU "TimeTrack Vendor",
                              HKLM "TimeTrack" for C:\Vendor\TimeTrack): those must stay untouched
+                custom       with -InstallDir: unquoted HKCU and HKLM values for the custom folder (as the
+                             autostart plugin wrote them): one quoted HKCU value must be left
+    -InstallDir              install the new version into this folder (NSIS /D=, silent mode only)
 
   Then checks: installer exit code, a single "TimeTrack" entry under the Uninstall keys (HKCU and HKLM, both views)
   carrying the new version, no MSI left behind, the installed executable's version and that the app starts. From
@@ -38,7 +41,8 @@ param(
   [Parameter(Mandatory)] [ValidateSet('silent', 'update', 'interactive')] [string] $Mode,
   [switch] $AppRunning,
   [switch] $OldMsiStays,
-  [ValidateSet('dupes', 'disabled', 'foreign')] [string] $Autostart = 'dupes',
+  [ValidateSet('dupes', 'disabled', 'foreign', 'custom')] [string] $Autostart = 'dupes',
+  [string] $InstallDir = '',
   [string] $OutDir = (Join-Path $PWD 'upgrade-test-out'),
   [string] $Product = 'TimeTrack',
   [int] $TimeoutSeconds = 300
@@ -113,7 +117,11 @@ function Show-State([string] $Label) {
   return , $entries
 }
 
-function Get-InstallDirs { @((Join-Path $env:LOCALAPPDATA $Product), (Join-Path $env:ProgramFiles $Product)) }
+function Get-InstallDirs {
+  $dirs = @((Join-Path $env:LOCALAPPDATA $Product), (Join-Path $env:ProgramFiles $Product))
+  if ($InstallDir) { $dirs += $InstallDir }
+  $dirs
+}
 
 function Get-AppExe([string] $Dir) {
   if (-not (Test-Path $Dir)) { return $null }
@@ -371,6 +379,7 @@ if ($checkInstances) {
   # What older versions could leave: the app's value for the old copy (0.1.0 MSI in Program Files, or the per-user
   # install), a second value under another name, and a per-machine value written by an elevated copy.
   $seedExe = $null
+  if ($Autostart -eq 'custom') { $seedExe = Join-Path $InstallDir 'time-track-desktop.exe' }
   foreach ($dir in (Get-InstallDirs)) { if (-not $seedExe) { $seedExe = Get-AppExe $dir } }
   if (-not $seedExe) { throw 'no old executable to seed start-at-login entries' }
   Log "start-at-login scenario: $Autostart"
@@ -383,6 +392,9 @@ if ($checkInstances) {
     'disabled' {
       Set-RunEntry 'HKCU' 'time-track-desktop' "`"$seedExe`" --hidden"
       Set-Approved 'HKCU' 'time-track-desktop' $DisabledMarker
+    }
+    'custom' {
+      Set-RunEntry 'HKLM' $Product "$seedExe --hidden"
     }
     'foreign' {
       Set-RunEntry 'HKCU' 'TimeTrack Vendor' "$Vendor\TimeTrack.exe"
@@ -399,6 +411,8 @@ if ($AppRunning) {
 }
 
 $arguments = switch ($Mode) { 'silent' { '/S' } 'update' { '/P /UPDATE' } 'interactive' { '' } }
+# NSIS: /D= must come last and stays unquoted, spaces included.
+if ($InstallDir) { $arguments = "$arguments /D=$InstallDir" }
 $exitCode = Invoke-Installer $newSetup.FullName $arguments 'new installer' -Interactive:($Mode -eq 'interactive')
 Start-Sleep -Seconds 3
 $after = Show-State 'after the upgrade'
@@ -417,9 +431,10 @@ if ($OldMsiStays) {
 }
 $current = @($after | Where-Object { $_.DisplayVersion -eq $newVersion })
 if ($current.Count -ne 1) { Fail "no single Uninstall entry with version $newVersion" }
-$newExe = Get-AppExe (Join-Path $env:LOCALAPPDATA $Product)
+$newDir = if ($InstallDir) { $InstallDir } else { Join-Path $env:LOCALAPPDATA $Product }
+$newExe = Get-AppExe $newDir
 if (-not $newExe) {
-  Fail "no executable in $env:LOCALAPPDATA\$Product"
+  Fail "no executable in $newDir"
 } else {
   $fileVersion = (Get-Item $newExe).VersionInfo.ProductVersion
   Log "installed executable: $newExe ($fileVersion)"

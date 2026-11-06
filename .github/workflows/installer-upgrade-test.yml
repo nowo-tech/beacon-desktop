@@ -87,7 +87,8 @@ jobs:
             echo "version=$VERSION"
           } | tee -a "$GITHUB_OUTPUT"
           # id: old installers (v01 = old_run_id, v04 = prev_run_id) and which of them, how the new one runs, app running.
-          # autostart (0.5.1+, default dupes): which start-at-login entries are seeded before the upgrade (upgrade-test.ps1).
+          # autostart (0.5.1+, default dupes): which start-at-login entries are seeded before the upgrade (upgrade-test.ps1);
+          # install_dir: a custom install folder (/D=), fresh install (old none).
           # msi_stays: /S shows no page and cannot ask for administrator approval, so a 0.1.0 MSI is left installed
           # (expected; the check reports it instead of failing).
           all='[
@@ -100,7 +101,8 @@ jobs:
             {"id":"v04-update-running","from":"v04","old":"nsis","mode":"update","running":true},
             {"id":"v04-interactive-running","from":"v04","old":"nsis","mode":"interactive","running":true},
             {"id":"v04-update-autostart-disabled","from":"v04","old":"nsis","mode":"update","running":true,"autostart":"disabled"},
-            {"id":"msi01-interactive-autostart-foreign","from":"v01","old":"msi","mode":"interactive","running":false,"autostart":"foreign"}
+            {"id":"msi01-interactive-autostart-foreign","from":"v01","old":"msi","mode":"interactive","running":false,"autostart":"foreign"},
+            {"id":"custom-dir-silent-autostart","from":"v04","old":"none","mode":"silent","running":false,"autostart":"custom","install_dir":"C:\\My Tools\\TimeTrack"}
           ]'
           if [ "$SCENARIOS" = all ]; then
             matrix="$(jq -c '{include: .}' <<<"$all")"
@@ -200,7 +202,8 @@ jobs:
           $msiStays = '${{ matrix.msi_stays }}' -eq 'true'
           $autostart = '${{ matrix.autostart }}'
           if (-not $autostart) { $autostart = 'dupes' }
-          & .\scripts\windows\upgrade-test.ps1 -Old ${{ matrix.old }} -OldDir old -NewDir new -Mode ${{ matrix.mode }} -AppRunning:$running -OldMsiStays:$msiStays -Autostart $autostart -OutDir out
+          $installDir = '${{ matrix.install_dir }}'
+          & .\scripts\windows\upgrade-test.ps1 -Old ${{ matrix.old }} -OldDir old -NewDir new -Mode ${{ matrix.mode }} -AppRunning:$running -OldMsiStays:$msiStays -Autostart $autostart -InstallDir $installDir -OutDir out
           exit $LASTEXITCODE
       - if: always()
         uses: actions/upload-artifact@v7

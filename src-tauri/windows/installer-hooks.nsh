@@ -114,31 +114,42 @@ Function TTRemoveLegacyMsi
   ${EndIf}
 FunctionEnd
 
-;; OUT = non-empty when the Run command CMD starts one of the app's executables (TimeTrack.exe or
-;; time-track-desktop.exe) in one of its install folders (%LOCALAPPDATA%\TimeTrack, Program Files\TimeTrack), like
-;; is_ours in src-tauri/src/autostart.rs. Another product's entry is never matched. Uses $R6 and $R7 (saved).
-!macro TT_OUR_COMMAND CMD OUT
+;; $R7 = "1" when the Run command CMD starts with PATH (an executable path), quoted or not (case-insensitive, like
+;; NSIS string comparisons). Uses $R5 / $R6 (saved).
+!macro TT_STARTS_WITH CMD PATH
+  Push $R5
   Push $R6
+  StrLen $R5 "${PATH}"
+  StrCpy $R6 "${CMD}" $R5
+  ${If} $R6 == "${PATH}"
+    StrCpy $R7 "1"
+  ${EndIf}
+  StrCpy $R6 "${CMD}" $R5 1
+  ${If} $R6 == "${PATH}"
+    StrCpy $R6 "${CMD}" 1
+    ${If} $R6 == '"'
+      StrCpy $R7 "1"
+    ${EndIf}
+  ${EndIf}
+  Pop $R6
+  Pop $R5
+!macroend
+
+;; OUT = "1" when the Run command CMD starts (anchored, quoted or not) one of the app's executables (TimeTrack.exe or
+;; time-track-desktop.exe) in one of its install folders (%LOCALAPPDATA%\TimeTrack, Program Files\TimeTrack, or this
+;; install's folder, also a custom one), like is_ours in src-tauri/src/autostart.rs. Another product's entry is never
+;; matched. Uses $R7 (saved).
+!macro TT_OUR_COMMAND CMD OUT
   Push $R7
-  ${StrCase} ${OUT} "${CMD}" "L"
   StrCpy $R7 ""
-  ${StrCase} $R6 "$PROGRAMFILES64\${TT_PRODUCT}\time-track-desktop.exe" "L"
-  ${StrLoc} $R7 ${OUT} $R6 ">"
-  ${If} $R7 == ""
-    ${StrCase} $R6 "$PROGRAMFILES64\${TT_PRODUCT}\timetrack.exe" "L"
-    ${StrLoc} $R7 ${OUT} $R6 ">"
-  ${EndIf}
-  ${If} $R7 == ""
-    ${StrCase} $R6 "$LOCALAPPDATA\${TT_PRODUCT}\time-track-desktop.exe" "L"
-    ${StrLoc} $R7 ${OUT} $R6 ">"
-  ${EndIf}
-  ${If} $R7 == ""
-    ${StrCase} $R6 "$LOCALAPPDATA\${TT_PRODUCT}\timetrack.exe" "L"
-    ${StrLoc} $R7 ${OUT} $R6 ">"
-  ${EndIf}
+  !insertmacro TT_STARTS_WITH "${CMD}" "$PROGRAMFILES64\${TT_PRODUCT}\time-track-desktop.exe"
+  !insertmacro TT_STARTS_WITH "${CMD}" "$PROGRAMFILES64\${TT_PRODUCT}\timetrack.exe"
+  !insertmacro TT_STARTS_WITH "${CMD}" "$LOCALAPPDATA\${TT_PRODUCT}\time-track-desktop.exe"
+  !insertmacro TT_STARTS_WITH "${CMD}" "$LOCALAPPDATA\${TT_PRODUCT}\timetrack.exe"
+  !insertmacro TT_STARTS_WITH "${CMD}" "$INSTDIR\time-track-desktop.exe"
+  !insertmacro TT_STARTS_WITH "${CMD}" "$INSTDIR\timetrack.exe"
   StrCpy ${OUT} $R7
   Pop $R7
-  Pop $R6
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -152,13 +163,13 @@ FunctionEnd
   ; Start at login set up by the 0.1.0 MSI copy points at Program Files: follow the app to this install, also when that
   ; copy is kept (0.5.0 left it then, and both copies could start at login: two tray icons). Only this install starts
   ; at login; the old copy can still be opened by hand. Only a value that starts one of the app's executables is
-  ; changed (another product may use the name "TimeTrack"); its Task Manager state (StartupApproved) is kept. The app
-  ; quotes the path on its next start (src-tauri/src/autostart.rs).
+  ; changed (another product may use the name "TimeTrack"); its Task Manager state (StartupApproved) is kept. The path
+  ; is written quoted, for custom install folders too.
   ReadRegStr $R8 HKCU "${TT_RUN_KEY}" "${TT_PRODUCT}"
   !insertmacro TT_OUR_COMMAND $R8 $R9
   ${If} $R9 != ""
-    nsis_tauri_utils::StrReplace "$R8" "$PROGRAMFILES64\${TT_PRODUCT}\" "$INSTDIR\"
-    Pop $R9
+    ; This install's executable, path quoted (no unquoted-path search at login), hidden in the tray.
+    StrCpy $R9 '"$INSTDIR\${MAINBINARYNAME}.exe" --hidden'
     ${If} $R9 != $R8
       WriteRegStr HKCU "${TT_RUN_KEY}" "${TT_PRODUCT}" "$R9"
     ${EndIf}

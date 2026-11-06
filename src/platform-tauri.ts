@@ -3,7 +3,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { availableMonitors, currentMonitor, getCurrentWindow, type Monitor, PhysicalPosition, PhysicalSize } from '@tauri-apps/api/window';
-import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart';
+import { isEnabled } from '@tauri-apps/plugin-autostart';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
@@ -114,7 +114,8 @@ export function tauriPlatform(): Platform {
     // Title bar / native menus follow the app's theme; `null` hands it back to the system (capability core:window:allow-set-theme).
     setWindowTheme: (theme) => getCurrentWindow().setTheme(theme),
     autostartEnabled: () => isEnabled(),
-    setAutostart: (enabled) => (enabled ? enable() : disable()),
+    // Rust command: on Windows an HKCU-only, quoted Run value (never the plugin's HKLM / unquoted write).
+    setAutostart: (enabled) => invoke('set_autostart', { enabled }),
     checkUpdate: (server, token) => invoke<UpdateCheck>('check_update', { server, token }),
     installUpdate: async (server, token, onProgress) => {
       const stop = await listen<UpdateProgress>('update-progress', (event) => onProgress?.(event.payload));

@@ -56,6 +56,8 @@ pub enum Fix {
     Write { name: String, command: String },
     /// Mark the app's HKCU value disabled in Task Manager (copied from the entry the user disabled).
     Disable { name: String, marker: Vec<u8> },
+    /// Mark the app's HKCU value enabled in Task Manager (switched on in Settings), if Task Manager tracks it.
+    Enable { name: String },
 }
 
 /// Whether a `StartupApproved\Run` value means "Disabled" (Task Manager stores the time it was disabled in the last
@@ -116,8 +118,19 @@ pub fn command_for(exe: &str, args: &[&str]) -> String {
     command
 }
 
+fn same_path(a: &str, b: &str) -> bool {
+    norm(a) == norm(b)
+}
+
+/// One of the app's value names whose command starts this very executable (wherever it is installed).
+fn this_exe(entry: &RunEntry, current_exe: &str) -> bool {
+    VALUE_NAMES.contains(&entry.name.to_lowercase().as_str())
+        && same_path(command_exe(&entry.command), current_exe)
+}
+
 /// The changes that leave one HKCU value `app_name` for `current_exe`, if any of the app's entries existed and the
-/// running executable is an installed copy.
+/// running executable is an installed copy. A copy elsewhere (a custom install folder Windows does not report, a
+/// portable copy) only quotes the HKCU value that already starts it, without retargeting anything.
 pub fn plan(
     entries: &[RunEntry],
     app_name: &str,
@@ -125,11 +138,21 @@ pub fn plan(
     install_dirs: &[String],
     args: &[&str],
 ) -> Vec<Fix> {
-    if !installed(current_exe, install_dirs) {
-        return Vec::new();
-    }
     let own_value =
         |e: &RunEntry| e.hive == Hive::CurrentUser && e.name.eq_ignore_ascii_case(app_name);
+    let command = command_for(current_exe, args);
+    if !installed(current_exe, install_dirs) {
+        return entries
+            .iter()
+            .find(|e| own_value(e) && this_exe(e, current_exe))
+            .filter(|e| !e.command.trim().eq_ignore_ascii_case(&command))
+            .map(|_| Fix::Write {
+                name: app_name.to_string(),
+                command,
+            })
+            .into_iter()
+            .collect();
+    }
     // Another product's HKCU value with the app's name: never overwritten, so nothing is consolidated.
     if entries
         .iter()
@@ -144,7 +167,6 @@ pub fn plan(
     if ours.is_empty() {
         return Vec::new();
     }
-    let command = command_for(current_exe, args);
     let mut fixes: Vec<Fix> = ours
         .iter()
         // The HKCU value with the app's name is rewritten below, not deleted (its Task Manager state stays).
@@ -177,9 +199,50 @@ pub fn plan(
     fixes
 }
 
-/// Reads the Run keys, applies `plan` and logs what changed. Never fails the start-up.
+/// "Start at login" switched on or off in Settings. Replaces the autostart plugin's `enable` / `disable` on Windows:
+/// those write the path unquoted and, from an elevated process, to HKLM (the plugin's "dynamic" mode), for every user
+/// of the machine. On: one quoted HKCU value for this executable, marked enabled in Task Manager, and the app's other
+/// entries (other names, HKLM) removed. Off: every entry of the app removed. Refused when another product uses the
+/// HKCU value name.
+pub fn toggle_plan(
+    entries: &[RunEntry],
+    app_name: &str,
+    current_exe: &str,
+    install_dirs: &[String],
+    args: &[&str],
+    enabled: bool,
+) -> Result<Vec<Fix>, String> {
+    let own_value =
+        |e: &RunEntry| e.hive == Hive::CurrentUser && e.name.eq_ignore_ascii_case(app_name);
+    let mine = |e: &RunEntry| is_ours(e, install_dirs) || this_exe(e, current_exe);
+    if entries.iter().any(|e| own_value(e) && !mine(e)) {
+        return Err(format!(
+            "another app already starts at login as \"{app_name}\""
+        ));
+    }
+    let mut fixes: Vec<Fix> = entries
+        .iter()
+        .filter(|e| mine(e) && !(enabled && own_value(e)))
+        .map(|e| Fix::Delete {
+            hive: e.hive,
+            name: e.name.clone(),
+        })
+        .collect();
+    if enabled {
+        fixes.push(Fix::Write {
+            name: app_name.to_string(),
+            command: command_for(current_exe, args),
+        });
+        fixes.push(Fix::Enable {
+            name: app_name.to_string(),
+        });
+    }
+    Ok(fixes)
+}
+
 #[cfg(windows)]
-pub fn apply(app_name: &str, args: &[&str]) {
+mod registry {
+    use super::{Fix, Hive, RunEntry, INSTALL_DIR};
     use winreg::enums::{
         HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE, REG_BINARY,
     };
@@ -189,72 +252,160 @@ pub fn apply(app_name: &str, args: &[&str]) {
     const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
     const APPROVED: &str =
         r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+    /// Where Tauri's NSIS installer records the install folder (also a custom one chosen on its directory page).
+    const INSTALL_KEY: &str = r"Software\nowo.tech\TimeTrack";
+    /// Task Manager "Enabled".
+    const ENABLED: [u8; 12] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let exe = exe.display().to_string();
-    let install_dirs: Vec<String> = ["LOCALAPPDATA", "ProgramFiles", "ProgramW6432"]
-        .iter()
-        .filter_map(|var| std::env::var(var).ok())
-        .map(|base| format!("{base}\\{INSTALL_DIR}"))
-        .collect();
-    let root = |hive: Hive| {
+    fn root(hive: Hive) -> RegKey {
         RegKey::predef(match hive {
             Hive::CurrentUser => HKEY_CURRENT_USER,
             Hive::LocalMachine => HKEY_LOCAL_MACHINE,
         })
-    };
-    let mut entries = Vec::new();
-    for hive in [Hive::CurrentUser, Hive::LocalMachine] {
-        let approved = root(hive).open_subkey_with_flags(APPROVED, KEY_READ).ok();
-        if let Ok(key) = root(hive).open_subkey_with_flags(RUN, KEY_READ) {
-            for (name, value) in key.enum_values().flatten() {
-                if let Ok(command) = String::from_reg_value(&value) {
-                    let approved = approved
-                        .as_ref()
-                        .and_then(|k| k.get_raw_value(&name).ok())
-                        .map(|v| v.bytes.to_vec());
-                    entries.push(RunEntry {
-                        hive,
-                        name,
-                        command,
-                        approved,
-                    });
+    }
+
+    pub fn current_exe() -> Option<String> {
+        std::env::current_exe()
+            .ok()
+            .map(|exe| exe.display().to_string())
+    }
+
+    /// `%LOCALAPPDATA%\TimeTrack`, `Program Files\TimeTrack` and the folder the installer recorded.
+    pub fn install_dirs() -> Vec<String> {
+        let mut dirs: Vec<String> = ["LOCALAPPDATA", "ProgramFiles", "ProgramW6432"]
+            .iter()
+            .filter_map(|var| std::env::var(var).ok())
+            .map(|base| format!("{base}\\{INSTALL_DIR}"))
+            .collect();
+        if let Ok(dir) = root(Hive::CurrentUser)
+            .open_subkey_with_flags(INSTALL_KEY, KEY_READ)
+            .and_then(|key| key.get_value::<String, _>(""))
+        {
+            if !dir.trim().is_empty() {
+                dirs.push(dir.trim().trim_matches('"').to_string());
+            }
+        }
+        dirs
+    }
+
+    pub fn entries() -> Vec<RunEntry> {
+        let mut entries = Vec::new();
+        for hive in [Hive::CurrentUser, Hive::LocalMachine] {
+            let approved = root(hive).open_subkey_with_flags(APPROVED, KEY_READ).ok();
+            if let Ok(key) = root(hive).open_subkey_with_flags(RUN, KEY_READ) {
+                for (name, value) in key.enum_values().flatten() {
+                    if let Ok(command) = String::from_reg_value(&value) {
+                        let approved = approved
+                            .as_ref()
+                            .and_then(|k| k.get_raw_value(&name).ok())
+                            .map(|v| v.bytes.to_vec());
+                        entries.push(RunEntry {
+                            hive,
+                            name,
+                            command,
+                            approved,
+                        });
+                    }
                 }
             }
         }
+        entries
     }
-    for fix in plan(&entries, app_name, &exe, &install_dirs, args) {
-        let result = match &fix {
-            Fix::Delete { hive, name } => root(*hive)
-                .open_subkey_with_flags(RUN, KEY_SET_VALUE)
-                .and_then(|key| key.delete_value(name))
-                .map(|()| {
-                    if let Ok(key) = root(*hive).open_subkey_with_flags(APPROVED, KEY_SET_VALUE) {
-                        let _ = key.delete_value(name);
-                    }
-                }),
-            Fix::Write { name, command } => root(Hive::CurrentUser)
-                .create_subkey(RUN)
-                .and_then(|(key, _)| key.set_value(name, command)),
-            Fix::Disable { name, marker } => root(Hive::CurrentUser)
+
+    fn set_marker(name: &str, marker: &[u8], create: bool) -> std::io::Result<()> {
+        let key = if create {
+            root(Hive::CurrentUser)
                 .create_subkey(APPROVED)
-                .and_then(|(key, _)| {
-                    key.set_raw_value(
-                        name,
-                        &RegValue {
-                            bytes: marker.clone().into(),
-                            vtype: REG_BINARY,
-                        },
-                    )
-                }),
-        };
-        match result {
-            Ok(()) => eprintln!("autostart: {fix:?}"),
-            Err(error) => eprintln!("autostart: {fix:?} failed: {error}"),
-        }
+                .map(|(key, _)| key)
+        } else {
+            match root(Hive::CurrentUser).open_subkey_with_flags(APPROVED, KEY_SET_VALUE) {
+                Ok(key) => Ok(key),
+                // No Task Manager state yet: absent means enabled.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => Err(error),
+            }
+        }?;
+        key.set_raw_value(
+            name,
+            &RegValue {
+                bytes: marker.to_vec().into(),
+                vtype: REG_BINARY,
+            },
+        )
     }
+
+    /// Applies the changes in order and logs them; returns the first error.
+    pub fn apply(fixes: &[Fix]) -> Result<(), String> {
+        let mut first = None;
+        for fix in fixes {
+            let result = match fix {
+                Fix::Delete { hive, name } => root(*hive)
+                    .open_subkey_with_flags(RUN, KEY_SET_VALUE)
+                    .and_then(|key| key.delete_value(name))
+                    .map(|()| {
+                        if let Ok(key) = root(*hive).open_subkey_with_flags(APPROVED, KEY_SET_VALUE)
+                        {
+                            let _ = key.delete_value(name);
+                        }
+                    }),
+                Fix::Write { name, command } => root(Hive::CurrentUser)
+                    .create_subkey(RUN)
+                    .and_then(|(key, _)| key.set_value(name, command)),
+                Fix::Disable { name, marker } => set_marker(name, marker, true),
+                Fix::Enable { name } => set_marker(name, &ENABLED, false),
+            };
+            match result {
+                Ok(()) => eprintln!("autostart: {fix:?}"),
+                Err(error) => {
+                    eprintln!("autostart: {fix:?} failed: {error}");
+                    first.get_or_insert_with(|| error.to_string());
+                }
+            }
+        }
+        first.map_or(Ok(()), Err)
+    }
+}
+
+/// Reads the Run keys, applies `plan` and logs what changed. Never fails the start-up.
+#[cfg(windows)]
+pub fn apply(app_name: &str, args: &[&str]) {
+    let Some(exe) = registry::current_exe() else {
+        return;
+    };
+    let fixes = plan(
+        &registry::entries(),
+        app_name,
+        &exe,
+        &registry::install_dirs(),
+        args,
+    );
+    let _ = registry::apply(&fixes);
+}
+
+/// "Start at login" on or off (Settings), HKCU only (see `toggle_plan`).
+#[cfg(windows)]
+pub fn set(app_name: &str, args: &[&str], enabled: bool) -> Result<(), String> {
+    let exe = registry::current_exe().ok_or("no executable path")?;
+    let fixes = toggle_plan(
+        &registry::entries(),
+        app_name,
+        &exe,
+        &registry::install_dirs(),
+        args,
+        enabled,
+    )?;
+    // HKLM removals need administrator rights: only the HKCU changes decide the result.
+    let (machine, user): (Vec<Fix>, Vec<Fix>) = fixes.into_iter().partition(|fix| {
+        matches!(
+            fix,
+            Fix::Delete {
+                hive: Hive::LocalMachine,
+                ..
+            }
+        )
+    });
+    let _ = registry::apply(&machine);
+    registry::apply(&user)
 }
 
 #[cfg(test)]
@@ -553,5 +704,120 @@ mod tests {
         ));
         assert!(!ours(APP, r"D:\dev\target\release\time-track-desktop.exe"));
         assert!(!ours("Old", &format!("{NEW} --hidden")));
+    }
+
+    const CUSTOM: &str = r"D:\My Tools\TimeTrack\time-track-desktop.exe";
+
+    #[test]
+    fn a_custom_install_only_quotes_its_own_value() {
+        // Unquoted value for this very copy: quoted, nothing retargeted or deleted.
+        let entries = [
+            entry(Hive::CurrentUser, APP, &format!("{CUSTOM} --hidden")),
+            entry(Hive::LocalMachine, APP, &format!("{MSI} --hidden")),
+        ];
+        assert_eq!(run_as(CUSTOM, &entries), vec![write(CUSTOM)]);
+        // Already quoted, pointing elsewhere or another product's: nothing.
+        assert!(run_as(
+            CUSTOM,
+            &[entry(Hive::CurrentUser, APP, &command_for(CUSTOM, &ARGS))]
+        )
+        .is_empty());
+        assert!(run_as(
+            CUSTOM,
+            &[entry(Hive::CurrentUser, APP, &format!("{MSI} --hidden"))]
+        )
+        .is_empty());
+        assert!(run_as(
+            CUSTOM,
+            &[entry(
+                Hive::CurrentUser,
+                "Other",
+                &format!("{CUSTOM} --hidden")
+            )]
+        )
+        .is_empty());
+        // The folder the installer recorded counts as an install folder: full consolidation.
+        let mut recorded = dirs();
+        recorded.push(r"D:\My Tools\TimeTrack".into());
+        assert_eq!(
+            plan(&entries, APP, CUSTOM, &recorded, &ARGS),
+            vec![delete(Hive::LocalMachine, APP), write(CUSTOM)]
+        );
+    }
+
+    fn toggle(exe: &str, entries: &[RunEntry], enabled: bool) -> Result<Vec<Fix>, String> {
+        toggle_plan(entries, APP, exe, &dirs(), &ARGS, enabled)
+    }
+
+    fn enable() -> Fix {
+        Fix::Enable { name: APP.into() }
+    }
+
+    #[test]
+    fn switching_on_writes_one_quoted_hkcu_value() {
+        assert_eq!(toggle(NEW, &[], true), Ok(vec![write(NEW), enable()]));
+        // A custom folder too, quoted.
+        assert_eq!(toggle(CUSTOM, &[], true), Ok(vec![write(CUSTOM), enable()]));
+        // The plugin's HKLM value (elevated "dynamic" mode) and other names go; the HKCU value is rewritten.
+        let entries = [
+            entry(Hive::LocalMachine, APP, &format!("{NEW} --hidden")),
+            entry(
+                Hive::CurrentUser,
+                "time-track-desktop",
+                &format!("{MSI} --hidden"),
+            ),
+            with(
+                entry(Hive::CurrentUser, APP, &format!("{NEW} --hidden")),
+                &DISABLED,
+            ),
+            entry(Hive::CurrentUser, "Spotify", r"C:\Spotify\Spotify.exe"),
+        ];
+        assert_eq!(
+            toggle(NEW, &entries, true),
+            Ok(vec![
+                delete(Hive::LocalMachine, APP),
+                delete(Hive::CurrentUser, "time-track-desktop"),
+                write(NEW),
+                enable()
+            ])
+        );
+    }
+
+    #[test]
+    fn switching_off_removes_every_entry_of_the_app() {
+        let entries = [
+            entry(Hive::LocalMachine, APP, &format!("{CUSTOM} --hidden")),
+            entry(Hive::CurrentUser, APP, &command_for(CUSTOM, &ARGS)),
+            entry(
+                Hive::CurrentUser,
+                "time-track-desktop",
+                &format!("{MSI} --hidden"),
+            ),
+            entry(
+                Hive::CurrentUser,
+                "TimeTrack Vendor",
+                r"C:\Vendor\TimeTrack\TimeTrack.exe",
+            ),
+        ];
+        assert_eq!(
+            toggle(CUSTOM, &entries, false),
+            Ok(vec![
+                delete(Hive::LocalMachine, APP),
+                delete(Hive::CurrentUser, APP),
+                delete(Hive::CurrentUser, "time-track-desktop"),
+            ])
+        );
+        assert_eq!(toggle(NEW, &[], false), Ok(vec![]));
+    }
+
+    #[test]
+    fn switching_never_overwrites_another_products_value() {
+        let taken = [entry(
+            Hive::CurrentUser,
+            APP,
+            r"C:\Vendor\TimeTrack\TimeTrack.exe",
+        )];
+        assert!(toggle(NEW, &taken, true).is_err());
+        assert!(toggle(NEW, &taken, false).is_err());
     }
 }

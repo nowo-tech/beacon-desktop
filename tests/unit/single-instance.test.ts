@@ -41,8 +41,26 @@ describe('one TimeTrack, one tray icon (0.5.1)', () => {
     // Both rules only for the app's own executable in one of its install folders (never another "TimeTrack").
     expect(postinstall.match(/!insertmacro TT_OUR_COMMAND \$R8 \$R9\n {2}\$\{If\} \$R9 != ""/g)).toHaveLength(2);
     const macro = hooks.slice(hooks.indexOf('!macro TT_OUR_COMMAND'), hooks.indexOf('!macro NSIS_HOOK_POSTINSTALL'));
-    for (const dir of ['$PROGRAMFILES64', '$LOCALAPPDATA']) {
-      for (const exe of ['time-track-desktop.exe', 'timetrack.exe']) expect(macro).toContain(`"${dir}\\\${TT_PRODUCT}\\${exe}"`);
+    for (const dir of ['$PROGRAMFILES64\\${TT_PRODUCT}', '$LOCALAPPDATA\\${TT_PRODUCT}', '$INSTDIR']) {
+      for (const exe of ['time-track-desktop.exe', 'timetrack.exe']) {
+        expect(macro).toContain(`!insertmacro TT_STARTS_WITH "\${CMD}" "${dir}\\${exe}"`);
+      }
     }
+    // Anchored at the start of the command (quoted or not), not a substring anywhere.
+    const startsWith = hooks.slice(hooks.indexOf('!macro TT_STARTS_WITH'), hooks.indexOf('!macro TT_OUR_COMMAND'));
+    expect(startsWith).not.toContain('StrLoc');
+    expect(startsWith).toContain('StrLen $R5 "${PATH}"');
+    // The rewritten value is quoted.
+    expect(postinstall).toContain(`StrCpy $R9 '"$INSTDIR\\\${MAINBINARYNAME}.exe" --hidden'`);
+  });
+
+  it('Settings switches start at login through the app command, never the plugin enable / disable', () => {
+    const main: unknown[] = JSON.parse(readFileSync('src-tauri/capabilities/default.json', 'utf8')).permissions;
+    expect(main).toContain('allow-set-autostart');
+    expect(main).not.toContain('autostart:allow-enable');
+    expect(main).not.toContain('autostart:allow-disable');
+    const bridge = readFileSync('src/platform-tauri.ts', 'utf8');
+    expect(bridge).toContain("invoke('set_autostart', { enabled })");
+    expect(bridge).not.toMatch(/import \{[^}]*\b(enable|disable)\b[^}]*\} from '@tauri-apps\/plugin-autostart'/);
   });
 });

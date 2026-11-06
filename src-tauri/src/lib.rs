@@ -861,6 +861,28 @@ fn notify_friendly(
     notify::show(&app, &note)
 }
 
+/// "Start at login" on or off (Settings). Windows: our own HKCU-only write with the path quoted (autostart.rs
+/// `toggle_plan`), never the plugin's unquoted / HKLM one; macOS and Linux: the autostart plugin (LaunchAgent, XDG).
+#[tauri::command]
+fn set_autostart(app: AppHandle, window: tauri::Window, enabled: bool) -> Result<(), String> {
+    only_from(&window, "main")?;
+    #[cfg(windows)]
+    {
+        autostart::set(&app.package_info().name, &[HIDDEN_ARG], enabled)
+    }
+    #[cfg(not(windows))]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        let launcher = app.autolaunch();
+        if enabled {
+            launcher.enable()
+        } else {
+            launcher.disable()
+        }
+        .map_err(|e| e.to_string())
+    }
+}
+
 /// Another launch of the app (Start menu, desktop shortcut, a second start-at-login entry) while this one runs: it
 /// exits and this one shows its window, unless it was a start at login (`--hidden`), which stays in the tray.
 fn on_second_launch(app: &AppHandle, args: &[String]) {
@@ -1119,7 +1141,8 @@ pub fn run() {
             browser::list_browsers,
             browser::get_browser,
             browser::set_browser,
-            browser::pick_browser
+            browser::pick_browser,
+            set_autostart
         ])
         .run(tauri::generate_context!())
         .expect("error while running TimeTrack");
