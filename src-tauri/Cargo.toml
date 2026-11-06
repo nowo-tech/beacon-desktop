@@ -1,6 +1,6 @@
 [package]
 name = "time-track-desktop"
-version = "0.5.1"
+version = "0.6.0"
 description = "TimeTrack desktop app for symfony-beacon"
 authors = ["nowo.tech"]
 license = "MIT"

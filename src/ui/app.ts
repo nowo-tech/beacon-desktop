@@ -624,7 +624,8 @@ export class DesktopApp {
           } catch (error) {
             if (!isSignInDeclined(error)) throw error;
             this.device = null;
-            this.view = 'login';
+            // A declined re-sign-in (meeting reminders) leaves the person signed out, as the card said.
+            if (!(await this.endReconsent())) this.view = 'login';
             return;
           }
           await preflight(this.platform.fetch, server);
@@ -655,6 +656,8 @@ export class DesktopApp {
           this.token = login.token;
           api.setToken(login.token);
           const me = await api.me();
+          // A re-sign-in approved for another account: the previous account's local data goes, as on sign-out.
+          if (this.reconsent && this.state.session !== null && this.state.session.identifier !== me.identifier) this.clearAccountData();
           this.me = me;
           this.persist({
             lastServer: server,
@@ -670,15 +673,17 @@ export class DesktopApp {
           await this.checkPinExpiry();
         } catch (error) {
           if (error instanceof DeviceFlowError) {
-            if (error.reason === 'cancelled') return;
+            if (error.reason === 'cancelled') {
+              await this.endReconsent();
+              return;
+            }
             this.deviceState = error.reason === 'expired' ? 'expired' : error.reason === 'denied' ? 'denied' : 'scope';
             this.view = 'device';
             return;
           }
           this.device = null;
-          // A failed re-consent keeps the session it started from.
-          this.view = this.reconsent && this.state.session !== null ? 'main' : 'login';
-          this.reconsent = false;
+          // A failed re-sign-in leaves the person signed out (the old session was already revoked).
+          if (!(await this.endReconsent())) this.view = 'login';
           throw error;
         }
       },
@@ -701,9 +706,22 @@ export class DesktopApp {
   cancelDevice(): void {
     this.abort?.abort();
     this.device = null;
-    const back = this.reconsent && this.state.session !== null;
+    if (this.reconsent) {
+      void this.endReconsent();
+      return;
+    }
+    this.show('login');
+  }
+
+  /**
+   * Ends a re-sign-in for meeting reminders that did not complete (declined, cancelled, failed): the old session was
+   * revoked before it started, so the person is now signed out, and told so. False when no re-sign-in was running.
+   */
+  private async endReconsent(): Promise<boolean> {
+    if (!this.reconsent) return false;
     this.reconsent = false;
-    this.show(back ? 'main' : 'login');
+    await this.signedOut(this.t('meetingRemindersReconsentSignedOut'));
+    return true;
   }
 
   async logout(): Promise<void> {
@@ -718,6 +736,15 @@ export class DesktopApp {
   private async signedOut(notice: string | null): Promise<void> {
     await this.platform.secretDelete();
     this.token = null;
+    this.clearAccountData();
+    this.view = 'login';
+    this.setNotice(notice);
+    this.render();
+    await this.updateTray();
+  }
+
+  /** The signed-in account's local data (not the token): on sign-out, and when a re-sign-in brings another account. */
+  private clearAccountData(): void {
     // The friendly-message history goes too (its slots name the entries, `<task id>@<start>`), and the schedule
     // (overrides, days off, Beacon's copy) belongs to the person who signs out. So do the task ids and titles that
     // notifications and buttons can show (audit GC-L2): the last task ("Continue last", "Back to {task}?", "Start
@@ -759,15 +786,13 @@ export class DesktopApp {
     this.section = 'tasks';
     this.selectedTaskId = null;
     this.error = null;
-    this.view = 'login';
-    this.setNotice(notice);
-    this.render();
-    await this.updateTray();
   }
 
   // ---- timer ------------------------------------------------------------------------------------------------------
 
   async refresh(): Promise<void> {
+    // During a re-sign-in the old token is already gone: nothing to refresh until it ends.
+    if (this.reconsent) return;
     await this.guard(() => this.load(this.api()));
   }
 
@@ -1729,14 +1754,23 @@ export class DesktopApp {
   }
 
   /**
-   * "Allow TimeTrack to read your upcoming meetings" (§23.7): the device flow again with `meetings:read` on top of the
-   * current scopes. Cancel goes back to the main window; the session stays as it was until the new sign-in is approved.
+   * "Sign in again to allow meeting reminders" (§23.7): a re-sign-in with `meetings:read` on top of the current scopes.
+   * The host never replaces a stored token and keeps only the token of a sign-in the person confirmed (audit GM-L2,
+   * GM-D-1), so this revokes the current session on the server (as sign-out does), deletes it locally, then signs in
+   * again: the native "Sign in to <host>?" confirmation, then the device flow. The app's data stays while the new
+   * sign-in runs; if it is declined, cancelled or fails, the person ends up signed out (the card says so).
    */
   async allowMeetings(): Promise<void> {
     const server = this.state.session?.server;
     if (server === undefined) return;
     this.persist({ settings: { ...this.state.settings, meetingConsentSeen: true } });
     this.reconsent = true;
+    try {
+      await this.api().logout();
+    } catch {
+      // Revoking never blocks the re-sign-in (as on sign-out).
+    }
+    await this.forgetToken();
     await this.connect(server);
   }
 

@@ -3,7 +3,10 @@
 All notable changes to this project are documented here ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/)).
 
-## [Unreleased]
+## [0.6.0] - unreleased
+
+Everything after 0.5.1: meeting reminders, the session token out of the webview (security review appendices FY
+and GM) and the backlog fixes. Not released yet (release freeze).
 
 ### Added
 
@@ -40,11 +43,18 @@ All notable changes to this project are documented here ([Keep a Changelog](http
     reminders yet"; *No calendar connected* and *Reconnect* point to Beacon's Calendars page; reminders are on by
     default only when a calendar is connected (Q-O18).
   - **Re-consent**: sign-ins now ask for `meetings:read` on top of the usual scopes, and fall back to the usual ones
-    when an older server refuses the unknown scope. A session without it gets one card (*Allow TimeTrack to read
-    your upcoming meetings*) that runs the device flow again; Cancel keeps the current session.
+    when an older server refuses the unknown scope. A session without it gets one card (*Sign in again to allow
+    meeting reminders*): a re-sign-in that revokes the current session on the server (as sign-out does), deletes it
+    locally, then shows the native *Sign in to <host>?* confirmation and runs the device flow with the new scope. The
+    stored token is never replaced in place (audit GM-L2) and never reaches the webview. Declining, cancelling or a
+    failure leaves the person signed out, and the card and a notice say so; the account's local data is kept for the
+    same account and cleared if another account is approved.
   - Notification texts in the seven message languages (`src/lib/messages/meetingReminders.ts`), Settings and Today
     in English and Spanish. Mock server: `GET me/meetings`, the 1.14 `GET me` keys, `meetings:read` and the
     *Track the meeting* metadata on `timer/switch` (`POST /__mock/config {"meetings": …, "meetingsScope": …}`).
+
+- **The last three mascot poses**: beach (deck chair under a parasol), sofa (with the remote) and park (walking with a
+  balloon), in the app's messages and in the native notifications, instead of the standing robot they borrowed.
 
 ### Security
 
@@ -96,24 +106,18 @@ All notable changes to this project are documented here ([Keep a Changelog](http
   - Still possible for a script in the main webview: authenticated requests to the signed-in server while the app
     runs, sending data it read elsewhere (for example through `open_external`), and signing you out and asking you,
     in the native dialog, to sign in to another server. SECURITY.md lists it.
-### Fixed
-
-- **Dark theme: the antenna arcs of the "nothing pinned yet" robot are visible again.** Its white outline filled the
-  gaps between the arcs, so they blurred into one pale shape; the arcs now sit on the dark background (at least 6:1,
-  WCAG 1.4.11 asks for 3:1) and the rest of the outline is unchanged.
-
-### Added
-
-- **The last three mascot poses**: beach (deck chair under a parasol), sofa (with the remote) and park (walking with a
-  balloon), in the app's messages and in the native notifications, instead of the standing robot they borrowed.
-
-### Security
 
 - **Weekly live pin check** (audit FY-D-3): `pins.yml` also connects to the official host and fails when no CA key of
   the served chain is in `pins.json` (`scripts/release/check-pin-chain.mjs`), a second signal next to Beacon's
   pinned SSL monitor.
 - Dependabot waits seven days before proposing a new GitHub Actions release; the `dtolnay/rust-toolchain` pin comment
   names its commit date and the manual refresh (audit FY-D-4).
+
+### Fixed
+
+- **Dark theme: the antenna arcs of the "nothing pinned yet" robot are visible again.** Its white outline filled the
+  gaps between the arcs, so they blurred into one pale shape; the arcs now sit on the dark background (at least 6:1,
+  WCAG 1.4.11 asks for 3:1) and the rest of the outline is unchanged.
 
 ## [0.5.1] - 2026-11-06
 

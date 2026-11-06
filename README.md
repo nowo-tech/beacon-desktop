@@ -293,8 +293,9 @@ what to record* (on) and *Pause my timer automatically when a meeting starts* (o
 - The list (today and tomorrow) is fetched on start, on wake, when the network comes back and every 5 minutes (or
   Beacon's `refreshAfterSeconds`), honouring `429 Retry-After`; it is kept for at most 48 hours so reminders work
   offline ("may be outdated" after an hour) and deleted when you sign out or turn the reminders off.
-- Sessions signed in before 0.6 lack the `meetings:read` permission: one card asks *Allow TimeTrack to read your
-  upcoming meetings* and runs the device sign-in again. Older servers simply have no reminders (Settings says why).
+- Sessions signed in before 0.6 lack the `meetings:read` permission: one card offers *Sign in again to allow meeting
+  reminders*. It is a new sign-in: the app revokes the current session in Beacon, signs out, asks *Sign in to <host>?*
+  and runs the device sign-in with the new permission. If you cancel, you stay signed out. Older servers simply have no reminders (Settings says why).
 
 The mock server serves `GET me/meetings` (`POST /__mock/config {"meetings": {"status": "connected", "list": [...]}}`;
 `"meetingsScope": false` makes it an older server that refuses the scope).

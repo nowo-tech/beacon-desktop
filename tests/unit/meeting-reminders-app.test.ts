@@ -390,30 +390,24 @@ describe('meeting reminders in the app', () => {
     ui.app.destroy();
   });
 
-  it('re-consent: a sign-in without meetings:read gets one card, and the device flow adds the scope', async () => {
+  const tokens = async () => ((await env.control('state')) as { tokens: number }).tokens;
+
+  it('re-consent: a re-sign-in that revokes the old session, confirms natively and adds meetings:read', async () => {
     const ui = await signedIn({ scope: false });
     expect(ui.app.meetingSupport.kind).toBe('consent');
     expect(ui.$('#meeting-consent-card')).not.toBeNull();
+    expect(ui.$('#meeting-consent-card').textContent).toContain('This is a new sign-in');
+    expect(ui.$('#meeting-consent-allow').textContent).toBe('Sign in again to allow meeting reminders');
+    ui.app.togglePin(ui.app.tasks[0]);
+    const pinnedId = ui.app.tasks[0].id;
+    expect(await tokens()).toBe(1);
     await env.control('config', { meetingsScope: true });
-    // A failure keeps the session (and the main window).
-    await env.control('config', { failNext: { status: 500, error: 'server_error' } });
     ui.$('#meeting-consent-allow').click();
-    await tick(80);
-    expect(ui.app.view).toBe('main');
-    expect(ui.app.state.session).not.toBeNull();
-    // Cancel: back to the main window, still signed in.
-    ui.app.show('settings');
-    ui.$('#meeting-reminders-consent').click();
     await tick();
+    // The old session is revoked on the server and deleted locally before the new sign-in (audit GM-L2).
+    expect(await tokens()).toBe(0);
+    expect(ui.platform.hooks.signInConfirmations).toEqual([env.url, env.url]);
     expect(ui.app.view).toBe('device');
-    ui.app.cancelDevice();
-    await tick();
-    expect(ui.app.view).toBe('main');
-    expect(ui.app.state.session).not.toBeNull();
-    ui.app.dismissError();
-    ui.app.show('settings');
-    ui.$('#meeting-reminders-consent').click();
-    await tick();
     await env.control('device/approve', { userCode: ui.$('#user-code').textContent });
     await tick(300);
     expect(ui.app.view).toBe('main');
@@ -421,6 +415,46 @@ describe('meeting reminders in the app', () => {
     expect(ui.app.meetingSupport.kind).toBe('on');
     expect(ui.app.meetings).toHaveLength(1);
     expect(ui.$('#meeting-consent-card')).toBeNull();
+    // Same account: its local data stays.
+    expect(ui.app.state.pinned.map((task) => task.id)).toEqual([pinnedId]);
+    expect(await tokens()).toBe(1);
+    ui.app.destroy();
+  });
+
+  it('re-consent declined in the native confirmation, or cancelled: signed out, and told so', async () => {
+    const ui = await signedIn({ scope: false });
+    ui.platform.hooks.declineSignIn = true;
+    ui.$('#meeting-consent-allow').click();
+    await tick(80);
+    expect(ui.app.view).toBe('login');
+    expect(ui.app.state.session).toBeNull();
+    expect(await ui.platform.secretGet()).toBeNull();
+    expect(await tokens()).toBe(0);
+    expect(ui.$('#notice').textContent).toContain('You are signed out');
+    expect(ui.$('#error-title')).toBeNull();
+    ui.app.destroy();
+    // Cancelled on the device screen.
+    const again = await signedIn({ scope: false });
+    again.app.show('settings');
+    again.$('#meeting-reminders-consent').click();
+    await tick();
+    expect(again.app.view).toBe('device');
+    again.app.cancelDevice();
+    await tick(80);
+    expect(again.app.view).toBe('login');
+    expect(again.app.state.session).toBeNull();
+    expect(await again.platform.secretGet()).toBeNull();
+    again.app.destroy();
+  });
+
+  it('re-consent failing on the server: signed out with the error shown', async () => {
+    const ui = await signedIn({ scope: false });
+    // The revocation succeeds; the preflight of the new sign-in fails.
+    ui.$('#meeting-consent-allow').click();
+    await env.control('config', { failNext: { status: 500, error: 'server_error' } });
+    await tick(120);
+    expect(ui.app.state.session).toBeNull();
+    expect(ui.app.view).toBe('login');
     ui.app.destroy();
   });
 
