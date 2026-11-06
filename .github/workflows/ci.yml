@@ -106,7 +106,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
             libssl-dev libxss-dev libx11-dev libdbus-1-dev
       - if: steps.changes.outputs.rust == 'true'
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-11-05
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # head of the stable branch (commit 2026-10-16, pinned 2026-11-05); not tracked by Dependabot, refresh by hand
         with:
           toolchain: stable
           components: rustfmt, clippy

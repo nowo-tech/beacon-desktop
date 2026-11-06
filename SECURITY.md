@@ -59,6 +59,14 @@ Only the latest release receives fixes. The server can force an update with `min
 
 ## Known limitations
 
+- **The session token is reachable from the main window's script (Info, FN-L1 / FY-D-2).** The webview reads the
+  token with `secret_get` to send it through `beacon_fetch`. The origin binding stops the app from sending it
+  anywhere else, but a script running in the main window could call `secret_get`, then `secret_delete` (which also
+  clears the binding), `beacon_bind` to another server and `beacon_fetch` there, or hand a URL with the token to the
+  browser. That needs script injection first, which `script-src 'self'` and the text-only DOM prevent, so the binding is
+  a guard against mistakes and confused deputies, not an XSS boundary. Planned: Rust keeps the token and adds
+  `Authorization` itself, and `secret_get` goes away (docs/ROADMAP.md, *Security hardening*).
+
 - **macOS single-instance socket in `/tmp` (upstream, Low).** The one-copy guard (`tauri-plugin-single-instance`
   2.5.x) uses the fixed path `/tmp/tech_nowo_timetrack_si.sock` on macOS, and the plugin does not let the app choose
   another. `/tmp` is shared by every account of the Mac: another local account that binds that path first makes

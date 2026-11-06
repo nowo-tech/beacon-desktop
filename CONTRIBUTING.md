@@ -8,7 +8,8 @@
 4. Privacy rules are part of the definition of done: no activity monitoring, no URLs or titles sent anywhere, any new
    data needs an opt-in with dated consent and an update of PRIVACY.md and the "What we collect" screen (en + es).
 5. `src/api/` is shared verbatim with nowo-tech/time-track-extension: change both repositories together.
-6. GitHub Actions are pinned to full commit SHAs with the version in a trailing comment; Dependabot updates them.
+6. GitHub Actions are pinned to full commit SHAs with the version in a trailing comment; Dependabot updates them,
+   proposing a release only once it is seven days old (`cooldown` in `.github/dependabot.yml`).
    `dtolnay/rust-toolchain` is the exception: it is pinned to a head of its `stable` branch, which Dependabot cannot
    track. Refresh it by hand now and then (`gh api repos/dtolnay/rust-toolchain/commits/stable --jq .sha`) in
    `ci.yml` and `platforms.yml`, and keep its `toolchain: stable` input.

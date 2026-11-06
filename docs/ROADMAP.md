@@ -79,6 +79,12 @@ when unknown (contract v0.4, announced in `GET me.features.task_effort`):
 - Through `TaskReference` / `TaskProviderInterface` (new optional properties, `null` by default, so other providers keep
   working) and `ClientTaskPresenter::task()` / `timer()`; `features.task_effort = true` when the provider fills them.
 
+### Security hardening (desktop)
+
+| Item | Status | Owner |
+|---|---|---|
+| **Session token out of the webview**: Rust keeps the token and `beacon_fetch` / the updater add `Authorization` themselves, so the `secret_get` command and the token in webview memory go away. Today a script running in the main window could read the token with `secret_get`, clear the origin binding with `secret_delete` and bind another server (audits FN-L1, FY-D-2); script injection is prevented by `script-src 'self'` and a text-only DOM, so this is defence in depth | Planned (before 0.6) | desktop |
+
 ## 2. Considered, not scheduled
 
 From the same analysis; kept as ideas, with no date.

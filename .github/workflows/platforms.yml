@@ -35,7 +35,7 @@ jobs:
         working-directory: src-tauri
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-11-05
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # head of the stable branch (commit 2026-10-16, pinned 2026-11-05); not tracked by Dependabot, refresh by hand
         with:
           toolchain: stable
           components: clippy

@@ -11,6 +11,16 @@ All notable changes to this project are documented here ([Keep a Changelog](http
   gaps between the arcs, so they blurred into one pale shape; the arcs now sit on the dark background (at least 6:1,
   WCAG 1.4.11 asks for 3:1) and the rest of the outline is unchanged.
 
+### Security
+
+- **Weekly live pin check** (audit FY-D-3): `pins.yml` also connects to the official host and fails when no CA key of
+  the served chain is in `pins.json` (`scripts/release/check-pin-chain.mjs`), a second signal next to Beacon's
+  pinned SSL monitor.
+- Docs (audit FY-D-2): the origin binding guards the app's own requests, not script in the window; SECURITY.md lists
+  the token reachable through `secret_get` as a known limitation and the roadmap moves the token into Rust.
+- Dependabot waits seven days before proposing a new GitHub Actions release; the `dtolnay/rust-toolchain` pin comment
+  names its commit date and the manual refresh (audit FY-D-4).
+
 ## [0.5.1] - 2026-11-06
 
 ### Security
