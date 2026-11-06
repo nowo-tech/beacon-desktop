@@ -444,14 +444,14 @@ if (-not $newExe) {
     # Start-at-login: one HKCU "TimeTrack" value for the new executable, path quoted (the app cleaned up at start).
     $ours = { param($list) @($list | Where-Object { -not $_.Command.TrimStart('"').StartsWith($Vendor, [StringComparison]::OrdinalIgnoreCase) }) }
     for ($i = 0; $i -lt 30; $i++) {
-      $runs = & $ours (Get-RunEntries)
+      $runs = @(& $ours (Get-RunEntries))
       if ($runs.Count -eq 1 -and $runs[0].Command.StartsWith('"')) { break }
       Start-Sleep -Seconds 1
     }
     if (Test-Path $appErr) { Get-Content $appErr | ForEach-Object { Log "  app stderr: $_" } }
     $all = Get-RunEntries
     foreach ($r in $all) { Log ("  start-at-login {0}\{1} = {2}" -f $r.Hive, $r.Name, $r.Command) }
-    $runs = & $ours $all
+    $runs = @(& $ours $all)
     if ($runs.Count -ne 1) {
       Fail "$($runs.Count) start-at-login entries for $Product (expected exactly 1)"
     } elseif ($runs[0].Hive -ne 'HKCU' -or $runs[0].Name -ne $Product -or -not $runs[0].Command.StartsWith("`"$newExe`"", [StringComparison]::OrdinalIgnoreCase)) {
