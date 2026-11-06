@@ -23,6 +23,8 @@ pub const MAIN_COMMANDS: &[&str] = &[
     "get_browser",
     "set_browser",
     "pick_browser",
+    "set_autostart",
+    "get_autostart",
 ];
 
 /// Commands only the "Still there?" window may call (capabilities/prompt.json).
@@ -51,4 +53,6 @@ pub const APP_COMMANDS: &[&str] = &[
     "get_browser",
     "set_browser",
     "pick_browser",
+    "set_autostart",
+    "get_autostart",
 ];

@@ -141,7 +141,9 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 ## Optional features (off by default, dated consent, revocable in Settings)
 
 - **Notifications**: never shown outside the working hours your organisation publishes (`me.workingHours`).
-- **Start at login**: starts the app hidden in the tray; it never starts a timer.
+- **Start at login**: starts the app hidden in the tray; it never starts a timer. On Windows the app keeps this to one
+  entry for itself (it removes start-at-login entries of older TimeTrack copies; it reads no other app's entry beyond
+  its executable name and changes none), locally, nothing is sent.
 
 ## Your rights
 

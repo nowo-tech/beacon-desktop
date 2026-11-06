@@ -73,6 +73,11 @@ describe('error catalogue', () => {
     expect(describeError(new ApiError(403, 'task_forbidden', 'x'), { ...ctx, task: 'T' })).toMatchObject({ id: 'task_forbidden', params: { task: 'T' } });
     expect(describeError(new ApiError(200, 'invalid_response', 'x'), ctx)).toMatchObject({ id: 'invalid_response' });
     expect(describeError(new ApiError(502, 'server_error', 'Bad gateway'), ctx)).toMatchObject({ id: 'server' });
+    // Start at login refused by the host (Tauri rejects with the command's error string).
+    expect(describeError('autostart:elevated: TimeTrack runs as administrator', ctx)).toMatchObject({ id: 'autostart_elevated', title: 'errAutostartTitle', text: 'errAutostartElevated', actions: ['copy'] });
+    expect(describeError(new Error('autostart:not_installed: x'), ctx)).toMatchObject({ text: 'errAutostartNotInstalled' });
+    expect(describeError('autostart:taken: x', ctx)).toMatchObject({ text: 'errAutostartTaken' });
+    expect(describeError('autostart:other: x', ctx)).toMatchObject({ id: 'generic' });
     expect(describeError(new ApiError(400, 'invalid_request', 'x'), ctx)).toMatchObject({ id: 'generic' });
     const plain = describeError('boom', { stage: 'action', server: null, version: '0.2.0' });
     expect(plain.id).toBe('generic');

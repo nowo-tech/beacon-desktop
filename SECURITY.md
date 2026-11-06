@@ -25,3 +25,14 @@ Only the latest release receives fixes. The server can force an update with `min
 - **Privacy.** No screenshots, keystrokes, app / window / URL logging. The only OS signal read is "seconds since last
   input", locally and only when the user enabled idle detection; it is never sent.
 - **Release secrets** live in GitHub Actions secrets only; the S3 key can only `PutObject` under `time-track-clients/`.
+
+## Known limitations
+
+- **macOS single-instance socket in `/tmp` (upstream, Low).** The one-copy guard (`tauri-plugin-single-instance`
+  2.5.x) uses the fixed path `/tmp/tech_nowo_timetrack_si.sock` on macOS, and the plugin does not let the app choose
+  another. `/tmp` is shared by every account of the Mac: another local account that binds that path first makes
+  TimeTrack exit at launch for the other users (it hands its arguments, and its working folder, to that process),
+  or, with a plain file there, start without the guard. Only on Macs shared with an untrusted local account;
+  availability only, no access to the session token or the data. Windows (mutex in the user's session) and Linux
+  (the user's D-Bus session bus) are per user. An upstream issue asking for a per-user `$TMPDIR` socket is drafted,
+  not yet filed (filing needs the owner's OK); the app will move to it once the plugin allows it.

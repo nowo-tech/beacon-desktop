@@ -40,6 +40,43 @@ Coming from **0.1.0**:
   one from publisher **nowo.tech**. Your sign-in is shared, so nothing else to do; if *Start at login* was on, switch
   it off and on again in Settings.
 
+### Two TimeTrack icons in the tray
+
+Up to 0.5.0 a second launch (Start menu or desktop shortcut while the app was hidden in the tray, or a second
+start-at-login entry left by an older install) started a second copy with its own tray icon. From 0.5.1:
+
+- **One copy per user session.** A second launch exits at once and brings the running window forward (a second start
+  at login, `--hidden`, just exits). Windows: a per-session named mutex; macOS: a local socket (in the shared `/tmp`,
+  an upstream limitation: SECURITY.md → *Known limitations*); Linux: a D-Bus name on the session bus (without a
+  session bus the app starts unguarded, as before).
+- **One start-at-login entry.** At start, an installed Windows copy (`%LOCALAPPDATA%\TimeTrack` or
+  `Program Files\TimeTrack`; a copy run from Downloads or elsewhere changes nothing) keeps *Start at login* as a
+  single `HKCU\…\Run` value `TimeTrack` for itself, path quoted, and removes its other entries (`time-track-desktop`,
+  the 0.1.0 `.msi` copy in Program Files, a per-machine `HKLM` value when it may; `src-tauri/src/autostart.rs`). Only
+  the app's own entries count (value name `TimeTrack` / `time-track-desktop`, its executable, an install folder);
+  another product's are never touched. Disabled in Task Manager stays disabled, and an app without any entry is
+  never switched on. The installer moves the app's value pointing at the 0.1.0 copy to this install even when that
+  copy is kept, and removes the app's per-machine value when it runs with administrator rights.
+- **Start at login written by the app itself** (Windows): Settings switches one quoted HKCU value, never an
+  unquoted or per-machine (`HKLM`) one as the autostart plugin did when the app ran elevated. Switching it on is
+  refused from a TimeTrack run as administrator or from a copy that is not the installed one (Settings says why).
+- **One tray icon per process**: built once in Rust; the webview has no tray permission.
+
+To check by hand (Windows, PowerShell), list what starts at login and what runs:
+
+```powershell
+Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
+Get-Process | Where-Object { $_.Path -match '(?i)\\(TimeTrack|time-track-desktop)\.exe$' } | Select-Object Id, Path
+```
+
+Quit every copy (tray → *Quit*, or `Stop-Process -Name TimeTrack, time-track-desktop`), remove extra entries with
+`Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name <name>` (an `HKLM` one from an
+administrator PowerShell), or Task Manager → *Startup apps* → disable the duplicate; also delete any TimeTrack
+shortcut in `shell:startup` / `shell:common startup` (Win+R). Uninstall a leftover 0.1.0 copy
+(publisher **nowo**) and start TimeTrack again. A tray icon that stays after its process is gone (killed, crashed) is
+a ghost Windows removes when the mouse passes over it.
+
 ### Sign in
 
 1. Enter your Beacon URL and click **Connect**.
@@ -252,7 +289,7 @@ required" screen send you to the Store listing instead.
   (`tauri_build::AppManifest::commands`, list in `src-tauri/app-commands.rs`), so Tauri only lets a window call the
   commands its capability grants (`allow-<command>`); without a manifest any local window could call any command.
   A Rust test checks the list against `generate_handler!` and that each command is granted to exactly one window.
-- `src-tauri/capabilities/default.json`, window `main`: core defaults, HTTP to your server, `clipboard-manager:allow-write-text` (*Copy link*), `notification:default`, autostart enable / disable / is-enabled, process restart, set theme, and the app commands
+- `src-tauri/capabilities/default.json`, window `main`: core defaults, HTTP to your server, `clipboard-manager:allow-write-text` (*Copy link*), `notification:default`, no autostart permission (*Start at login* goes through the app commands `set_autostart` / `get_autostart`), process restart, set theme, and the app commands
   `secret_get` / `secret_set` / `secret_delete`, `idle_seconds`, `set_tray_status`, `set_tray_menu`,
   `set_global_shortcut`, `check_update`, `install_update`, `set_wake_plan`, `notify_friendly`, `prompt_open`,
   `prompt_focus`, `prompt_close`, `open_external`, `list_browsers`, `get_browser`, `set_browser`, `pick_browser` (every
@@ -267,6 +304,9 @@ required" screen send you to the Store listing instead.
   Meeting detection adds no command and no permission either: the UI turns it on with `set_wake_plan`
   (`micEverySeconds`), the heartbeat sends `mic` events (known app ids only) to the `main` window, and its
   notification buttons (`meeting-generic`, `meeting-switch`, `meeting-back`, `meeting-stop`) join `notify::ACTION_IDS`.
+- No tray permission for any window: `default.json` lists the core defaults one by one (`core:app`, `event`, `image`,
+  `menu`, `path`, `resources`, `webview`, `window`) instead of `core:default`, which includes `core:tray:default` and
+  would let the webview create a second tray icon. The tray is built once, in Rust (a Rust test checks both).
 - `src-tauri/capabilities/prompt.json`, window `prompt` (the "Still there?" window): `core:event:allow-listen` /
   `allow-unlisten` (its content) and `prompt_view`, `prompt_answer`, `prompt_show_main` ("Open TimeTrack"). No
   keychain, updater, tray, network, opener, notification, window or autostart permission.
