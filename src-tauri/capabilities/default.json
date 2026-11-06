@@ -4,16 +4,20 @@
   "description": "Main window: API calls to the user's own server through beacon_fetch only (Rust HTTP client with TLS public-key pinning for the official Beacon host, docs/PINNING.md; HTTPS, or loopback for development; no HTTP plugin), and the app's own commands (keychain, tray, updater, heartbeat, notifications, the prompt window, links through open_external in the browser chosen with set_browser / pick_browser (the custom-browser file dialog is opened from Rust, so the webview has no dialog permission), writing copied links to the clipboard); the main window may resize and move itself (\"Compact view\" / \"Full view\"). Each app command is declared in build.rs and granted here per window.",
   "windows": ["main"],
   "permissions": [
-    "core:default",
+    "core:app:default",
+    "core:event:default",
+    "core:image:default",
+    "core:menu:default",
+    "core:path:default",
+    "core:resources:default",
+    "core:webview:default",
+    "core:window:default",
     "core:window:allow-set-theme",
     "core:window:allow-set-size",
     "core:window:allow-set-position",
     "core:window:allow-unmaximize",
     "clipboard-manager:allow-write-text",
     "notification:default",
-    "autostart:allow-enable",
-    "autostart:allow-disable",
-    "autostart:allow-is-enabled",
     "process:allow-restart",
     "allow-secret-get",
     "allow-secret-set",
@@ -36,6 +40,8 @@
     "allow-list-browsers",
     "allow-get-browser",
     "allow-set-browser",
-    "allow-pick-browser"
+    "allow-pick-browser",
+    "allow-set-autostart",
+    "allow-get-autostart"
   ]
 }

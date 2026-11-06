@@ -45,6 +45,53 @@ Likely 0.5.1.
   `dtolnay/rust-toolchain` now gets `toolchain: stable` as an input, since the ref no longer names it. That action is
   pinned to a head of its `stable` branch, which Dependabot cannot track: refresh it by hand (CONTRIBUTING.md).
 
+### Fixed
+
+- **Two TimeTrack icons in the Windows tray** (two copies running in the background). Causes and fixes:
+  - No single-instance guard: opening TimeTrack from the Start menu or a shortcut while it was hidden in the tray
+    started a second copy. `tauri-plugin-single-instance` (2.5) is now the first plugin: a second launch exits at
+    once and shows, unminimises and focuses the running window; a second start at login (`--hidden`) just exits
+    (`on_second_launch`, `src-tauri/src/lib.rs`). Windows: per-session named mutex; macOS: local socket; Linux: D-Bus
+    name on the session bus (no session bus: the app starts unguarded, as before; AppImage and .deb alike).
+  - Duplicate start-at-login entries: the autostart plugin writes one `Run` value named `TimeTrack` with the
+    executable path at the time; older installs can leave others (the 0.1.0 `.msi` copy in Program Files, which the
+    0.5.0 installer left in place when that copy was kept; a per-machine `HKLM` value written by an elevated copy; a
+    value under another name). At start, an installed copy (release build, direct-download channel, running from
+    `%LOCALAPPDATA%\TimeTrack` or `Program Files\TimeTrack`) keeps *Start at login* as one `HKCU` value for itself,
+    with the path quoted, and removes the app's other entries (`HKLM` only when allowed; new
+    `src-tauri/src/autostart.rs`, unit-tested). Only the app's own entries are touched (value name `TimeTrack` /
+    `time-track-desktop`, executable `TimeTrack.exe` / `time-track-desktop.exe`, in an install folder); an HKCU
+    `TimeTrack` value of another product is never overwritten. Task Manager's *Disabled* (`StartupApproved\Run`) is
+    kept, also when the disabled entry was the one removed; start-at-login is never switched on when none of the
+    app's entries existed. The installer (`windows/installer-hooks.nsh`) now moves the app's value pointing at the
+    0.1.0 copy to this install also when that copy is kept, and removes the app's per-machine `TimeTrack` value when
+    it runs with administrator rights; both only for a command starting the app's executable in a `TimeTrack` folder.
+  - *Start at login* in Settings no longer goes through the autostart plugin on Windows (new command
+    `set_autostart`, main window only; `autostart:allow-enable` / `allow-disable` removed from the capability): the
+    plugin wrote the path unquoted, and from an elevated process to HKLM (its "dynamic" mode), for every user of the
+    machine. Now on = one quoted HKCU value for the running executable (any install folder), marked enabled in Task
+    Manager, the app's other entries (other names, HKLM) removed; off = every entry of the app removed; refused when
+    another product uses the value name. Switching on is also refused, with a message in Settings, when TimeTrack
+    runs as administrator or is not the installed copy (switching off always works). Settings reads the state with
+    `get_autostart` (the app's own HKCU value and its Task Manager state only; no `autostart:*` permission is left).
+    macOS and Linux still use the plugin. At start, a copy installed in a
+    custom folder (the one the installer records, or any copy whose HKCU value already starts it) gets its value
+    quoted; the installer writes the path quoted (`"<install dir>\time-track-desktop.exe" --hidden`) and only
+    matches commands that *start* with one of the app's executables, the path ending there (end, space or closing
+    quote: `timetrack.exe.evil.exe` is not `timetrack.exe`, in the app either).
+  - macOS: the plugin's socket lives in the shared `/tmp` (not configurable upstream): another local account could
+    keep TimeTrack from starting. Documented in SECURITY.md → *Known limitations*; upstream issue drafted, not
+    yet filed.
+  - Tray created twice in one process: it never was (one `TrayIconBuilder`, from `setup`), now guarded by id, and the
+    main window no longer gets `core:tray:default` through `core:default` (the core defaults are listed one by one
+    without the tray), so the webview cannot create another tray icon. Rust tests check all three.
+- `installer-upgrade-test.yml` / `scripts/windows/upgrade-test.ps1`: from 0.5.1 on, each scenario seeds the
+  start-at-login entries older versions could leave and checks that exactly one `HKCU` `TimeTrack` value (quoted) for
+  the new executable remains once the app has started, and that a second launch exits at once with one process left.
+  Two new scenarios: an entry disabled in Task Manager (stays disabled) and another vendor's "TimeTrack" entries
+  (left untouched).
+- README → *Two TimeTrack icons in the tray*: how to check and remove duplicates by hand on Windows.
+
 ## [0.5.0] - 2026-11-05
 
 **Upgrading on Windows from 0.1.0 (`.msi`):** the in-app update installs in passive mode, so it removes a leftover

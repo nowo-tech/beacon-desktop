@@ -52,6 +52,19 @@ export function errorDetails(error: unknown, context: ErrorContext): string {
   ].join('\n');
 }
 
+/** Start at login refused by the host (src-tauri/src/autostart.rs, `autostart:<code>: …`), with its own message. */
+const AUTOSTART_TEXT: Record<string, MessageKey> = {
+  elevated: 'errAutostartElevated',
+  not_installed: 'errAutostartNotInstalled',
+  taken: 'errAutostartTaken',
+};
+
+function autostartRefusal(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  const code = /^autostart:([a-z_]+):/.exec(message)?.[1];
+  return code !== undefined && code in AUTOSTART_TEXT ? code : null;
+}
+
 /** Maps any failure to the error catalogue (UX request R2 / proposal §3 G). */
 export function describeError(error: unknown, context: ErrorContext): ErrorView {
   const host = hostOf(context.server);
@@ -63,6 +76,8 @@ export function describeError(error: unknown, context: ErrorContext): ErrorView 
     actions,
     details: errorDetails(error, context),
   });
+  const autostart = autostartRefusal(error);
+  if (autostart !== null) return view(`autostart_${autostart}`, 'errAutostartTitle', AUTOSTART_TEXT[autostart], ['copy']);
   if (!(error instanceof ApiError)) return view('generic', 'errGenericTitle', 'errGenericText', ['retry', 'copy']);
   if (isUntrustedCertificate(error)) return view('untrusted_certificate', 'errUntrustedTitle', 'errUntrustedText', ['retry', 'copy']);
   if (error.isNetwork) return view('unreachable', 'errUnreachableTitle', 'errUnreachableText', ['retry', 'copy']);
