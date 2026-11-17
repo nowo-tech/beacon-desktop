@@ -14,6 +14,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Manual run on any ref (Actions → Run workflow, or `gh workflow run ci.yml --ref <branch>`).
+  workflow_dispatch:
 
 permissions:
   contents: read
