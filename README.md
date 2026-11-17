@@ -3,7 +3,7 @@
 Tray app (Tauri 2) to start, stop and switch your [symfony-beacon](https://github.com/nowo-tech/symfony-beacon) time
 tracking. Talks to the TimeTrackBundle **1.9.0** client API only. Windows, macOS and Linux. English and Spanish.
 
-<img src="docs/images/desktop-device-code-light.png" alt="Device sign-in code" width="300"> <img src="docs/images/desktop-timer-light.png" alt="Running timer and task list" width="300">
+<img src="docs/images/desktop-device-code-light.webp" alt="Device sign-in code" width="300"> <img src="docs/images/desktop-timer-light.webp" alt="Running timer and task list" width="300">
 
 It records only the time you choose to track — see [PRIVACY.md](PRIVACY.md).
 
@@ -145,9 +145,9 @@ computer and applied to the title bar too. The robot from Beacon shows up in a f
 in!", saved, a timer left running for 8 hours, no results, offline, updates) and stays out of the running timer and the
 task list; which pose goes where, and where the art comes from: [public/mascot/README.md](public/mascot/README.md).
 
-<img src="docs/images/desktop-welcome-light.png" alt="You're in! card after signing in, light theme" width="200"> <img src="docs/images/desktop-long-running-dark.png" alt="Still going strong? nudge on a timer running for 9 hours, dark theme" width="200"> <img src="docs/images/desktop-settings-theme-dark.png" alt="Settings with the System, Light and Dark theme switch, dark theme" width="200">
+<img src="docs/images/desktop-welcome-light.webp" alt="You're in! card after signing in, light theme" width="200"> <img src="docs/images/desktop-long-running-dark.webp" alt="Still going strong? nudge on a timer running for 9 hours, dark theme" width="200"> <img src="docs/images/desktop-settings-theme-dark.webp" alt="Settings with the System, Light and Dark theme switch, dark theme" width="200">
 
-<img src="docs/images/desktop-saved-light.png" alt="Saved notice with the mascot after stopping a timer, light theme" width="200"> <img src="docs/images/desktop-no-results-dark.png" alt="No search results with the reading robot, dark theme" width="200"> <img src="docs/images/desktop-offline-light.png" alt="Working offline card, light theme" width="200">
+<img src="docs/images/desktop-saved-light.webp" alt="Saved notice with the mascot after stopping a timer, light theme" width="200"> <img src="docs/images/desktop-no-results-dark.webp" alt="No search results with the reading robot, dark theme" width="200"> <img src="docs/images/desktop-offline-light.webp" alt="Working offline card, light theme" width="200">
 
 ### Friendly messages
 
@@ -305,14 +305,14 @@ what TimeTrack deliberately will not do: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ### Updates
 
-<img src="docs/images/desktop-update-card-light.png" alt="Update card with What's new, light theme" width="200"> <img src="docs/images/desktop-update-card-dark.png" alt="Update card with What's new, dark theme" width="200"> <img src="docs/images/desktop-update-progress-light.png" alt="Update download progress" width="200">
+<img src="docs/images/desktop-update-card-light.webp" alt="Update card with What's new, light theme" width="200"> <img src="docs/images/desktop-update-card-dark.webp" alt="Update card with What's new, dark theme" width="200"> <img src="docs/images/desktop-update-progress-light.webp" alt="Update download progress" width="200">
 
-<img src="docs/images/desktop-update-running.png" alt="Update offered while a timer runs: After I stop" width="200"> <img src="docs/images/desktop-update-required.png" alt="Update required screen with Remind me later" width="200"> <img src="docs/images/desktop-update-progress-dark.png" alt="Update download progress, dark theme" width="200">
+<img src="docs/images/desktop-update-running.webp" alt="Update offered while a timer runs: After I stop" width="200"> <img src="docs/images/desktop-update-required.webp" alt="Update required screen with Remind me later" width="200"> <img src="docs/images/desktop-update-progress-dark.webp" alt="Update download progress, dark theme" width="200">
 
 Microsoft Store build (`TIMETRACK_CHANNEL=store`): the Store updates the app, so Settings → About and the "update
 required" screen send you to the Store listing instead.
 
-<img src="docs/images/desktop-store-about.png" alt="Settings, About: Updates come from the Microsoft Store" width="200"> <img src="docs/images/desktop-store-update-required.png" alt="Update required in the Store build: Open Microsoft Store" width="200">
+<img src="docs/images/desktop-store-about.webp" alt="Settings, About: Updates come from the Microsoft Store" width="200"> <img src="docs/images/desktop-store-update-required.webp" alt="Update required in the Store build: Open Microsoft Store" width="200">
 
 ## Security
 
@@ -395,12 +395,25 @@ pnpm dev                  # UI in a browser (fake platform) on http://127.0.0.1:
 pnpm tauri dev            # the real app
 pnpm lint && pnpm typecheck && pnpm test:coverage   # unit tests, ≥ 90% coverage
 pnpm exec playwright install chromium && pnpm test:e2e
-pnpm screenshots          # regenerates docs/images/*.png (real UI, fake platform, mock Beacon, placeholder data)
+pnpm screenshots          # regenerates docs/images/*.webp (real UI, fake platform, mock Beacon, placeholder data; captured as PNG, converted with sharp)
 (cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test)
 ```
 
 The mock's device page is `http://127.0.0.1:8787/device` (approve the code shown by the app). `src/api/` is shared
 verbatim with [time-track-extension](https://github.com/nowo-tech/time-track-extension).
+
+## Tests and coverage
+
+Unit tests (Vitest, V8 coverage) gate the build at 90% for statements, branches, functions and lines (`pnpm test:coverage`);
+the end-to-end suite (Playwright) runs against the real UI on the fake platform and the mock API (`pnpm test:e2e`), and
+the Rust side runs `cargo test`. Coverage measured by CI on `main`:
+
+| Metric | Covered |
+| --- | --- |
+| Statements | 98.35% (5068/5153) |
+| Branches | 94.49% (4363/4617) |
+| Functions | 97.79% (1151/1177) |
+| Lines | 99.49% (4306/4328) |
 
 ## Release
 

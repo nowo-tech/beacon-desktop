@@ -8,6 +8,11 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 Everything after 0.5.1: meeting reminders, the session token out of the webview (security review appendices FY
 and GM) and the backlog fixes. Not released yet (release freeze).
 
+### Documentation
+
+- Repository metadata (REQ compliance, Phase C): `.github/CODEOWNERS`, `.github/PULL_REQUEST_TEMPLATE.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1, linked from CONTRIBUTING), the archive block in `.gitignore`, and a "Tests and coverage" section in the README with the measured percentages.
+- The README screenshots are WebP (REQ-DEMO-013): `pnpm screenshots` captures the PNGs and `scripts/to-webp.mjs` (sharp, a new dev dependency) converts them and removes the PNGs; the 27 images in `docs/images/` are re-captured from the real UI, not converted from the old files. The two "update required" scenarios had drifted from the 0.6.0 version line and now use 0.7.0, and the capture config retries a scenario once the mock server settles (`retries: 2`).
+
 ### Added
 
 - **Meeting reminders** (contract §23, spec 210 FR-008 / FR-009 / FR-011; needs TimeTrack 1.14 with calendars on in
