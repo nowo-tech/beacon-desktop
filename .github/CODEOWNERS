@@ -1,0 +1,17 @@
+# CODEOWNERS for time-track-desktop
+# Default owner for everything in the repository
+* @HecFranco
+
+# GitHub metadata and workflows
+/.github/ @HecFranco
+
+# Source code
+/src/ @HecFranco
+/src-tauri/ @HecFranco
+
+# Tests
+/tests/ @HecFranco
+
+# Scripts / tooling
+/scripts/ @HecFranco
+/mock-server/ @HecFranco

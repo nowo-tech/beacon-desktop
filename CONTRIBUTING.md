@@ -1,5 +1,12 @@
 # Contributing
 
+## Code of Conduct
+
+This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to
+uphold it. Please report unacceptable behavior to **hectorfranco@nowo.tech**.
+
+## How to contribute
+
 1. Node 24, pnpm (`packageManager` in `package.json`; `corepack enable`), Rust stable and the Tauri prerequisites.
 2. `pnpm install`, then `pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm test:e2e` and, in `src-tauri/`,
    `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` must pass (coverage ≥ 90%).
