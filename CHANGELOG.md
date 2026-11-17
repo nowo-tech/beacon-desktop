@@ -3,10 +3,12 @@
 All notable changes to this project are documented here ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/)).
 
-## [0.6.0] - unreleased
+## [Unreleased]
+
+## [0.6.0] - 2026-11-18
 
 Everything after 0.5.1: meeting reminders, the session token out of the webview (security review appendices FY
-and GM) and the backlog fixes. Not released yet (release freeze).
+and GM) and the backlog fixes.
 
 ### Documentation
 
