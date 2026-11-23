@@ -7,7 +7,7 @@ import { browserPlatform } from '../../src/platform';
 import { DesktopApp } from '../../src/ui/app';
 import en from '../../src/i18n/en.json';
 import es from '../../src/i18n/es.json';
-import { nodeFetch, startMock } from './helpers';
+import { nodeFetch, startMock, until } from './helpers';
 
 /** What the Rust command rejects with on a pin mismatch (src-tauri/src/pinning.rs, PinMismatch). */
 const MISMATCH = `${UNTRUSTED_CERTIFICATE}: unexpected certificate for beacon.nowo.tech (pin set v1)`;
@@ -133,7 +133,7 @@ describe('app: pin mismatch and the Settings line', () => {
     const $ = (selector: string) => root.querySelector(selector) as HTMLElement | null;
     await app.init();
     const done = app.connect(env.url);
-    await tick();
+    await until(() => $('#user-code') !== null, 'the device code');
     await env.control('device/approve', { userCode: $('#user-code')?.textContent });
     await done;
     expect(app.view).toBe('main');

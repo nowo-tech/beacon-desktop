@@ -41,3 +41,12 @@ export async function startMock() {
   };
   return { mock, url, control };
 }
+
+/** Polls the event loop until `ready()` holds (it may ask the mock server); fails with `what` after `timeoutMs`. */
+export async function until(ready: () => boolean | Promise<boolean>, what: string, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await ready())) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}

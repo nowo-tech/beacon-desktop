@@ -8,7 +8,7 @@ import { applyTheme, forcedTheme, isTheme, THEMES } from '../../src/lib/theme';
 import { browserPlatform } from '../../src/platform';
 import { DesktopApp, LONG_RUNNING_HOURS } from '../../src/ui/app';
 import { ERROR_POSES, MOMENTS, art, variant } from '../../src/ui/mascot';
-import { nodeFetch, startMock } from './helpers';
+import { nodeFetch, startMock, until } from './helpers';
 
 let env: Awaited<ReturnType<typeof startMock>>;
 const tick = (ms = 40) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -39,7 +39,7 @@ async function signedIn(options: Parameters<typeof mount>[0] = {}) {
   const ui = mount(options);
   await ui.app.init();
   const done = ui.app.connect(env.url);
-  await tick();
+  await until(() => ui.$('#user-code') !== null, 'the device code');
   await env.control('device/approve', { userCode: ui.$('#user-code').textContent });
   await done;
   expect(ui.app.view).toBe('main');
