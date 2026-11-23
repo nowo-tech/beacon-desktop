@@ -60,7 +60,7 @@ Meeting detection reads an activity signal, so it follows the rule below for any
 
 | Item | Status | Privacy risk | Owner |
 |---|---|---|---|
-| **Meeting reminders**: a reminder before each meeting (5 min by default, 1–120 or off), *Join* and *Snooze*, a start prompt when a timer runs (*Keep* / *Pause* / *Track the meeting*, opt-in automatic pause), *Today's meetings* in the window and the tray; only inside working hours and never on days off unless switched on | Done, unreleased (desktop ≥ 0.6, contract §23) | 1 (data from Beacon, local cache ≤ 48 h) | desktop; Beacon (calendars, sync, DPIA) and TimeTrackBundle 1.14 (`GET me/meetings`) |
+| **Meeting reminders**: a reminder before each meeting (5 min by default, 1–120 or off), *Join* and *Snooze*, a start prompt when a timer runs (*Keep* / *Pause* / *Track the meeting*, opt-in automatic pause), *Today's meetings* in the window and the tray; only inside working hours and never on days off unless switched on | Done / 0.6.0 (contract §23) | 1 (data from Beacon, local cache ≤ 48 h) | desktop; Beacon (calendars, sync, DPIA) and TimeTrackBundle 1.14 (`GET me/meetings`) |
 
 Rules (contract §22–§23, owner decisions Q-O18…Q-O22): the meetings come from Beacon, which owns the calendar
 connection, the sync, retention and the DPIA; the desktop asks for `meetings:read` explicitly; the reminders are on by
@@ -185,3 +185,49 @@ Items 1–10 above are not repeated. Order inside each horizon is the priority.
 |---|---|---|---|
 | **Domains from the extension** (spec 199) | Domains, never full URLs, while the worker's own timer runs | Completes monitoring for browser work | Announced after TimeTrackBundle 1.26; off unless the organisation enables it with a recorded DPIA; you see it first |
 | **Phone companion** | A mobile client or installable web page with a synced timer and an offline queue (section 2) | Tracking away from the computer | A web page in Beacon may be enough |
+
+## 5. Release status (2026-11-23)
+
+| Version | What | Status |
+| --- | --- | --- |
+| 0.1.0 | First desktop client: sign-in, timer, tasks | Released (tag v0.1.0; installers and `stable.json` in Beacon's bucket) |
+| 0.2.0, 0.3.0 | Links back to Beacon; client API contract v0.3 features (idle, offline, privacy) | In the CHANGELOG, never tagged (shipped inside 0.4.0) |
+| 0.4.0 | Updater signatures and auto-update ([release plan](RELEASE-PLAN-0.4.0.md)) | Released (tag v0.4.0; Linux, Windows and macOS builds) |
+| 0.5.0 | Items 1–3 above, meeting detection | Released (tag v0.5.0) |
+| 0.5.1 | TLS public-key pinning for the official Beacon host ([PINNING](PINNING.md)), fixes | In the CHANGELOG, never tagged (absorbed by 0.6.0) |
+| 0.6.0 | Meeting reminders (spec 210), session token out of the webview | Released (tag v0.6.0, 2026-11-18; Linux, Windows and macOS) |
+| after 0.6.0 | Section 4 of this roadmap (docs only) | Merged, unreleased |
+| — | Flaky device-code wait in the unit sign-in helpers | In review (PR #33) |
+
+## 6. Road to 1.0.0 (proposed, pending owner OK)
+
+What is already decided (Beacon decisions D-20261111-06 and D-20261111-07, 2026-11-11): TimeTrack counts as closed
+only when specs 190 (rest), 198, 204 and 199 and the desktop part of spec 210 are done, together with every open
+contract, audit and roadmap item of TimeTrackBundle, this app and the browser extension; then the desktop app is built
+for Linux, Windows and macOS with the updater on and published. Signing stays **updater signatures only** (no Apple
+Developer ID, no Windows code signing). Pomodoro (item 8) and the local timeline (item 9) are out. The original plan
+kept macOS frozen until 1.0.0; the owner turned macOS builds on on 2026-11-17 and 0.6.0 shipped for all three systems.
+
+Proposed order and criterion for 1.0.0 (version numbers from the closure plan, not commitments):
+
+1. **0.7: working-hours register (spec 198)**: clock in, break and clock out from the client API, in the window and the
+   tray, with the offline queue (section 4, *Next*). Not started.
+2. **0.8: leave (spec 204)**: today's leave or day off, with reminders held on those days. Not started.
+3. **0.9: activity monitoring client (spec 199)**: the notice first, a visible indicator, pause, the list of what was
+   captured and delete before upload; off unless the organisation enables it with a recorded DPIA. Needs
+   TimeTrackBundle's monitoring API and a full security audit. Not started.
+4. **Open roadmap items in the closure**: item 4 (estimate, remaining and logged time) once TimeTrackBundle publishes
+   the fields; any item from section 4 the owner keeps in the closure.
+5. **1.0.0 build**: Linux, Windows and macOS through the release workflow, installers and `stable.json` in Beacon's
+   bucket, updater signature checked by an upgrade from the previous version (`installer-upgrade-test.yml`). The
+   unsigned-installer steps stay in the README; the macOS permission re-grant after updates is documented with the
+   monitoring client.
+6. **Repository gates**: CI green on `main` (the 2026-11-22 re-audit found it red, the re-run is green, PR #33 fixes
+   the flaky test) and `main` protected with CI as a required check (REQ-GIT-002, owner setting).
+7. **REQ audit**: the applicable REQ subset (the "Additional repos" rows of the REQ catalog) at 100 % on the 1.0
+   candidate.
+8. **REQ-SEC-004**: a delta security review of the 1.0 candidate against v0.6.0 (0.6.0 is covered), recorded before
+   the tag; the 0.9 monitoring client gets its own full audit first.
+
+Open questions for the owner: which section 4 items belong to the closure (point 4), and whether the extension's
+closure releases must ship before desktop 1.0.0.
