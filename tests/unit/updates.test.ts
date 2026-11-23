@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { browserPlatform } from '../../src/platform';
 import { type Channel, DesktopApp } from '../../src/ui/app';
-import { nodeFetch, startMock } from './helpers';
+import { nodeFetch, startMock, until } from './helpers';
 
 /** 0.4.0 updater UX: update card, "after I stop", forced update (updater minimum and GET me), Store channel. */
 let env: Awaited<ReturnType<typeof startMock>>;
@@ -35,7 +35,7 @@ async function signedIn(options: Parameters<typeof mount>[0] = {}) {
   const ui = mount(options);
   await ui.app.init();
   const done = ui.app.connect(env.url);
-  await tick();
+  await until(() => ui.$('#user-code') !== null, 'the device code');
   await env.control('device/approve', { userCode: ui.$('#user-code').textContent ?? '' });
   await done;
   expect(ui.app.view).toBe('main');

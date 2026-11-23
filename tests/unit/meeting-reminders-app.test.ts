@@ -5,7 +5,7 @@ import { loadLocal } from '../../src/lib/settings';
 import { browserPlatform } from '../../src/platform';
 import { DesktopApp } from '../../src/ui/app';
 import { renderPrompt } from '../../src/ui/prompt';
-import { nodeFetch, startMock } from './helpers';
+import { nodeFetch, startMock, until as untilReady } from './helpers';
 
 let env: Awaited<ReturnType<typeof startMock>>;
 const tick = (ms = 40) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -92,7 +92,7 @@ async function signedIn(options: Options = {}) {
   const $ = <T extends Element = HTMLElement>(selector: string) => root.querySelector(selector) as T;
   await app.init();
   const done = app.connect(env.url);
-  await tick();
+  await untilReady(() => $('#user-code') !== null, 'the device code');
   await env.control('device/approve', { userCode: $('#user-code').textContent });
   await done;
   app.dismissWelcome();
@@ -476,7 +476,7 @@ describe('meeting reminders in the app', () => {
 
   async function signInAs(app: DesktopApp, root: HTMLElement, userId: number) {
     const done = app.connect(env.url);
-    await tick();
+    await untilReady(() => root.querySelector('#user-code') !== null, 'the device code');
     await env.control('device/approve', { userCode: root.querySelector('#user-code')?.textContent, userId });
     await done;
   }

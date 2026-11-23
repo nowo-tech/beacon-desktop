@@ -4,7 +4,7 @@ import type { Timer } from '../../src/api/types';
 import { browserPlatform } from '../../src/platform';
 import { DesktopApp } from '../../src/ui/app';
 import { PromptMount, renderPrompt, type PromptAnswer, type PromptView } from '../../src/ui/prompt';
-import { nodeFetch, startMock } from './helpers';
+import { nodeFetch, startMock, until as untilReady } from './helpers';
 
 let env: Awaited<ReturnType<typeof startMock>>;
 const tick = (ms = 40) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -45,7 +45,7 @@ async function signedIn(setup: (hooks: Hooks) => void = () => undefined, locale:
   const $ = <T extends Element = HTMLElement>(selector: string) => root.querySelector(selector) as T;
   await app.init();
   const done = app.connect(env.url);
-  await tick();
+  await untilReady(() => $('#user-code') !== null, 'the device code');
   await env.control('device/approve', { userCode: $('#user-code').textContent });
   await done;
   expect(app.view).toBe('main');
