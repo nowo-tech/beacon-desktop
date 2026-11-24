@@ -6,7 +6,7 @@ import { axe } from './axe';
  * collect", and the Settings tabs as a vertical list in the full layout (horizontal row with faded edges in compact).
  */
 const MOCK = 'http://127.0.0.1:8787';
-const SIZES = [400, 720, 900, 1280, 1440] as const;
+const SIZES = [400, 720, 900, 1000, 1100, 1280, 1440] as const;
 
 async function control(path: string, body?: unknown) {
   const res = await fetch(`${MOCK}/__mock/${path}`, {
@@ -39,6 +39,24 @@ const tabsFit = (page: Page) =>
     return { cut: cut.map((tab) => tab.id), sideways: list.scrollWidth > list.clientWidth + 1, orientation: list.getAttribute('aria-orientation') };
   });
 
+/** Form controls of every Settings panel wider than, or outside, their panel (each tab opened in turn). */
+const overflowingControls = (page: Page) =>
+  page.locator('#settings').evaluate(async (settings) => {
+    const out: string[] = [];
+    for (const tab of settings.querySelectorAll<HTMLButtonElement>('[role="tab"]')) {
+      tab.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const panel = settings.querySelector(`#${tab.getAttribute('aria-controls')}`) as HTMLElement;
+      const box = panel.getBoundingClientRect();
+      for (const control of panel.querySelectorAll<HTMLElement>('input, select, textarea, button')) {
+        const r = control.getBoundingClientRect();
+        if (r.width > 0 && (r.left < box.left - 1 || r.right > box.right + 1)) out.push(`${tab.id} ${control.id || control.tagName}`);
+      }
+    }
+    (settings.querySelector('#settings-tab-general') as HTMLButtonElement).click();
+    return out;
+  });
+
 test.beforeEach(async () => {
   await control('reset', {});
   await control('config', { deviceInterval: 1 });
@@ -63,12 +81,15 @@ for (const locale of ['en-US', 'es-ES'] as const) {
         widths.settings = await viewWidth(page);
         const tabs = await tabsFit(page);
         await expect(page.locator('#detail')).toBeVisible({ visible: full });
-        if (full) {
+        if (width >= 1100) {
+          // Room for the vertical list beside the options: every tab visible, nothing scrolls sideways.
           expect(tabs, `${width} px`).toEqual({ cut: [], sideways: false, orientation: 'vertical' });
-          expect(await axe(page), `${locale} ${width} settings`).toEqual([]);
         } else {
-          expect(tabs.orientation).toBe('horizontal');
+          // Compact, or a full window whose Settings content is under 34rem: the faded horizontal row above the options.
+          expect(tabs.orientation, `${width} px`).toBe('horizontal');
         }
+        if (full) expect(await axe(page), `${locale} ${width} settings`).toEqual([]);
+        expect(await overflowingControls(page), `${width} px`).toEqual([]);
         await page.locator('#settings-tab-general').click();
         await page.locator('#open-privacy').click();
         await expect(page.locator('#privacy')).toBeVisible();

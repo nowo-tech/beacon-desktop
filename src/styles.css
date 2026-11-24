@@ -351,13 +351,20 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 /* Panels carry no box of their own (hidden="until-found" keeps it); their first block starts flush, every tab alike. */
 .tabpanel > :first-child, .tabpanel > :first-child > :first-child { margin-top: 0; }
 /*
- * Full layout: the tabs become a vertical list on the left of the panels (aria-orientation="vertical", ↑/↓), so every
+ * Full layout with room for it: the tabs become a vertical list on the left of the panels (aria-orientation="vertical", ↑/↓), so every
  * tab fits whatever the language or font, next to the detail pane. All panels share the second grid cell. The selected
  * tab keeps its colour and gets a side bar (a border, no room taken) instead of the underline.
  */
-#app[data-layout='full'] .tabs { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 1.25rem; align-items: start; }
-#app[data-layout='full'] .tabs > .tablist { grid-column: 1; grid-row: 1; }
-#app[data-layout='full'] .tabs > .tabpanel { grid-column: 2; grid-row: 1; min-width: 0; }
+/* A container query on the Settings content (not the viewport): below 34rem the options column would be too narrow next
+   to the vertical list, so the horizontal row stays (app.ts switches aria-orientation at the same width). */
+#settings { container: settings / inline-size; }
+@container settings (min-width: 34rem) {
+  #app[data-layout='full'] .tabs { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 1.25rem; align-items: start; }
+  #app[data-layout='full'] .tabs > .tablist { grid-column: 1; grid-row: 1; }
+  #app[data-layout='full'] .tabs > .tabpanel { grid-column: 2; grid-row: 1; min-width: 0; }
+}
+/* No form control is ever wider than its column. */
+input, select, textarea, button { max-width: 100%; }
 .tablist[aria-orientation='vertical'] {
   flex-direction: column;
   margin: 0;

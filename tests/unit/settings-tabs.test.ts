@@ -236,6 +236,25 @@ describe('Settings tabs', () => {
     ui.app.destroy();
   });
 
+  it('stay a horizontal row in the full layout while the Settings content is narrower than 34rem', async () => {
+    const width = { value: 1280 };
+    const ui = await signedIn('en', width);
+    window.dispatchEvent(new Event('resize'));
+    ui.app.show('settings');
+    const settings = ui.$('#settings');
+    const tablist = ui.$('[role="tablist"]');
+    const content = { width: 349 };
+    settings.getBoundingClientRect = () => ({ width: content.width }) as DOMRect;
+    // Any render measures the content again (the ResizeObserver does the same in the webview).
+    ui.app.show('settings');
+    expect(ui.root.getAttribute('data-layout')).toBe('full');
+    expect(tablist.getAttribute('aria-orientation')).toBe('horizontal');
+    content.width = 34 * 16;
+    ui.app.show('settings');
+    expect(tablist.getAttribute('aria-orientation')).toBe('vertical');
+    ui.app.destroy();
+  });
+
   it('have a name in every locale for every tab', () => {
     for (const messages of [en, es] as Record<string, string>[]) {
       for (const id of SETTINGS_TABS) expect(messages[`settingsTab${id[0].toUpperCase()}${id.slice(1)}`]).toBeTruthy();

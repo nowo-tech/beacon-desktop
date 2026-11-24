@@ -110,7 +110,8 @@ a ghost Windows removes when the mouse passes over it.
 - **Settings in tabs**: *General* (theme, browser for Beacon links, start at login, what we collect, sign out),
   *Shortcuts*, *Timer* ("Still there?", working without a timer, pause on lock), *Schedule*, *Notifications*
   (friendly messages, desktop notifications), *Meetings* and *Updates* (version, *Check for updates*): a row in the
-  compact view (← / →), a vertical list beside the options in the full view (↑ / ↓), so no tab is ever cut off. Home
+  compact view (← / →), a vertical list beside the options in the full view when its centre is wide enough (↑ / ↓,
+  from about 1100 px; narrower, the row again), so no tab is ever cut off. Home
   and End jump to the first and last tab; the last tab opened is remembered on this computer.
 - Device-flow sign-in (no password typed in the app); `401` asks you to sign in again.
 - Task search, start / stop / switch. Offline queue: actions taken offline (and "Still there?" answers) are kept on this
