@@ -208,6 +208,8 @@ interface MainRegions {
   list: HTMLElement;
   /** Full layout, "My time": today's entries and the week by day. */
   time: HTMLElement;
+  /** The only part of the main screen that scrolls: banners, pinned + recent, task list, "My time". */
+  scroller: HTMLElement;
   footer: HTMLElement;
 }
 
@@ -3195,6 +3197,7 @@ export class DesktopApp {
     this.renderMessages();
     this.renderToasts();
     this.renderPanes();
+    this.root.setAttribute('data-view', this.view);
     if (this.view === 'main') {
       this.renderMain();
     } else {
@@ -3768,10 +3771,12 @@ export class DesktopApp {
       quick: h('section', { class: 'list-section', id: 'quick-section' }),
       list: h('section', { class: 'list-section', id: 'list-section' }),
       time: h('section', { class: 'list-section', id: 'time-section', attrs: { hidden: true, 'aria-labelledby': 'time-title' } }),
+      scroller: h('div', { class: 'task-scroll', id: 'task-scroll' }),
       footer: h('footer', { class: 'footer' }),
       modal,
       prompt: new PromptMount(modal, { onAnswer: (answer) => void this.answerPrompt(answer), onExpired: () => void this.tick(), now: this.now }),
     };
+    regions.scroller.append(regions.banners, regions.quick, regions.list, regions.time);
     regions.root.addEventListener('keydown', (event) => {
       if (event.target !== search && !regions.modal.contains(event.target as Node)) this.onListKey(event);
     });
@@ -3783,15 +3788,14 @@ export class DesktopApp {
     };
     regions.root.addEventListener('focusin', pick);
     regions.root.addEventListener('click', pick);
+    // The timer, totals, search and footer stay in place; only the lists (and the banners above them) scroll, inside
+    // their own container, so the window itself never scrolls.
     regions.root.append(
-      regions.banners,
       regions.timer,
       regions.totals,
       h('div', { class: 'search' }, icon('search'), search),
       h('p', { class: 'sr-only', id: 'search-hint' }, t('searchHint')),
-      regions.quick,
-      regions.list,
-      regions.time,
+      regions.scroller,
       regions.footer,
       regions.modal,
     );
@@ -4163,7 +4167,8 @@ export class DesktopApp {
   /** "Pin a task": scrolls to the list, marks the pin buttons for a moment and says what they do. */
   showPinHint(): void {
     const list = this.main?.list;
-    list?.scrollIntoView?.({ behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+    // `container: 'nearest'`: only the list's own scroller moves, never the window.
+    list?.scrollIntoView?.({ behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start', container: 'nearest' } as ScrollIntoViewOptions);
     list?.classList.add('pin-hint');
     setTimeout(() => list?.classList.remove('pin-hint'), 4000);
     this.setNotice(PIN_HINT[this.messageLocale()]);

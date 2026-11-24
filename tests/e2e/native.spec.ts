@@ -156,7 +156,8 @@ test('the in-app toast never covers the last task rows', async ({ page }) => {
   const toast = page.locator('#cheer');
   await expect(toast).toBeVisible();
   await expect(page.locator('#app')).toHaveClass(/with-toasts/);
-  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  // The list scrolls inside its own container; the toast's room is added below its last row.
+  await page.locator('#task-scroll').evaluate((el) => el.scrollTo(0, el.scrollHeight));
   const last = page.locator('#tasks li').last();
   const [row, card] = [await last.boundingBox(), await toast.boundingBox()];
   expect(row !== null && card !== null && row.y + row.height <= card.y).toBe(true);

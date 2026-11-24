@@ -115,11 +115,11 @@ for (const scheme of ['light', 'dark'] as const) {
     await noOverlap(page, `${scheme} full`);
     await axe(page, `${scheme} full`);
 
-    // The running timer stays in view while the task list scrolls.
+    // The running timer stays in view while the task list scrolls (inside its own container).
     await page.locator('#detail-start').click();
     await expect(page.locator('#timer-task')).toHaveText('Fix invoice rounding bug');
     await page.setViewportSize({ width: FULL.width, height: 560 });
-    await page.locator('#main-pane').evaluate((el) => el.scrollTo(0, el.scrollHeight));
+    await page.locator('#task-scroll').evaluate((el) => el.scrollTo(0, el.scrollHeight));
     const timer = await page.locator('#timer').boundingBox();
     const header = await page.locator('.bar').boundingBox();
     expect(timer?.y).toBeGreaterThanOrEqual((header?.y ?? 0) + (header?.height ?? 0) - 1);

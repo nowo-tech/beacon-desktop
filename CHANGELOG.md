@@ -5,6 +5,19 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+### Changed
+
+- **The window no longer scrolls; the task list does** (owner request 2026-11-24): the header, the running timer,
+  the totals, the search and the footer stay in place and only the lists (with the banners above them) scroll, inside
+  their own container (flex with `min-height: 0`, no fixed heights, so it follows window resizes;
+  `overscroll-behavior: contain`, reserved scrollbar room, scroll padding so a focused row and its focus ring stay in
+  view). "Pin a task" scrolls only that container. Other screens scroll inside their pane, never the window.
+
+### Tests
+
+- Playwright: `shell.spec.ts` checks that with 48 tasks only the list scrolls (wheel and End key), the window never
+  does. The mock server takes `extraTasks` for long lists.
+
 ## [0.6.0] - 2026-11-18
 
 Everything after 0.5.1: meeting reminders, the session token out of the webview (security review appendices FY
