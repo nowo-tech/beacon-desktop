@@ -32,6 +32,11 @@ All notable changes to this project are documented here ([Keep a Changelog](http
   control of any Settings panel overflows its column, the detail pane is visible in the full layout, axe passes, and the
   keyboard works in both orientations; the faded row still scrolls at 400 px. `layout.spec.ts` expects the detail pane
   on Settings.
+- Rust: the sign-in decline-pause test (`declines_pause_the_dialog_doubling_up_to_five_minutes`) no longer sleeps. It
+  failed on GitHub's macOS runners because a 60 ms `thread::sleep` overshot the 20 ms margin left before an 80 ms pause
+  ended, so the pause was already over when the test expected `sign_in_wait`. The session now reads the wall clock
+  through an injectable clock (`SystemTime::now` in the app, a hand-moved fake in tests), and the test checks the real
+  10 s / 20 s pauses at exact instants, including one millisecond before and at each end. The pause logic is unchanged.
 
 ## [0.7.0] - 2026-11-24
 

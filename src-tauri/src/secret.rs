@@ -405,6 +405,8 @@ pub struct Session {
     decline_pause: Duration,
     /// Where the pause is kept across restarts (GO-I2): `sign-in-pause.json` in the app data folder.
     declines_file: Option<PathBuf>,
+    /// The wall clock the pause is measured with (`SystemTime::now`; a fake one in tests, so they never sleep).
+    clock: Arc<dyn Fn() -> SystemTime + Send + Sync>,
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -496,7 +498,19 @@ impl Session {
             declines: Mutex::new(Declines::default()),
             decline_pause,
             declines_file: None,
+            clock: Arc::new(SystemTime::now),
         }
+    }
+
+    /// Measures the pause with `clock` instead of the system clock (set it before [`Self::with_declines_file`]).
+    #[cfg(test)]
+    fn with_clock(mut self, clock: impl Fn() -> SystemTime + Send + Sync + 'static) -> Self {
+        self.clock = Arc::new(clock);
+        self
+    }
+
+    fn now(&self) -> SystemTime {
+        (self.clock)()
     }
 
     /// Keeps the pause after a decline in `path` (read now, written on every change), so a restart does not end it.
@@ -507,7 +521,7 @@ impl Session {
                 .declines
                 .get_mut()
                 .unwrap_or_else(PoisonError::into_inner) =
-                Declines::decode(&text, SystemTime::now(), longest);
+                Declines::decode(&text, self.now(), longest);
         }
         self.declines_file = Some(path);
         self
@@ -616,7 +630,7 @@ impl Session {
             let longest = decline_pause(self.decline_pause, MAX_DECLINES);
             if declines
                 .until
-                .is_some_and(|until| pause_running(until, SystemTime::now(), longest))
+                .is_some_and(|until| pause_running(until, self.now(), longest))
             {
                 return Err(SIGN_IN_WAIT.into());
             }
@@ -629,7 +643,7 @@ impl Session {
             } else {
                 declines.count = (declines.count + 1).min(MAX_DECLINES);
                 declines.until =
-                    Some(SystemTime::now() + decline_pause(self.decline_pause, declines.count));
+                    Some(self.now() + decline_pause(self.decline_pause, declines.count));
             }
             self.save_declines(&declines);
         }
@@ -1273,6 +1287,28 @@ pub mod tests {
         assert!(!person_at_the_app(false, 0));
     }
 
+    /// A wall clock the test moves by hand: the pause is checked at exact instants, never with real sleeps (a
+    /// sleep on a loaded runner, e.g. GitHub's macOS VMs, can overshoot by tens of milliseconds).
+    #[derive(Clone)]
+    struct FakeClock(Arc<Mutex<SystemTime>>);
+
+    impl FakeClock {
+        fn new() -> Self {
+            Self(Arc::new(Mutex::new(
+                UNIX_EPOCH + Duration::from_secs(1_800_000_000),
+            )))
+        }
+
+        fn advance(&self, by: Duration) {
+            *self.0.lock().unwrap() += by;
+        }
+
+        fn reader(&self) -> impl Fn() -> SystemTime + Send + Sync + 'static {
+            let at = self.0.clone();
+            move || *at.lock().unwrap()
+        }
+    }
+
     #[test]
     fn declines_pause_the_dialog_doubling_up_to_five_minutes() {
         let base = DECLINE_PAUSE;
@@ -1280,11 +1316,9 @@ pub mod tests {
         assert_eq!(pauses, [10, 20, 40, 80, 160, 300, 300, 300]);
         assert_eq!(decline_pause(base, 1000), DECLINE_PAUSE_MAX);
         let store = MemoryStore::default();
-        let session = Session::with_timing(
-            Box::new(store.clone()),
-            SIGN_IN_WINDOW,
-            Duration::from_millis(40),
-        );
+        let clock = FakeClock::new();
+        let session = Session::with_timing(Box::new(store.clone()), SIGN_IN_WINDOW, DECLINE_PAUSE)
+            .with_clock(clock.reader());
         let mut shown = 0;
         assert_eq!(
             session
@@ -1307,8 +1341,16 @@ pub mod tests {
             SIGN_IN_WAIT
         );
         assert_eq!(shown, 1);
-        std::thread::sleep(Duration::from_millis(60));
-        // Second decline: twice as long.
+        // Still refused a moment before the 10 s end.
+        clock.advance(Duration::from_millis(9_999));
+        assert_eq!(
+            session
+                .begin_sign_in(&url(A), None, true, || panic!("no dialog"))
+                .unwrap_err(),
+            SIGN_IN_WAIT
+        );
+        clock.advance(Duration::from_millis(1));
+        // Second decline: twice as long (20 s).
         assert_eq!(
             session
                 .begin_sign_in(&url(A), None, true, || {
@@ -1318,15 +1360,23 @@ pub mod tests {
                 .unwrap_err(),
             SIGN_IN_DECLINED
         );
-        std::thread::sleep(Duration::from_millis(60));
+        // Past the first pause's length, but not the second's.
+        clock.advance(Duration::from_secs(15));
         assert_eq!(
             session
-                .begin_sign_in(&url(A), None, true, || true)
+                .begin_sign_in(&url(A), None, true, || panic!("no dialog"))
                 .unwrap_err(),
             SIGN_IN_WAIT
         );
-        std::thread::sleep(Duration::from_millis(40));
-        // Confirmed: allowed, and the count starts again.
+        clock.advance(Duration::from_millis(4_999));
+        assert_eq!(
+            session
+                .begin_sign_in(&url(A), None, true, || panic!("no dialog"))
+                .unwrap_err(),
+            SIGN_IN_WAIT
+        );
+        clock.advance(Duration::from_millis(1));
+        // Confirmed once the 20 s are over: allowed, and the count starts again.
         session
             .begin_sign_in(&url(A), None, true, || {
                 shown += 1;
