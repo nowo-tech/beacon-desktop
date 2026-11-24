@@ -396,6 +396,8 @@ export class DesktopApp {
   private readonly center: HTMLElement;
   private readonly detail: HTMLElement;
   private readonly header: HTMLElement;
+  /** The header's row, as wide as the content of every view (--content-max). */
+  private readonly headerRow: HTMLElement;
   private readonly status: HTMLElement;
   /** Persistent polite live region: only its text changes, so an announcement is read once, not on every render. */
   private readonly liveRegion: HTMLElement;
@@ -429,7 +431,8 @@ export class DesktopApp {
     this.meetingStore = new MeetingStore(this.storage);
     document.documentElement.lang = this.locale;
     applyTheme(this.state.settings.theme);
-    this.header = h('header', { class: 'bar' });
+    this.headerRow = h('div', { class: 'bar-row' });
+    this.header = h('header', { class: 'bar' }, this.headerRow);
     this.status = h('div', { class: 'messages', id: 'status', attrs: { role: 'status', 'aria-live': 'polite' } });
     this.alert = h('div', { class: 'messages', id: 'alerts', attrs: { role: 'alert' } });
     this.body = h('div', { class: 'view', id: 'view' });
@@ -3263,7 +3266,7 @@ export class DesktopApp {
     const signedIn = this.state.session !== null;
     const sub = this.view === 'settings' || this.view === 'privacy';
     const dashboard = signedIn ? dashboardUrl(this.state.session?.server) : null;
-    patch(this.header, [
+    patch(this.headerRow, [
       sub
         ? this.iconButton('back', t('back'), {
             id: 'back',

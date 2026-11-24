@@ -1,6 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 
-/** App shell at the default 400 × 640 window: the task list scrolls inside its own container (the window never scrolls). */
+/**
+ * App shell at the default 400 × 640 window: the task list scrolls inside its own container (the window never
+ * scrolls), and every view has the same content width (--content-max), so switching views never jumps.
+ */
 const MOCK = 'http://127.0.0.1:8787';
 
 async function control(path: string, body?: unknown) {
@@ -11,6 +14,16 @@ async function control(path: string, body?: unknown) {
   });
   return res.status === 204 ? null : res.json();
 }
+
+type Box = { left: number; width: number };
+type Tt = { __timeTrack: { app: { refresh(): Promise<void>; checkUpdates(): Promise<void> } } };
+
+/** The content box of the current view (the view's own container). */
+const contentBox = (page: Page): Promise<Box> =>
+  page.locator('#view > *').first().evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { left: Math.round(r.left), width: Math.round(r.width) };
+  });
 
 const scrolls = (page: Page) =>
   page.evaluate(() => {
@@ -58,4 +71,37 @@ test('with many tasks only the list scrolls: the window, header, timer and searc
   });
   expect(visible).toBe(true);
   expect((await scrolls(page)).documentTop).toBe(0);
+});
+
+test('every view has the same content width at the default window size', async ({ page }) => {
+  const widths: Record<string, Box> = {};
+  await page.goto('/');
+  await expect(page.locator('#login-form')).toBeVisible();
+  widths.login = await contentBox(page);
+  await page.locator('#server').fill(MOCK);
+  await page.locator('#connect').click();
+  await expect(page.locator('#user-code')).toBeVisible();
+  widths.device = await contentBox(page);
+  await control('device/approve', { userCode: await page.locator('#user-code').textContent() });
+  await expect(page.locator('#tasks li')).toHaveCount(8, { timeout: 15_000 });
+  widths.main = await contentBox(page);
+  await page.locator('#open-settings').click();
+  widths.settings = await contentBox(page);
+  await page.locator('#open-privacy').click();
+  await expect(page.locator('#privacy')).toBeVisible();
+  widths.privacy = await contentBox(page);
+  await page.locator('#back').click();
+  await page.locator('#back').click();
+  await control('config', { update: { version: '0.7.0', notes: '', pub_date: '2026-11-04T10:00:00Z', url: 'u', signature: 's' }, minSupportedVersion: '0.7.0' });
+  await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
+  await expect(page.locator('#update-required')).toBeVisible();
+  widths['update-required'] = await contentBox(page);
+  const header = await page.locator('.bar-row').evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { left: Math.round(r.left), width: Math.round(r.width) };
+  });
+  for (const [view, box] of Object.entries(widths)) expect(box, view).toEqual(widths.login);
+  // The header row lines up with the content.
+  expect(header).toEqual(widths.login);
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--content-max').trim())).toBe('31rem');
 });

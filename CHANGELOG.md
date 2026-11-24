@@ -12,11 +12,15 @@ All notable changes to this project are documented here ([Keep a Changelog](http
   their own container (flex with `min-height: 0`, no fixed heights, so it follows window resizes;
   `overscroll-behavior: contain`, reserved scrollbar room, scroll padding so a focused row and its focus ring stay in
   view). "Pin a task" scrolls only that container. Other screens scroll inside their pane, never the window.
+- **One content width on every screen** (owner request 2026-11-24): a single `--content-max` (31 rem) plus
+  `--content-gutter` (1 rem) in `src/styles.css` sizes the content of every view (sign-in, device code, tasks,
+  settings, what we collect, update required) and the header row, in the compact and the full layout, replacing the
+  33 rem column and the 48 rem main-pane limit, so switching screens no longer changes the width.
 
 ### Tests
 
 - Playwright: `shell.spec.ts` checks that with 48 tasks only the list scrolls (wheel and End key), the window never
-  does. The mock server takes `extraTasks` for long lists.
+  does, and that every view has the same content width. The mock server takes `extraTasks` for long lists.
 
 ## [0.6.0] - 2026-11-18
 
