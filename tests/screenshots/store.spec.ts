@@ -14,7 +14,7 @@ test('desktop-store-about', async ({ page }) => {
 
 test('desktop-store-update-required', async ({ page }) => {
   await signIn(page);
-  await control('config', { minSupportedVersion: '0.7.0' });
+  await control('config', { minSupportedVersion: '99.0.0' });
   await app(page).refresh();
   await expect(page.getByRole('alertdialog', { name: 'Update required' })).toBeVisible();
   await expect(page.locator('#open-store-required')).toBeVisible();
