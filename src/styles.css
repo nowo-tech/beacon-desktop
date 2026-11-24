@@ -284,7 +284,7 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 .about { display: flex; align-items: center; gap: 0.75rem; margin: 0.75rem 0; }
 .about h2 { font-size: 0.875rem; margin: 0; }
 .about p { margin: 0; }
-#logout { margin-left: auto; }
+#logout { margin-inline-start: auto; }
 /*
  * Settings tabs (src/ui/tabs.ts): one row that scrolls sideways when the names do not fit (never wraps), edges fading
  * while more tabs hide beyond them. The selected tab is marked by its colour and an underline drawn by a border (kept
@@ -307,11 +307,17 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
   scrollbar-width: none;
   scroll-padding-inline: var(--fade-size);
   --fade-size: 2rem;
+  /* Gradient directions and mask positions are physical: flipped below for right-to-left text. */
+  --fade-dir: right;
+  --fade-start-pos: 0;
+  --fade-end-pos: 100%;
   mask:
     linear-gradient(black, black) no-clip subtract,
-    linear-gradient(to right, black, transparent) 0 0 / var(--fade-start) 100% no-repeat no-clip,
-    linear-gradient(to right, transparent, black) 100% 0 / var(--fade-end) 100% no-repeat no-clip;
+    linear-gradient(to var(--fade-dir), black, transparent) var(--fade-start-pos) 0 / var(--fade-start) 100% no-repeat no-clip,
+    linear-gradient(to var(--fade-dir), transparent, black) var(--fade-end-pos) 0 / var(--fade-end) 100% no-repeat no-clip;
 }
+/* By the dir attribute (the build lowers :dir() to a :lang() list, which a dir attribute would not match). */
+[dir='rtl'] .tablist, .tablist[dir='rtl'] { --fade-dir: left; --fade-start-pos: 100%; --fade-end-pos: 0; }
 .tablist::-webkit-scrollbar { display: none; }
 @supports (animation-timeline: scroll()) {
   .tablist {
@@ -351,7 +357,8 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 }
 
 /* Native shell (0.5.0): room below the list while a toast is up; the "Still there?" window; the notification notes. */
-#app.with-toasts .task-scroll, #app.with-toasts .detail { padding-bottom: var(--toast-space, 7.5rem); }
+/* While a toast is up, the main screen ends above it: the footer and the list's last rows are never covered. */
+#app.with-toasts #main, #app.with-toasts .detail { padding-bottom: var(--toast-space, 7.5rem); }
 .native-notice { display: grid; gap: 0.375rem; }
 .native-notice h2 { margin: 0; font-size: 1rem; }
 .native-status { color: var(--ink); }

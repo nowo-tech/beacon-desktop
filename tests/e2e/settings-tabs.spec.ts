@@ -70,6 +70,11 @@ test('every tab opens its own panel, without layout shift, the window never scro
     expect(sizes.overflow, name).toBeLessThan(sizes.window * 0.75);
   }
   expect(await axe(page), 'settings tabs').toEqual([]);
+  // The faded edges follow the writing direction (audit L2).
+  const fade = () => page.locator('[role="tablist"]').evaluate((el) => getComputedStyle(el).getPropertyValue('--fade-dir').trim());
+  expect(await fade()).toBe('right');
+  await page.locator('#settings').evaluate((el) => el.setAttribute('dir', 'rtl'));
+  expect(await fade()).toBe('left');
 });
 
 test('arrow keys, Home and End move between tabs with a visible focus; the tab is remembered', async ({ page }) => {

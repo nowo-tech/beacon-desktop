@@ -202,7 +202,7 @@ to anyone watching a shared screen. Where it cannot open (a plain browser), it i
 
 The first time one is due, the app asks the OS for permission (macOS asks you; the others allow it) and explains once,
 inside the window, where the messages went (*Keep them inside the app* is one click away). A refusal or a missing
-notification service is remembered: the messages stay in the window and Settings → Friendly messages says why, with
+notification service is remembered: the messages stay in the window and Settings → Notifications → Friendly messages says why, with
 *Try again*. The pictures are 96 × 96 PNGs built from the poses (`scripts/mascot/notification-art.sh` →
 `src-tauri/notification-art/`, listed in `src-tauri/src/pose_art.rs`), compiled into the binary and written to the app
 cache on first use. `pnpm screenshots:native` (`NATIVE_SCREENS=<dir>`) renders mock-ups of the three notifications,
@@ -261,7 +261,7 @@ offers *Switch to the meeting* instead; with a meeting-like task already running
 the microphone has been free for a minute: "Meeting over (32 min). Back to <previous task>?" with *Back* and *Stop*.
 During the call the "Still there?" prompt uses its softer meeting wording and longer countdown. Questions follow the
 1 h pause ("do not disturb"), wait while "Still there?" is open, come at most every 10 minutes, and, with no timer
-running, only within your working day (Settings → My schedule, days off).
+running, only within your working day (Settings → Schedule → My schedule, days off).
 
 What is read, per OS (`src-tauri/src/meeting/`, every 20 s from the heartbeat, only while the switch is on):
 
@@ -281,7 +281,7 @@ settings in Spanish, light and dark.
 ### Meeting reminders (TimeTrack 1.14)
 
 With a Beacon on TimeTrack 1.14 or later and a calendar connected there, the app reminds you before each meeting,
-on this computer only (contract §23). Settings → **Meeting reminders**: *Remind me before my meetings* (on by default
+on this computer only (contract §23). Settings → Meetings → **Meeting reminders**: *Remind me before my meetings* (on by default
 once a calendar is connected), *Remind me* 5 minutes before (not before, 1, 2, 5, 10, 15, 30 or a custom 1–120),
 *Remind me outside working hours* and *on days off* (both off), *When a meeting starts and a timer is running, ask
 what to record* (on) and *Pause my timer automatically when a meeting starts* (off).
@@ -294,7 +294,7 @@ what to record* (on) and *Pause my timer automatically when a meeting starts* (o
 - When a meeting starts while a timer runs: *Keep timing*, *Pause* or *Track the meeting* (its linked task, or one you
   pick). With the automatic pause, the timer stops and a notification offers *Undo*.
 - *Today's meetings* lists the rest of the day in the main window and in the tray, with *Join*.
-- Only meetings inside your working hours (Settings → My schedule) and never on days off, unless switched on; free,
+- Only meetings inside your working hours (Settings → Schedule → My schedule) and never on days off, unless switched on; free,
   all-day and past meetings never remind; each meeting reminds once per start time (a moved meeting reminds again).
 - The list (today and tomorrow) is fetched on start, on wake, when the network comes back and every 5 minutes (or
   Beacon's `refreshAfterSeconds`), honouring `429 Retry-After`; it is kept for at most 48 hours so reminders work
@@ -315,7 +315,7 @@ what TimeTrack deliberately will not do: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 <img src="docs/images/desktop-update-running.webp" alt="Update offered while a timer runs: After I stop" width="200"> <img src="docs/images/desktop-update-required.webp" alt="Update required screen with Remind me later" width="200"> <img src="docs/images/desktop-update-progress-dark.webp" alt="Update download progress, dark theme" width="200">
 
-Microsoft Store build (`TIMETRACK_CHANNEL=store`): the Store updates the app, so Settings → About and the "update
+Microsoft Store build (`TIMETRACK_CHANNEL=store`): the Store updates the app, so Settings → Updates and the "update
 required" screen send you to the Store listing instead.
 
 <img src="docs/images/desktop-store-about.webp" alt="Settings, About: Updates come from the Microsoft Store" width="200"> <img src="docs/images/desktop-store-update-required.webp" alt="Update required in the Store build: Open Microsoft Store" width="200">

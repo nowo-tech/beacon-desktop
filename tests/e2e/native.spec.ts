@@ -150,7 +150,7 @@ test('tray: pause friendly messages for an hour and resume', async ({ page }) =>
   await expect.poll(async () => (await item())?.id).toBe('pause-friendly');
 });
 
-test('the in-app toast never covers the last task rows', async ({ page }) => {
+test('the in-app toast never covers the last task rows nor the footer', async ({ page }) => {
   await quietClock(page);
   await signIn(page);
   await runningFor(page, 2 * 3600 + 60);
@@ -163,6 +163,9 @@ test('the in-app toast never covers the last task rows', async ({ page }) => {
   const last = page.locator('#tasks li').last();
   const [row, card] = [await last.boundingBox(), await toast.boundingBox()];
   expect(row !== null && card !== null && row.y + row.height <= card.y).toBe(true);
+  // The footer ("Signed in as …") ends above the toast too (audit L3).
+  const footer = await page.locator('#main .footer').boundingBox();
+  expect(footer !== null && card !== null && footer.y + footer.height <= card.y).toBe(true);
 });
 
 const VIEW = {

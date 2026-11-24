@@ -45,7 +45,7 @@ mismatch is logged locally with the server name only, never a token.
   token (signed out elsewhere, or a re-sign-in for meeting reminders that was denied, expired or left open), when the
   saved server no longer matches the stored session, and whenever someone signs in as another account (or on another
   server) than the saved one.
-- **Clear local data** (Settings → What we collect) signs you out and deletes all of the above, and turns "start at
+- **Clear local data** (Settings → General → What we collect) signs you out and deletes all of the above, and turns "start at
   login" off.
 - "Open Beacon in" (Settings): which browser opens your links, by the id the system gives it, or the path of a browser
   you picked by hand in the file dialog. Read from the system (installed browsers) when Settings opens; kept by the
@@ -105,11 +105,11 @@ mismatch is logged locally with the server name only, never a token.
 - The varied "Still there?" phrasing, the cheers on long stretches and the time-of-day moments (early start, coffee,
   lunch, late work, Friday afternoon, weekend) are chosen on this computer from the running timer's start and the
   clock, in your Beacon language and time zone when the server says (`me.locale`, `me.workingHours.timezone`). Nothing
-  about them is sent. Settings → Friendly messages turns them off.
+  about them is sent. Settings → Notifications → Friendly messages turns them off.
 - They appear as **desktop notifications** (Windows Action Center, macOS Notification Center, the Linux notification
   service): the title, the line and the mascot picture are handed to your operating system, which may keep them in
   its notification history on this computer like any other app's. Nothing goes to a server. The pictures are written
-  once to the app's cache folder (the OS needs a file). Settings → Friendly messages → *Show them as desktop
+  once to the app's cache folder (the OS needs a file). Settings → Notifications → Friendly messages → *Show them as desktop
   notifications* keeps them inside the app instead; if the OS refuses them, they stay inside the app and Settings says
   so. *Pause for 1 h* (also in the tray menu) silences them for an hour.
 - To recognise meetings and dailies, the name, type and labels of the running task (as Beacon sent them) are matched
@@ -118,8 +118,8 @@ mismatch is logged locally with the server name only, never a token.
 ## Working-hours reminders
 
 - Your schedule (start, end, lunch, days off) is read from Beacon (`me.workingHours`, `me.daysOff`) and the reminders
-  are worked out on this computer from it, the clock and whether a timer runs. Changes you make in Settings → My
-  schedule and the days off you add stay in the app's local storage, with a copy of Beacon's schedule for an offline
+  are worked out on this computer from it, the clock and whether a timer runs. Changes you make in Settings → Schedule →
+  My schedule and the days off you add stay in the app's local storage, with a copy of Beacon's schedule for an offline
   start and which reminders were shown today; none of it is sent. Signing out deletes them.
 - As desktop notifications, their title, line, picture and button label are handed to your operating system like the
   friendly messages. Pressing *Start* / *Stop* / *Resume* does what the same button in the app does (`timer/start`,
@@ -143,7 +143,7 @@ mismatch is logged locally with the server name only, never a token.
 - **Sent to Beacon**: nothing about your meetings; only the timer action you choose (*Pause* = `timer/stop`, *Track
   the meeting* = `timer/switch` with `origin: meeting`). *Join* opens the link in your browser after checking it is
   one of those video-call services.
-- **Opt-out**: Settings → Meeting reminders → *Remind me before my meetings* (per device), or disconnect the calendar
+- **Opt-out**: Settings → Meetings → Meeting reminders → *Remind me before my meetings* (per device), or disconnect the calendar
   in Beacon.
 
 ## Meeting detection (off by default, dated consent)

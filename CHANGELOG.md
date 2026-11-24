@@ -31,6 +31,10 @@ All notable changes to this project are documented here ([Keep a Changelog](http
   `--content-gutter` (1 rem) in `src/styles.css` sizes the content of every view (sign-in, device code, tasks,
   settings, what we collect, update required) and the header row, in the compact and the full layout, replacing the
   33 rem column and the 48 rem main-pane limit, so switching screens no longer changes the width.
+- Audit of PR #35 (lows): the Settings paths in `README.md` and `PRIVACY.md` name the new tabs (for example
+  *Settings → Notifications → Friendly messages*, *Settings → Updates*); the tablist's faded edges follow right-to-left
+  text (a `dir="rtl"` ancestor flips the physical gradients) and *Sign out* is pushed with `margin-inline-start`; while a toast is
+  open the whole main screen ends above it, so the footer ("Signed in as …") is no longer covered at 400 px.
 
 ### Tests
 
