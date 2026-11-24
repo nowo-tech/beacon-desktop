@@ -21,12 +21,12 @@ beforeEach(async () => {
   await env.control('config', { deviceInterval: 1 });
 });
 
-async function signedIn(locale: 'en' | 'es' = 'en') {
+async function signedIn(locale: 'en' | 'es' = 'en', width = { value: 400 }) {
   document.body.replaceChildren();
   const root = document.createElement('div');
   document.body.append(root);
   const platform = browserPlatform('0.5.0', nodeFetch);
-  const app = new DesktopApp(root, platform, { storage: localStorage, locale, sleep: () => new Promise((resolve) => setTimeout(resolve, 5)), searchDelayMs: 5 });
+  const app = new DesktopApp(root, platform, { storage: localStorage, locale, sleep: () => new Promise((resolve) => setTimeout(resolve, 5)), searchDelayMs: 5, viewportWidth: () => width.value });
   const $ = <T extends Element = HTMLElement>(selector: string) => root.querySelector(selector) as T;
   await app.init();
   const done = app.connect(env.url);
@@ -193,6 +193,68 @@ describe('Settings tabs', () => {
     ui.app.destroy();
   });
 
+  it('turn vertical in the full layout and back on resize, keeping the selected tab, the focus and the nodes', async () => {
+    const width = { value: 400 };
+    const ui = await signedIn('en', width);
+    ui.app.show('settings');
+    const tablist = ui.$('[role="tablist"]');
+    expect(tablist.getAttribute('aria-orientation')).toBe('horizontal');
+    const timer = ui.$<HTMLButtonElement>('#settings-tab-timer');
+    timer.click();
+    expect(document.activeElement).toBe(timer);
+    width.value = 1280;
+    window.dispatchEvent(new Event('resize'));
+    expect(ui.root.getAttribute('data-layout')).toBe('full');
+    expect(ui.$('[role="tablist"]')).toBe(tablist);
+    expect(tablist.getAttribute('aria-orientation')).toBe('vertical');
+    expect(ui.$('#settings-tab-timer')).toBe(timer);
+    expect(document.activeElement).toBe(timer);
+    expect(selected(ui.root)).toEqual(['settings-tab-timer']);
+    expect(ui.$('#detail').hidden).toBe(false);
+    // Vertical: ↑/↓ move (wrapping), ←/→ do nothing.
+    const left = new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true });
+    timer.dispatchEvent(left);
+    expect(left.defaultPrevented).toBe(false);
+    expect(selected(ui.root)).toEqual(['settings-tab-timer']);
+    key(timer, 'ArrowDown');
+    expect(document.activeElement?.id).toBe('settings-tab-schedule');
+    key(document.activeElement as Element, 'ArrowUp');
+    key(document.activeElement as Element, 'ArrowUp');
+    expect(document.activeElement?.id).toBe('settings-tab-shortcuts');
+    key(document.activeElement as Element, 'End');
+    key(document.activeElement as Element, 'ArrowDown');
+    expect(document.activeElement?.id).toBe('settings-tab-general');
+    // What we collect keeps the detail pane too.
+    ui.app.show('privacy');
+    expect(ui.$('#detail').hidden).toBe(false);
+    ui.app.show('settings');
+    width.value = 400;
+    window.dispatchEvent(new Event('resize'));
+    expect(tablist.getAttribute('aria-orientation')).toBe('horizontal');
+    expect(selected(ui.root)).toEqual(['settings-tab-general']);
+    expect(ui.$('#detail').hidden).toBe(true);
+    ui.app.destroy();
+  });
+
+  it('stay a horizontal row in the full layout while the Settings content is narrower than 34rem', async () => {
+    const width = { value: 1280 };
+    const ui = await signedIn('en', width);
+    window.dispatchEvent(new Event('resize'));
+    ui.app.show('settings');
+    const settings = ui.$('#settings');
+    const tablist = ui.$('[role="tablist"]');
+    const content = { width: 349 };
+    settings.getBoundingClientRect = () => ({ width: content.width }) as DOMRect;
+    // Any render measures the content again (the ResizeObserver does the same in the webview).
+    ui.app.show('settings');
+    expect(ui.root.getAttribute('data-layout')).toBe('full');
+    expect(tablist.getAttribute('aria-orientation')).toBe('horizontal');
+    content.width = 34 * 16;
+    ui.app.show('settings');
+    expect(tablist.getAttribute('aria-orientation')).toBe('vertical');
+    ui.app.destroy();
+  });
+
   it('have a name in every locale for every tab', () => {
     for (const messages of [en, es] as Record<string, string>[]) {
       for (const id of SETTINGS_TABS) expect(messages[`settingsTab${id[0].toUpperCase()}${id.slice(1)}`]).toBeTruthy();
@@ -239,6 +301,19 @@ describe('createTabs', () => {
     expect(tabs.tablist.getAttribute('aria-label')).toBe('Y');
     expect(tabs.tabs.get('a')).toBe(a);
     expect([...tabs.tabs.values()].map((tab) => tab.textContent)).toEqual(['Uno', 'Dos', 'Tres']);
+  });
+
+  it('switches orientation in place; vertical ignores right-to-left for ↑/↓', () => {
+    const { tabs } = make('b');
+    expect(tabs.tablist.getAttribute('aria-orientation')).toBe('horizontal');
+    tabs.setOrientation('vertical');
+    tabs.setOrientation('vertical');
+    expect(tabs.tablist.getAttribute('aria-orientation')).toBe('vertical');
+    tabs.tablist.style.direction = 'rtl';
+    key(tabs.tabs.get('b') as HTMLElement, 'ArrowDown');
+    expect(tabs.selected()).toBe('c');
+    key(tabs.tabs.get('c') as HTMLElement, 'ArrowUp');
+    expect(tabs.selected()).toBe('b');
   });
 
   it('swaps the arrow keys for right-to-left text', () => {

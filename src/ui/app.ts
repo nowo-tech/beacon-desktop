@@ -16,7 +16,7 @@ import { type ClampNote, type QueuedAction, type SyncResult, applyLocally } from
 import { type ServerFeatures, effectiveThreshold, serverFeatures, thresholdChoices } from '../lib/serverFeatures';
 import { hostOf, prepareServerUrl, type ServerUrlProblem } from '../lib/serverUrl';
 import { type Feature, type LocalState, DEFAULT_SETTINGS, LOCAL_KEYS, MAX_PINNED, SETTINGS_TAB_KEY, emptyState, hasConsent, loadLocal, recordConsent, saveLocal } from '../lib/settings';
-import { createTabs, type Tabs } from './tabs';
+import { createTabs, type Orientation, type Tabs } from './tabs';
 import { computeTotals, formatHoursMinutes, recentTasks, startOfDay, startOfWeek, taskContext, todayByTask, type Totals } from '../lib/summary';
 import { elapsedSeconds, formatElapsed } from '../lib/time';
 import { applyTheme, forcedTheme, THEMES, type ThemePreference } from '../lib/theme';
@@ -115,6 +115,12 @@ import { toastAction, toastActions } from './toast';
 import { PromptMount, type PromptAnswer, type PromptBlock, type PromptButton, type PromptPicker, type PromptTaskOption, type PromptText, type PromptView } from './prompt';
 
 export type View = 'loading' | 'login' | 'device' | 'main' | 'settings' | 'privacy' | 'update-required';
+
+/**
+ * The Settings content holds the vertical tablist plus a usable options column from this width (rem) on, the same
+ * threshold as the `@container settings (min-width: 34rem)` rule in styles.css; narrower, the horizontal row.
+ */
+const SETTINGS_VERTICAL_MIN_REM = 34;
 
 /** Settings tabs, in order (each panel short enough for the default 400 × 640 window). */
 export const SETTINGS_TABS = ['general', 'shortcuts', 'timer', 'schedule', 'notifications', 'meetings', 'updates'] as const;
@@ -396,6 +402,8 @@ export class DesktopApp {
   private main: MainRegions | null = null;
   /** Settings: the tablist and its panels, built once per session; each panel is patched in place. */
   private settingsView: { root: HTMLElement; tabs: Tabs<SettingsTab> } | null = null;
+  /** Follows the Settings content's width (vertical or horizontal tablist). */
+  private settingsResize: ResizeObserver | null = null;
   /** Layout drawn now (from the window width, lib/layout.ts). */
   layout: LayoutMode;
   /** Full layout: sidebar section shown in the main pane. */
@@ -542,6 +550,7 @@ export class DesktopApp {
     for (const timer of [this.ticker, this.deviceTicker]) if (timer !== null) clearInterval(timer);
     for (const timer of [this.searchTimer, this.noticeTimer, this.dailyTimer, this.windowTimer]) if (timer !== null) clearTimeout(timer);
     this.main?.prompt.dispose();
+    this.settingsResize?.disconnect();
   }
 
   private api(): TimeTrackApi {
@@ -3320,10 +3329,13 @@ export class DesktopApp {
     );
   }
 
-  /** Full layout: the sections sidebar and (on the main screen) the detail pane; both empty and hidden otherwise. */
+  /**
+   * Full layout: the sections sidebar and the detail pane, the same on the main screen, Settings and "What we collect";
+   * both empty and hidden otherwise.
+   */
   private renderPanes(): void {
     const full = this.fullLayout();
-    const detail = full && this.view === 'main';
+    const detail = full;
     this.root.setAttribute('data-layout', full ? 'full' : 'compact');
     this.root.classList.toggle('with-detail', detail);
     this.sidebar.hidden = !full;
@@ -4646,6 +4658,21 @@ export class DesktopApp {
     return this.settingsView?.tabs.selected() ?? null;
   }
 
+  /**
+   * Full layout with room for it: a vertical tablist beside the options (every tab fits whatever the language or
+   * font); otherwise (compact window, or a full one whose centre is narrower than 34rem): the horizontal row that
+   * scrolls sideways with faded edges. Decided by the Settings content's own width, switched in place on resize.
+   */
+  private settingsOrientation(): Orientation {
+    if (!this.fullLayout()) return 'horizontal';
+    const root = this.settingsView?.root;
+    const width = root?.isConnected === true ? root.getBoundingClientRect().width : 0;
+    // No layout engine (unit tests): the full layout alone decides.
+    if (width === 0) return 'vertical';
+    const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    return width >= SETTINGS_VERTICAL_MIN_REM * rem ? 'vertical' : 'horizontal';
+  }
+
   /** Opens Settings on one tab. */
   showSettings(tab: SettingsTab): void {
     this.show('settings');
@@ -4668,10 +4695,14 @@ export class DesktopApp {
         onSelect: (id) => this.rememberSettingsTab(id),
       });
       this.settingsView = { root: h('main', { id: 'settings' }, tabs.root), tabs };
+      this.settingsResize?.disconnect();
+      this.settingsResize = typeof ResizeObserver === 'function' ? new ResizeObserver(() => this.settingsView?.tabs.setOrientation(this.settingsOrientation())) : null;
+      this.settingsResize?.observe(this.settingsView.root);
     }
     const { root, tabs } = this.settingsView;
     tabs.setLabels(t('settingsSections'), labels);
     if (root.parentElement !== this.body) this.body.replaceChildren(root);
+    tabs.setOrientation(this.settingsOrientation());
     const panel = (id: SettingsTab) => tabs.panels.get(id) as HTMLElement;
     patch(panel('general'), [
       this.renderAppearance(),

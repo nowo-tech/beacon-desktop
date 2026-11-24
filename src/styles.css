@@ -25,7 +25,7 @@
   --radius-card: 0.75rem;
   --radius-control: 0.375rem;
   --mono: ui-monospace, 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
-  /* One content width for every view (login, device, main, settings, privacy, update required), both layouts. */
+  /* One content width token shared by every view: 31rem in the compact layout, 40rem in the full one (see Window layouts). */
   --content-max: 31rem;
   --content-gutter: 1rem;
   color-scheme: light;
@@ -350,6 +350,35 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 .tab:focus-visible { outline: 2px solid var(--moss); outline-offset: -2px; }
 /* Panels carry no box of their own (hidden="until-found" keeps it); their first block starts flush, every tab alike. */
 .tabpanel > :first-child, .tabpanel > :first-child > :first-child { margin-top: 0; }
+/*
+ * Full layout with room for it: the tabs become a vertical list on the left of the panels (aria-orientation="vertical", ↑/↓), so every
+ * tab fits whatever the language or font, next to the detail pane. All panels share the second grid cell. The selected
+ * tab keeps its colour and gets a side bar (a border, no room taken) instead of the underline.
+ */
+/* A container query on the Settings content (not the viewport): below 34rem the options column would be too narrow next
+   to the vertical list, so the horizontal row stays (app.ts switches aria-orientation at the same width). */
+#settings { container: settings / inline-size; }
+@container settings (min-width: 34rem) {
+  #app[data-layout='full'] .tabs { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 1.25rem; align-items: start; }
+  #app[data-layout='full'] .tabs > .tablist { grid-column: 1; grid-row: 1; }
+  #app[data-layout='full'] .tabs > .tabpanel { grid-column: 2; grid-row: 1; min-width: 0; }
+}
+/* No form control is ever wider than its column. */
+input, select, textarea, button { max-width: 100%; }
+.tablist[aria-orientation='vertical'] {
+  flex-direction: column;
+  margin: 0;
+  padding: 0 0.25rem 0 0;
+  border-bottom: 0;
+  border-inline-end: 1px solid var(--sand);
+  overflow: visible;
+  mask: none;
+  animation: none;
+  background: transparent;
+}
+.tablist[aria-orientation='vertical'] .tab { justify-content: flex-start; text-align: start; border-radius: var(--radius-control); padding: 0.4375rem 0.875rem; }
+.tablist[aria-orientation='vertical'] .tab[aria-selected='true'] { background: var(--mist); }
+.tablist[aria-orientation='vertical'] .tab[aria-selected='true']::after { inset: 0 auto 0 0; inset-inline: 0 auto; border-bottom: 0; border-inline-start: 3px solid var(--moss); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -406,7 +435,9 @@ input[type='time'], input[type='date'] { font: inherit; padding: 0.25rem 0.375re
 #app[data-layout='full'] > .bar { padding: 0 1rem 0 1.25rem; background: var(--surface); scrollbar-gutter: auto; }
 #app[data-layout='full'] > .bar > .bar-row { max-width: none; }
 #app[data-layout='full'] .frame { grid-template-columns: 13.5rem minmax(0, 1fr); }
-#app[data-layout='full'].with-detail .frame { grid-template-columns: 13.5rem minmax(0, 1fr) minmax(17rem, 24rem); }
+/* Full layout content: --content-max 40rem; the detail pane gives up room (down to 17rem) so the centre reaches it. */
+#app[data-layout='full'] { --content-max: 40rem; }
+#app[data-layout='full'].with-detail .frame { grid-template-columns: 13.5rem minmax(0, 1fr) clamp(17rem, 100vw - 58rem, 24rem); }
 #app[data-layout='full'] .pane { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 #app[data-layout='full'] .sidebar { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem 0.625rem; border-right: 1px solid var(--sand); background: var(--surface-muted); }
 #app[data-layout='full'] .main-pane { padding: 0.75rem 1.5rem 1.5rem; }

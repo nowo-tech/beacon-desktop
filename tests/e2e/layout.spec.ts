@@ -127,11 +127,11 @@ for (const scheme of ['light', 'dark'] as const) {
     expect((timer?.y ?? 0) + (timer?.height ?? 0)).toBeLessThanOrEqual(560);
     await noOverlap(page, `${scheme} full, scrolled`);
 
-    // Settings: a page in the main pane next to the sidebar.
+    // Settings: a page in the main pane between the sidebar and the detail pane.
     await page.setViewportSize(FULL);
     await page.locator('#nav-settings').click();
     await expect(page.locator('#main-pane #settings')).toBeVisible();
-    await expect(page.locator('#detail')).toBeHidden();
+    await expect(page.locator('#detail')).toBeVisible();
     await noHorizontalScroll(page, `${scheme} settings`);
     await noOverlap(page, `${scheme} settings`);
     await axe(page, `${scheme} settings`);
