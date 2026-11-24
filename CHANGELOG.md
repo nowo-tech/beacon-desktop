@@ -5,6 +5,8 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-24
+
 ### Changed
 
 - **Wider content and a vertical Settings tablist in the full view** (owner request 2026-11-24, option B): the shared
@@ -25,13 +27,12 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 ### Tests
 
 - Vitest: the tablist turns vertical and back on resize (same nodes, selected tab and focus), ↑ / ↓ in vertical, the
-  detail pane on Settings and "What we collect", the row kept below 34 rem of content. Playwright `wide.spec.ts`: at 400,
-  720, 900, 1000, 1100, 1280 and 1440 px in
-  English and Spanish the main view, Settings and "What we collect" share one width (40 rem from 1280 px), no tab is
-  cut off and nothing scrolls sideways from 1100 px (vertical list), 900 and 1000 px keep the horizontal row, no form
-  control of any Settings panel overflows its column, the detail pane is visible in the full layout, axe passes, and the
-  keyboard works in both orientations; the faded row still scrolls at 400 px. `layout.spec.ts` expects the detail pane
-  on Settings.
+  detail pane on Settings and "What we collect", the row kept below 34 rem of content. Playwright `wide.spec.ts`: at
+  400, 720, 900, 1000, 1100, 1280 and 1440 px in English and Spanish the main view, Settings and "What we collect"
+  share one width (40 rem from 1280 px), no tab is cut off and nothing scrolls sideways from 1100 px (vertical list),
+  900 and 1000 px keep the horizontal row, no form control of any Settings panel overflows its column, the detail pane
+  is visible in the full layout, axe passes, and the keyboard works in both orientations; the faded row still scrolls
+  at 400 px. `layout.spec.ts` expects the detail pane on Settings.
 
 ## [0.7.0] - 2026-11-24
 

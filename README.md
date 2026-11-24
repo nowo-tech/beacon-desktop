@@ -102,17 +102,17 @@ a ghost Windows removes when the mouse passes over it.
   keys and Enter.
 - Two views: the **compact view** (the quick tracker, one centred column up to 900 px wide) and the **full view** (from
   900 px: sections sidebar, task list with the running timer on top, detail pane with the selected task's time today
-  and this week and the week by day, also next to Settings and "What we collect"; Settings as a page). Switch with the header button, the tray menu or
-  `Ctrl/Cmd + Shift + L`; each view reopens at its own remembered size and position, on screen. `F6` moves between
-  the panes. The window cannot be made smaller than the compact view (380 × 560). The window itself never scrolls:
+  and this week and the week by day, also next to Settings and "What we collect"; Settings as a page).
+  Switch with the header button, the tray menu or `Ctrl/Cmd + Shift + L`; each view reopens at its own remembered
+  size and position, on screen. `F6` moves between the panes. The window cannot be made smaller than the compact view (380 × 560). The window itself never scrolls:
   on the main screen the timer, totals and search stay in place and only the task list scrolls, and every screen
   shares one content width (31 rem in the compact view, 40 rem in the full one).
 - **Settings in tabs**: *General* (theme, browser for Beacon links, start at login, what we collect, sign out),
   *Shortcuts*, *Timer* ("Still there?", working without a timer, pause on lock), *Schedule*, *Notifications*
   (friendly messages, desktop notifications), *Meetings* and *Updates* (version, *Check for updates*): a row in the
   compact view (← / →), a vertical list beside the options in the full view when its centre is wide enough (↑ / ↓,
-  from about 1100 px; narrower, the row again), so no tab is ever cut off. Home
-  and End jump to the first and last tab; the last tab opened is remembered on this computer.
+  from about 1100 px; narrower, the row again), so no tab is ever cut off.
+  Home and End jump to the first and last tab; the last tab opened is remembered on this computer.
 - Device-flow sign-in (no password typed in the app); `401` asks you to sign in again.
 - Task search, start / stop / switch. Offline queue: actions taken offline (and "Still there?" answers) are kept on this
   computer, survive a restart and are replayed in order with their real times (`startedAt` / `endedAt`, TimeTrackBundle

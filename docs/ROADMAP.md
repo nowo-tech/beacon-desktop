@@ -197,6 +197,7 @@ Items 1–10 above are not repeated. Order inside each horizon is the priority.
 | 0.5.1 | TLS public-key pinning for the official Beacon host ([PINNING](PINNING.md)), fixes | In the CHANGELOG, never tagged (absorbed by 0.6.0) |
 | 0.6.0 | Meeting reminders (spec 210), session token out of the webview | Released (tag v0.6.0, 2026-11-18; Linux, Windows and macOS) |
 | 0.7.0 | Settings in tabs, list-only scrolling, one content width | Released (tag v0.7.0, 2026-11-24) |
+| 0.8.0 | Wider full view, detail pane on Settings, vertical Settings tabs | Released (tag v0.8.0, 2026-11-24) |
 | — | Flaky device-code wait in the unit sign-in helpers | In review (PR #33) |
 
 ## 6. Road to 1.0.0 (proposed, pending owner OK)
