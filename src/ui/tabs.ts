@@ -2,8 +2,8 @@ import { h } from './dom';
 
 /**
  * Accessible tabs (WAI-ARIA tabs pattern) built once and updated in place: a `tablist` of `<button role="tab">` with a
- * roving tabindex (only the selected tab is a Tab stop), selection follows focus, ←/→ move (wrapping), Home / End jump
- * to the first / last tab. Panels that are not selected are `hidden="until-found"` (still found by find-in-page where
+ * roving tabindex (only the selected tab is a Tab stop), selection follows focus, ←/→ (or ↑/↓ when vertical) move
+ * (wrapping), Home / End jump to the first / last tab. Panels that are not selected are `hidden="until-found"` (still found by find-in-page where
  * the webview supports it; plain `hidden` elsewhere), and a find-in-page match selects its tab (`beforematch`).
  */
 export interface TabSpec<T extends string> {
@@ -22,7 +22,13 @@ export interface Tabs<T extends string> {
   select(id: T, focus?: boolean): void;
   /** Updates the tab names and the tablist's accessible name in place (language change). */
   setLabels(label: string, labels: Record<T, string>): void;
+  /**
+   * Horizontal (←/→) or vertical (↑/↓) tablist, switched in place: the tabs, the selection and the focus are kept.
+   */
+  setOrientation(orientation: Orientation): void;
 }
+
+export type Orientation = 'horizontal' | 'vertical';
 
 export interface TabsOptions<T extends string> {
   /** Prefix of the element ids: `${idPrefix}-tab-${id}` and `${idPrefix}-panel-${id}`. */
@@ -30,6 +36,7 @@ export interface TabsOptions<T extends string> {
   label: string;
   tabs: readonly TabSpec<T>[];
   selected: T;
+  orientation?: Orientation;
   onSelect(id: T): void;
 }
 
@@ -37,7 +44,7 @@ export function createTabs<T extends string>(options: TabsOptions<T>): Tabs<T> {
   const { idPrefix } = options;
   const order = options.tabs.map((tab) => tab.id);
   let current: T = order.includes(options.selected) ? options.selected : order[0];
-  const tablist = h('div', { class: 'tablist', id: `${idPrefix}-tablist`, attrs: { role: 'tablist', 'aria-label': options.label, 'aria-orientation': 'horizontal' } });
+  const tablist = h('div', { class: 'tablist', id: `${idPrefix}-tablist`, attrs: { role: 'tablist', 'aria-label': options.label, 'aria-orientation': options.orientation ?? 'horizontal' } });
   const tabs = new Map<T, HTMLButtonElement>();
   const panels = new Map<T, HTMLElement>();
   for (const spec of options.tabs) {
@@ -54,9 +61,10 @@ export function createTabs<T extends string>(options: TabsOptions<T>): Tabs<T> {
   }
   tablist.addEventListener('keydown', (event) => {
     const index = order.indexOf(current);
-    const rtl = getComputedStyle(tablist).direction === 'rtl';
-    const forward = rtl ? 'ArrowLeft' : 'ArrowRight';
-    const backward = rtl ? 'ArrowRight' : 'ArrowLeft';
+    const vertical = tablist.getAttribute('aria-orientation') === 'vertical';
+    const rtl = !vertical && getComputedStyle(tablist).direction === 'rtl';
+    const forward = vertical ? 'ArrowDown' : rtl ? 'ArrowLeft' : 'ArrowRight';
+    const backward = vertical ? 'ArrowUp' : rtl ? 'ArrowRight' : 'ArrowLeft';
     let next: T | undefined;
     if (event.key === forward) next = order[(index + 1) % order.length];
     else if (event.key === backward) next = order[(index - 1 + order.length) % order.length];
@@ -101,6 +109,12 @@ export function createTabs<T extends string>(options: TabsOptions<T>): Tabs<T> {
     setLabels(label, labels) {
       if (tablist.getAttribute('aria-label') !== label) tablist.setAttribute('aria-label', label);
       for (const [id, tab] of tabs) if (tab.textContent !== labels[id]) tab.textContent = labels[id];
+    },
+    setOrientation(orientation) {
+      if (tablist.getAttribute('aria-orientation') === orientation) return;
+      tablist.setAttribute('aria-orientation', orientation);
+      // The selected tab back in view in the new direction (only the tablist scrolls).
+      select(current, false);
     },
   };
 }

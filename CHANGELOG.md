@@ -5,6 +5,28 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+### Changed
+
+- **Wider content and a vertical Settings tablist in the full view** (owner request 2026-11-24, option B): the shared
+  `--content-max` is now responsive, 31 rem in the compact layout and 40 rem in the full one, and the detail pane gives
+  up room (`clamp(17rem, 100vw - 58rem, 24rem)`) so the centre reaches 40 rem from about 1280 px. The detail pane stays
+  open on Settings and "What we collect", as on the main screen. In the full layout the seven Settings tabs become a
+  vertical list on the left of the options (`aria-orientation="vertical"`, ↑ / ↓ wrapping, Home / End, roving
+  tabindex, the focus ring inside the tab, a side bar plus colour for the selected tab), switched in place on resize
+  with the selected tab and the focus kept; the compact 400 px window keeps the horizontal row with faded edges.
+  Measured before: the single row needs 577–674 px in English and 659–775 px in Spanish (Segoe UI, Ubuntu, DejaVu
+  Sans), more than the centre has next to the detail pane, so it scrolled sideways at every full-view width; at 900 px
+  the main view was 237 px wide against 496 px for Settings.
+
+### Tests
+
+- Vitest: the tablist turns vertical and back on resize (same nodes, selected tab and focus), ↑ / ↓ in vertical, the
+  detail pane on Settings and "What we collect". Playwright `wide.spec.ts`: at 400, 720, 900, 1280 and 1440 px in
+  English and Spanish the main view, Settings and "What we collect" share one width (40 rem from 1280 px), no tab is
+  cut off and nothing scrolls sideways in the full layout, the detail pane is visible there, axe passes, and the
+  keyboard works in both orientations; the faded row still scrolls at 400 px. `layout.spec.ts` expects the detail pane
+  on Settings.
+
 ## [0.7.0] - 2026-11-24
 
 ### Changed

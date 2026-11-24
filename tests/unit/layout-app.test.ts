@@ -163,13 +163,14 @@ describe('window layouts', () => {
     expect(ui.$('#time-week').querySelectorAll('li')).toHaveLength(7);
     expect(ui.$('#time-week .week-total strong').textContent).toBe(seeded.time);
     expect(ui.$('#time-open-beacon')).toBeNull();
-    // Settings: a page in the main pane, the sidebar stays, no detail pane.
+    // Settings: a page in the main pane; the sidebar and the detail pane stay, the tabs turn vertical.
     ui.click('#nav-settings');
     expect(ui.app.view).toBe('settings');
     expect(ui.$('#main-pane #settings')).not.toBeNull();
     expect(ui.$('#sidebar').hidden).toBe(false);
     expect(ui.$('#nav-settings').getAttribute('aria-current')).toBe('page');
-    expect(ui.$('#detail').hidden).toBe(true);
+    expect(ui.$('#detail').hidden).toBe(false);
+    expect(ui.$('#settings-tablist').getAttribute('aria-orientation')).toBe('vertical');
     expect(ui.$('#layout-toggle').textContent).toBe('Vista reducida');
     ui.click('#nav-tasks');
     expect(ui.app.view).toBe('main');

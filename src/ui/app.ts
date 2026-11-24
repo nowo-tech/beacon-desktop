@@ -3320,10 +3320,13 @@ export class DesktopApp {
     );
   }
 
-  /** Full layout: the sections sidebar and (on the main screen) the detail pane; both empty and hidden otherwise. */
+  /**
+   * Full layout: the sections sidebar and the detail pane, the same on the main screen, Settings and "What we collect";
+   * both empty and hidden otherwise.
+   */
   private renderPanes(): void {
     const full = this.fullLayout();
-    const detail = full && this.view === 'main';
+    const detail = full;
     this.root.setAttribute('data-layout', full ? 'full' : 'compact');
     this.root.classList.toggle('with-detail', detail);
     this.sidebar.hidden = !full;
@@ -4665,12 +4668,16 @@ export class DesktopApp {
         label: t('settingsSections'),
         tabs: SETTINGS_TABS.map((id) => ({ id, label: labels[id] })),
         selected: this.storedSettingsTab(),
+        orientation: this.fullLayout() ? 'vertical' : 'horizontal',
         onSelect: (id) => this.rememberSettingsTab(id),
       });
       this.settingsView = { root: h('main', { id: 'settings' }, tabs.root), tabs };
     }
     const { root, tabs } = this.settingsView;
     tabs.setLabels(t('settingsSections'), labels);
+    // Full layout: a vertical tablist beside the panel (every tab fits whatever the language or font); compact: the
+    // horizontal row that scrolls sideways with faded edges. Switched in place on resize.
+    tabs.setOrientation(this.fullLayout() ? 'vertical' : 'horizontal');
     if (root.parentElement !== this.body) this.body.replaceChildren(root);
     const panel = (id: SettingsTab) => tabs.panels.get(id) as HTMLElement;
     patch(panel('general'), [
