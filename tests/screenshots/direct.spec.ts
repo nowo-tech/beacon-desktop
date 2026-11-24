@@ -37,7 +37,7 @@ test('desktop-update-required', async ({ page }) => {
   await signIn(page);
   await page.locator('[data-task="T-101"] .row-action').click();
   await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
-  await control('config', { update: { ...UPDATE, version: '0.7.0' }, minSupportedVersion: '0.7.0' });
+  await control('config', { update: { ...UPDATE, version: '99.0.0' }, minSupportedVersion: '99.0.0' });
   await app(page).refresh();
   await expect(page.getByRole('alertdialog', { name: 'Update required' })).toBeVisible();
   await shot(page, 'desktop-update-required');

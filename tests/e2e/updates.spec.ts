@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 /** 0.4.0 updater UX against the mock Beacon updater route and the browser platform's mocked Tauri updater. */
 const MOCK = 'http://127.0.0.1:8787';
-const UPDATE = { version: '0.7.0', notes: 'Added\n- A calmer update card\n- Check for updates in the tray', pub_date: '2026-11-04T10:00:00Z', url: 'u', signature: 's' };
+const UPDATE = { version: '99.0.0', notes: 'Added\n- A calmer update card\n- Check for updates in the tray', pub_date: '2026-11-04T10:00:00Z', url: 'u', signature: 's' };
 
 async function control(path: string, body?: unknown) {
   const res = await fetch(`${MOCK}/__mock/${path}`, {
@@ -50,7 +50,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await app(page).check();
     const card = page.locator('#update');
     await expect(card).toBeVisible();
-    await expect(card.getByRole('heading', { name: 'Version 0.7.0 is available' })).toBeVisible();
+    await expect(card.getByRole('heading', { name: 'Version 99.0.0 is available' })).toBeVisible();
     await expect(card.locator('img.mascot')).toBeVisible();
     // Non-blocking: the task list stays usable.
     await expect(page.locator('#search')).toBeEnabled();
@@ -61,10 +61,10 @@ for (const scheme of ['light', 'dark'] as const) {
     await axe(page, 'update notes');
     await app(page).slowInstall();
     await page.locator('#update-now').click();
-    await expect(page.locator('#update-progress-label')).toContainText('Downloading version 0.7.0…');
+    await expect(page.locator('#update-progress-label')).toContainText('Downloading version 99.0.0…');
     await expect(page.locator('#update-progress')).toBeVisible();
     await axe(page, 'update progress');
-    await expect(page.locator('#update-progress-label')).toHaveText('Installing version 0.7.0. TimeTrack will restart.', { timeout: 5_000 });
+    await expect(page.locator('#update-progress-label')).toHaveText('Installing version 99.0.0. TimeTrack will restart.', { timeout: 5_000 });
     await expect.poll(() => app(page).installed()).toBe(1);
   });
 }
@@ -93,11 +93,11 @@ test('forced update (GET me minSupportedVersion): blocking screen with a way out
   await signIn(page);
   await page.locator('[data-task="T-101"] .row-action').click();
   await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
-  await control('config', { update: UPDATE, minSupportedVersion: '0.7.0' });
+  await control('config', { update: UPDATE, minSupportedVersion: '99.0.0' });
   await app(page).refresh();
   const dialog = page.getByRole('alertdialog', { name: 'Update required' });
   await expect(dialog).toBeVisible();
-  await expect(page.locator('#update-required-text')).toContainText('Version 0.7.0 or later is required.');
+  await expect(page.locator('#update-required-text')).toContainText('Version 99.0.0 or later is required.');
   await expect(page.locator('#update-required-running')).toContainText('A timer is running on Write onboarding guide.');
   await expect(page.locator('#remind-later')).toBeVisible();
   await axe(page, 'update required');
@@ -112,7 +112,7 @@ test('tray "Check for updates…" and a failed install stay non-blocking', async
   await signIn(page);
   await control('config', { update: UPDATE });
   await page.evaluate(() => (window as unknown as { __timeTrack: { hooks: { trayAction(a: string): void } } }).__timeTrack.hooks.trayAction('check-updates'));
-  await expect(page.locator('#notice')).toHaveText('Version 0.7.0 is available.');
+  await expect(page.locator('#notice')).toHaveText('Version 99.0.0 is available.');
   await page.evaluate(() => void ((window as unknown as Tt).__timeTrack.hooks.installError = 'signature verification failed'));
   await page.locator('#update-now').click();
   await expect(page.locator('#update-message')).toContainText('The automatic update failed: signature verification failed.');

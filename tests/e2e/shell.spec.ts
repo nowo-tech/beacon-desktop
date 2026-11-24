@@ -93,7 +93,7 @@ test('every view has the same content width at the default window size', async (
   widths.privacy = await contentBox(page);
   await page.locator('#back').click();
   await page.locator('#back').click();
-  await control('config', { update: { version: '0.7.0', notes: '', pub_date: '2026-11-04T10:00:00Z', url: 'u', signature: 's' }, minSupportedVersion: '0.7.0' });
+  await control('config', { update: { version: '99.0.0', notes: '', pub_date: '2026-11-04T10:00:00Z', url: 'u', signature: 's' }, minSupportedVersion: '99.0.0' });
   await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
   await expect(page.locator('#update-required')).toBeVisible();
   widths['update-required'] = await contentBox(page);
