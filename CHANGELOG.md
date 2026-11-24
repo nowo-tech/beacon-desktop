@@ -5,6 +5,8 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-24
+
 ### Changed
 
 - **Settings in tabs** (owner request 2026-11-24): the single long page (about 3,500 px at the default 400 × 640
