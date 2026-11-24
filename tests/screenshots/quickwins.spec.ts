@@ -222,8 +222,9 @@ test('in-app: the nudge toast, "Continue last" and the Settings additions', asyn
     await page.screenshot({ path: `${DIR}/in-app-nudge-continue-last-${scheme}.png`, animations: 'disabled', caret: 'hide' });
     await page.locator('#nudge-dismiss').click();
     await page.keyboard.press('Control+,');
-    await page.locator('#helpers').scrollIntoViewIfNeeded();
-    await page.evaluate(() => document.querySelector('#helpers')?.scrollIntoView({ block: 'start' }));
+    // "Continue last" shortcut on the Shortcuts tab.
+    await page.locator('#settings-tab-shortcuts').click();
+    await page.locator('#resume-shortcut-form').scrollIntoViewIfNeeded();
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.());
     await page.screenshot({ path: `${DIR}/settings-quick-wins-${scheme}.png`, animations: 'disabled', caret: 'hide' });
     await page.keyboard.press('Escape');

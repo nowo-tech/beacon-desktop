@@ -81,6 +81,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
     await signIn(page);
     await page.locator('#open-settings').click();
+    await page.locator('#settings-tab-meetings').click();
     const section = page.getByRole('region', { name: 'Meeting reminders' });
     await expect(section).toBeVisible();
     const toggle = page.getByLabel('Remind me before my meetings');
@@ -146,6 +147,7 @@ test('an older server: no reminders, and Settings says why', async ({ page }) =>
   await signIn(page);
   await expect(page.locator('#meetings-today')).toHaveCount(0);
   await page.locator('#open-settings').click();
+  await page.locator('#settings-tab-meetings').click();
   await expect(page.locator('#meeting-reminders-unavailable')).toContainText('TimeTrack 1.14');
   await expect(page.getByLabel('Remind me before my meetings')).toBeDisabled();
   const state = (await control('state')) as { requests: { path: string }[] };

@@ -101,6 +101,7 @@ test('denied by the OS: the toast stays and Settings says so', async ({ page }) 
   await expect(page.locator('#cheer')).toBeVisible();
   await expect(page.getByRole('region', { name: 'Desktop notifications are off' })).toBeVisible();
   await page.locator('#open-settings').click();
+  await page.locator('#settings-tab-notifications').click();
   await expect(page.locator('#native-status')).toContainText('turned off for TimeTrack');
   await expect(page.getByLabel('Show them as desktop notifications')).toBeChecked();
 });
@@ -143,12 +144,13 @@ test('tray: pause friendly messages for an hour and resume', async ({ page }) =>
   await page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.trayAction('pause-friendly'));
   await expect.poll(async () => (await item())?.id).toBe('resume-friendly');
   await page.locator('#open-settings').click();
+  await page.locator('#settings-tab-notifications').click();
   await expect(page.locator('#friendly-paused-text')).toContainText('Paused until');
   await page.locator('#friendly-resume').click();
   await expect.poll(async () => (await item())?.id).toBe('pause-friendly');
 });
 
-test('the in-app toast never covers the last task rows', async ({ page }) => {
+test('the in-app toast never covers the last task rows nor the footer', async ({ page }) => {
   await quietClock(page);
   await signIn(page);
   await runningFor(page, 2 * 3600 + 60);
@@ -156,10 +158,14 @@ test('the in-app toast never covers the last task rows', async ({ page }) => {
   const toast = page.locator('#cheer');
   await expect(toast).toBeVisible();
   await expect(page.locator('#app')).toHaveClass(/with-toasts/);
-  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  // The list scrolls inside its own container; the toast's room is added below its last row.
+  await page.locator('#task-scroll').evaluate((el) => el.scrollTo(0, el.scrollHeight));
   const last = page.locator('#tasks li').last();
   const [row, card] = [await last.boundingBox(), await toast.boundingBox()];
   expect(row !== null && card !== null && row.y + row.height <= card.y).toBe(true);
+  // The footer ("Signed in as …") ends above the toast too (audit L3).
+  const footer = await page.locator('#main .footer').boundingBox();
+  expect(footer !== null && card !== null && footer.y + footer.height <= card.y).toBe(true);
 });
 
 const VIEW = {

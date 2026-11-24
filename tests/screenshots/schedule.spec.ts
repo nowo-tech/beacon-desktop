@@ -36,6 +36,7 @@ type App = {
   state: Record<string, unknown>;
   render(): void;
   show(view: string): void;
+  showSettings(tab: string): void;
   setScheduleField(day: number, name: string, value: unknown): void;
   setLocalDayOff(date: string, on: boolean): void;
   showReminderToast(note: unknown): void;
@@ -154,7 +155,7 @@ for (const scheme of ['light', 'dark'] as const) {
       app.setScheduleField(4, 'start', '08:30');
       app.setScheduleField(5, 'lunchStart', null);
       app.setLocalDayOff('2026-11-20', true);
-      app.show('settings');
+      app.showSettings('schedule');
     });
     await page.locator('#day-4 summary').click();
     const section = page.locator('#schedule-settings');

@@ -374,7 +374,7 @@
   "reassignSearchFailed": "La búsqueda no ha funcionado. Inténtalo de nuevo.",
   "reassignEmpty": "Aún no hay tareas fijadas ni recientes: busca una.",
   "reassignSave": "Pasar el tiempo aquí",
-  "helpersTitle": "Continuar, avisos y bloqueo",
+  "helpersTitle": "Avisos y bloqueo",
   "resumeShortcutLabel": "Atajo «Continuar la última»",
   "resumeShortcutHelp": "Vuelve a iniciar tu última tarea (un registro nuevo) desde cualquier aplicación, aunque TimeTrack esté oculto en la bandeja. Por defecto: Ctrl+Alt+T (⌘⌥T en macOS, Ctrl+Alt+Shift+R en Linux). Formato: CommandOrControl+Alt+T.",
   "shortcutSame": "«{shortcut}» ya es el otro atajo: elige uno distinto.",
@@ -445,5 +445,13 @@
   "meetingLinkRefused": "Este enlace no se puede abrir desde TimeTrack.",
   "meetingReminderLabel": "Recordatorio de reunión",
   "meetingTrackPick": "¿Qué tarea es esta reunión?",
-  "privacyLocalReminders": "Recordatorios de reuniones: las reuniones de hoy y mañana tal como las envía Beacon (título, horas, enlace para unirse, nombres de los asistentes internos, tareas enlazadas), como mucho 48 horas y borradas al cerrar sesión; y qué avisos se mostraron, solo como hashes y horas."
+  "privacyLocalReminders": "Recordatorios de reuniones: las reuniones de hoy y mañana tal como las envía Beacon (título, horas, enlace para unirse, nombres de los asistentes internos, tareas enlazadas), como mucho 48 horas y borradas al cerrar sesión; y qué avisos se mostraron, solo como hashes y horas.",
+  "settingsSections": "Secciones de ajustes",
+  "settingsTabGeneral": "General",
+  "settingsTabShortcuts": "Atajos",
+  "settingsTabTimer": "Temporizador",
+  "settingsTabSchedule": "Horario",
+  "settingsTabNotifications": "Notificaciones",
+  "settingsTabMeetings": "Reuniones",
+  "settingsTabUpdates": "Actualizaciones"
 }

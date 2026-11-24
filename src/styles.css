@@ -25,6 +25,9 @@
   --radius-card: 0.75rem;
   --radius-control: 0.375rem;
   --mono: ui-monospace, 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  /* One content width for every view (login, device, main, settings, privacy, update required), both layouts. */
+  --content-max: 31rem;
+  --content-gutter: 1rem;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -76,11 +79,22 @@ body {
   color: var(--ink);
   font: 0.875rem/1.45 Montserrat, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
-#app { padding: 0 1rem 1rem; max-width: 33rem; margin: 0 auto; }
+/*
+ * App shell: the window never scrolls. The header stays on top and the view below scrolls inside its pane (on the main
+ * screen only the task lists scroll, see .task-scroll). Both reserve the scrollbar's room (scrollbar-gutter), so the
+ * content keeps its width and place whether a view scrolls or not.
+ */
+#app { height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+#app > .bar { margin: 0; padding-inline: var(--content-gutter); overflow: hidden; scrollbar-gutter: stable; }
+#app > .bar > .bar-row { max-width: var(--content-max); margin-inline: auto; }
+.frame { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
+.main-pane { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 0.5rem var(--content-gutter) 1rem; }
+.main-pane > * { width: 100%; max-width: var(--content-max); margin-inline: auto; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* Header */
-.bar { display: flex; align-items: center; gap: 0.5rem; min-height: 3rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--sand); }
+.bar { border-bottom: 1px solid var(--sand); }
+.bar-row { display: flex; align-items: center; gap: 0.5rem; min-height: 3rem; }
 h1 { display: flex; align-items: center; gap: 0.375rem; font-size: 1rem; font-weight: 600; margin: 0; color: var(--moss); flex: 1; min-width: 0; }
 h2 { font-size: 1.0625rem; font-weight: 600; margin: 0.25rem 0 0.5rem; }
 .section-title { font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); margin: 1rem 0 0.25rem; }
@@ -147,6 +161,23 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 #cancel-device { width: 100%; margin-top: 0.5rem; }
 
 /* Main */
+/*
+ * The main screen fills its pane: timer, totals, search and footer stay put and only .task-scroll (banners, pinned +
+ * recent, the task list) scrolls. No fixed heights: flex with min-height 0 adapts to any window size. Its padding keeps
+ * the focus ring of a row at the edge visible; scroll-padding keeps a focused row clear of the edges.
+ */
+#app[data-view='main'] .main-pane { display: flex; flex-direction: column; }
+#app[data-view='main'] #view, #main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.task-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 0.25rem;
+  margin-inline: -0.25rem;
+  scroll-padding-block: 0.5rem;
+}
 .card { background: var(--surface); border: 1px solid var(--sand); border-radius: var(--radius-card); padding: 0.75rem; margin-bottom: 0.625rem; }
 #timer { display: grid; grid-template-columns: 1fr auto; gap: 0.125rem 0.5rem; align-items: center; }
 #timer.running { background: var(--mist); border-color: var(--moss); }
@@ -253,7 +284,72 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 .about { display: flex; align-items: center; gap: 0.75rem; margin: 0.75rem 0; }
 .about h2 { font-size: 0.875rem; margin: 0; }
 .about p { margin: 0; }
-#logout { margin-top: 0.75rem; }
+#logout { margin-inline-start: auto; }
+/*
+ * Settings tabs (src/ui/tabs.ts): one row that scrolls sideways when the names do not fit (never wraps), edges fading
+ * while more tabs hide beyond them. The selected tab is marked by its colour and an underline drawn by a border (kept
+ * in forced-colours mode) that takes no room, so selecting never changes a tab's size. The row sticks to the top of
+ * the pane while a panel scrolls.
+ */
+@property --fade-start { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --fade-end { syntax: '<length>'; inherits: false; initial-value: 0px; }
+.tablist {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  gap: 0.125rem;
+  margin: -0.5rem 0 0.75rem;
+  padding-top: 0.5rem;
+  background: var(--paper);
+  border-bottom: 1px solid var(--sand);
+  overflow-x: auto;
+  scrollbar-width: none;
+  scroll-padding-inline: var(--fade-size);
+  --fade-size: 2rem;
+  /* Gradient directions and mask positions are physical: flipped below for right-to-left text. */
+  --fade-dir: right;
+  --fade-start-pos: 0;
+  --fade-end-pos: 100%;
+  mask:
+    linear-gradient(black, black) no-clip subtract,
+    linear-gradient(to var(--fade-dir), black, transparent) var(--fade-start-pos) 0 / var(--fade-start) 100% no-repeat no-clip,
+    linear-gradient(to var(--fade-dir), transparent, black) var(--fade-end-pos) 0 / var(--fade-end) 100% no-repeat no-clip;
+}
+/* By the dir attribute (the build lowers :dir() to a :lang() list, which a dir attribute would not match). */
+[dir='rtl'] .tablist, .tablist[dir='rtl'] { --fade-dir: left; --fade-start-pos: 100%; --fade-end-pos: 0; }
+.tablist::-webkit-scrollbar { display: none; }
+@supports (animation-timeline: scroll()) {
+  .tablist {
+    animation: tabs-fade-start linear both, tabs-fade-end linear both;
+    animation-timeline: scroll(self inline);
+    animation-range: 0 var(--fade-size), calc(100% - var(--fade-size)) 100%;
+  }
+}
+@keyframes tabs-fade-start { to { --fade-start: var(--fade-size); } }
+@keyframes tabs-fade-end { from { --fade-end: var(--fade-size); } }
+/* Without scroll-driven animations, src/ui/tabs.ts marks the edges with more tabs beyond them. */
+.tablist.more-start { --fade-start: var(--fade-size); }
+.tablist.more-end { --fade-end: var(--fade-size); }
+.tab {
+  flex: none;
+  position: relative;
+  min-height: 2.5rem;
+  padding: 0.375rem 0.75rem;
+  border: 0;
+  border-radius: var(--radius-control) var(--radius-control) 0 0;
+  background: transparent;
+  color: var(--ink-soft);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tab:hover { color: var(--ink); background: var(--mist); }
+.tab[aria-selected='true'] { color: var(--moss-deep); }
+.tab[aria-selected='true']::after { content: ''; position: absolute; inset: auto 0 0; border-bottom: 3px solid var(--moss); }
+/* Inside the scrolling row an outer ring would be clipped: the ring is drawn inside the tab. */
+.tab:focus-visible { outline: 2px solid var(--moss); outline-offset: -2px; }
+/* Panels carry no box of their own (hidden="until-found" keeps it); their first block starts flush, every tab alike. */
+.tabpanel > :first-child, .tabpanel > :first-child > :first-child { margin-top: 0; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -261,12 +357,13 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 }
 
 /* Native shell (0.5.0): room below the list while a toast is up; the "Still there?" window; the notification notes. */
-#app.with-toasts { padding-bottom: var(--toast-space, 7.5rem); }
+/* While a toast is up, the main screen ends above it: the footer and the list's last rows are never covered. */
+#app.with-toasts #main, #app.with-toasts .detail { padding-bottom: var(--toast-space, 7.5rem); }
 .native-notice { display: grid; gap: 0.375rem; }
 .native-notice h2 { margin: 0; font-size: 1rem; }
 .native-status { color: var(--ink); }
 .prompt-window body { min-height: 100vh; }
-.prompt-window #app { max-width: none; padding: 0; }
+.prompt-window #app { display: block; height: auto; }
 .prompt-region { min-height: 100vh; display: grid; place-items: center; padding: 1rem; box-sizing: border-box; }
 .prompt-region > .card { width: 100%; max-width: 30rem; margin: 0; box-shadow: none; }
 .prompt-region .mascot.tiny { height: 4.5rem; }
@@ -306,18 +403,14 @@ input[type='time'], input[type='date'] { font: inherit; padding: 0.25rem 0.375re
  */
 .pane[hidden], .search[hidden], .list-section[hidden] { display: none !important; }
 .pane:focus { outline: none; }
-#app[data-layout='full'] { max-width: none; margin: 0; padding: 0; height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
-#app[data-layout='full'] > .bar { margin: 0; padding: 0 1rem 0 1.25rem; background: var(--surface); }
-#app[data-layout='full'] .frame { display: grid; grid-template-columns: 13.5rem minmax(0, 1fr); min-height: 0; }
+#app[data-layout='full'] > .bar { padding: 0 1rem 0 1.25rem; background: var(--surface); scrollbar-gutter: auto; }
+#app[data-layout='full'] > .bar > .bar-row { max-width: none; }
+#app[data-layout='full'] .frame { grid-template-columns: 13.5rem minmax(0, 1fr); }
 #app[data-layout='full'].with-detail .frame { grid-template-columns: 13.5rem minmax(0, 1fr) minmax(17rem, 24rem); }
 #app[data-layout='full'] .pane { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 #app[data-layout='full'] .sidebar { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem 0.625rem; border-right: 1px solid var(--sand); background: var(--surface-muted); }
 #app[data-layout='full'] .main-pane { padding: 0.75rem 1.5rem 1.5rem; }
-#app[data-layout='full'] .main-pane > * { max-width: 48rem; margin-inline: auto; }
 #app[data-layout='full'] .detail { padding: 0.875rem 1.25rem 1.5rem; border-left: 1px solid var(--sand); background: var(--surface-muted); }
-#app[data-layout='full'] #timer { position: sticky; top: 0; z-index: 5; box-shadow: 0 -0.75rem 0 0 var(--paper); }
-#app[data-layout='full'].with-toasts { padding-bottom: 0; }
-#app[data-layout='full'].with-toasts .main-pane, #app[data-layout='full'].with-toasts .detail { padding-bottom: var(--toast-space, 7.5rem); }
 #app[data-layout='full'] .tasks li { padding-inline: 0.375rem; border-radius: var(--radius-control); }
 .tasks li.selected { background: var(--mist); box-shadow: inset 3px 0 0 var(--moss); }
 .nav-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.125rem; }

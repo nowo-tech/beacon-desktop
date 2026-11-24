@@ -104,7 +104,13 @@ a ghost Windows removes when the mouse passes over it.
   900 px: sections sidebar, task list with the running timer on top, detail pane with the selected task's time today
   and this week and the week by day; Settings as a page). Switch with the header button, the tray menu or
   `Ctrl/Cmd + Shift + L`; each view reopens at its own remembered size and position, on screen. `F6` moves between
-  the panes. The window cannot be made smaller than the compact view (380 × 560).
+  the panes. The window cannot be made smaller than the compact view (380 × 560). The window itself never scrolls:
+  on the main screen the timer, totals and search stay in place and only the task list scrolls, and every screen
+  shares one content width.
+- **Settings in tabs**: *General* (theme, browser for Beacon links, start at login, what we collect, sign out),
+  *Shortcuts*, *Timer* ("Still there?", working without a timer, pause on lock), *Schedule*, *Notifications*
+  (friendly messages, desktop notifications), *Meetings* and *Updates* (version, *Check for updates*). Arrow keys,
+  Home and End move between tabs; the last tab opened is remembered on this computer.
 - Device-flow sign-in (no password typed in the app); `401` asks you to sign in again.
 - Task search, start / stop / switch. Offline queue: actions taken offline (and "Still there?" answers) are kept on this
   computer, survive a restart and are replayed in order with their real times (`startedAt` / `endedAt`, TimeTrackBundle
@@ -124,7 +130,7 @@ a ghost Windows removes when the mouse passes over it.
 - Optional, off by default, with dated consent: notifications (never outside `me.workingHours`), start at login.
 - Auto-update through Beacon (`/api/time-track/updates/desktop/{target}/{arch}/{version}?bundle_type=…`, your token
   as Bearer), signed with the owner's minisign key: checked at start, every 6 h and from *Check for updates* (tray,
-  Settings → About). A calm card ("Version X is available — What's new · Update now · Later") downloads with progress,
+  Settings → Updates). A calm card ("Version X is available — What's new · Update now · Later") downloads with progress,
   verifies, installs and relaunches; with a timer running it asks first and offers *After I stop*. An "update
   required" screen when `min_supported_version` (updater body / `X-Min-Supported-Version` / `GET me`) is newer than the
   app and an update satisfying it is offered; it always keeps *Remind me later*, *Download from Beacon* and *Sign out*.
@@ -140,7 +146,7 @@ a ghost Windows removes when the mouse passes over it.
 
 ### Light and dark theme, mascot moments
 
-Settings → **Theme**: *System* (default, follows the computer's light / dark setting), *Light* or *Dark*; stored on this
+Settings → General → **Theme**: *System* (default, follows the computer's light / dark setting), *Light* or *Dark*; stored on this
 computer and applied to the title bar too. The robot from Beacon shows up in a few friendly moments (sign-in, "You're
 in!", saved, a timer left running for 8 hours, no results, offline, updates) and stays out of the running timer and the
 task list; which pose goes where, and where the art comes from: [public/mascot/README.md](public/mascot/README.md).
@@ -160,12 +166,12 @@ the task name) "Still there?" becomes "Still in the meeting?" with a longer coun
 coffee / stretch toast, and a finished daily gets a "let's go!". At most one toast every 50 minutes, each moment at
 most once a day, never a repeated line among the last six. Written natively in English, Spanish, German, French,
 Italian, Dutch and Portuguese (the Beacon user's language when the server sends `me.locale`, else the app's), with
-local times per language. Settings → **Friendly messages**: *Fun messages* and *Wellbeing reminders*, both on by
+local times per language. Settings → Notifications → **Friendly messages**: *Fun messages* and *Wellbeing reminders*, both on by
 default. Pools: `src/lib/messages/`; rules: `src/lib/friendly.ts`.
 
 ### Working-hours reminders
 
-Settings → **My schedule** holds your week: start, end and lunch break per weekday, or a day off. It is filled in from
+Settings → Schedule → **My schedule** holds your week: start, end and lunch break per weekday, or a day off. It is filled in from
 the working hours your organisation publishes in Beacon (`GET me.workingHours`; the gap between two slots of a day is
 the lunch break) and you can change any value on this computer only; local values are marked *This computer*, and
 *Reset to Beacon's schedule* goes back. Holidays and vacations come from Beacon (`GET me.daysOff`, once
@@ -196,7 +202,7 @@ to anyone watching a shared screen. Where it cannot open (a plain browser), it i
 
 The first time one is due, the app asks the OS for permission (macOS asks you; the others allow it) and explains once,
 inside the window, where the messages went (*Keep them inside the app* is one click away). A refusal or a missing
-notification service is remembered: the messages stay in the window and Settings → Friendly messages says why, with
+notification service is remembered: the messages stay in the window and Settings → Notifications → Friendly messages says why, with
 *Try again*. The pictures are 96 × 96 PNGs built from the poses (`scripts/mascot/notification-art.sh` →
 `src-tauri/notification-art/`, listed in `src-tauri/src/pose_art.rs`), compiled into the binary and written to the app
 cache on first use. `pnpm screenshots:native` (`NATIVE_SCREENS=<dir>`) renders mock-ups of the three notifications,
@@ -216,7 +222,7 @@ ImageMagick (in a throwaway Docker container when they are not installed). A pos
 
 ### Open Beacon in, Copy link
 
-Settings → **Open Beacon in**: *System default browser* (default), a browser found on this computer (Windows registry,
+Settings → General → **Open Beacon in**: *System default browser* (default), a browser found on this computer (Windows registry,
 macOS LaunchServices, Linux `.desktop` files incl. Flatpak / Snap) or *Custom…*. Every link the app opens uses it, also
 links a page would open by itself. If the chosen browser is uninstalled, links open in the system default and the app
 says so. Next to My time, a running task's link and *Open the page again* there is a **Copy link** button, and a right
@@ -255,7 +261,7 @@ offers *Switch to the meeting* instead; with a meeting-like task already running
 the microphone has been free for a minute: "Meeting over (32 min). Back to <previous task>?" with *Back* and *Stop*.
 During the call the "Still there?" prompt uses its softer meeting wording and longer countdown. Questions follow the
 1 h pause ("do not disturb"), wait while "Still there?" is open, come at most every 10 minutes, and, with no timer
-running, only within your working day (Settings → My schedule, days off).
+running, only within your working day (Settings → Schedule → My schedule, days off).
 
 What is read, per OS (`src-tauri/src/meeting/`, every 20 s from the heartbeat, only while the switch is on):
 
@@ -275,7 +281,7 @@ settings in Spanish, light and dark.
 ### Meeting reminders (TimeTrack 1.14)
 
 With a Beacon on TimeTrack 1.14 or later and a calendar connected there, the app reminds you before each meeting,
-on this computer only (contract §23). Settings → **Meeting reminders**: *Remind me before my meetings* (on by default
+on this computer only (contract §23). Settings → Meetings → **Meeting reminders**: *Remind me before my meetings* (on by default
 once a calendar is connected), *Remind me* 5 minutes before (not before, 1, 2, 5, 10, 15, 30 or a custom 1–120),
 *Remind me outside working hours* and *on days off* (both off), *When a meeting starts and a timer is running, ask
 what to record* (on) and *Pause my timer automatically when a meeting starts* (off).
@@ -288,7 +294,7 @@ what to record* (on) and *Pause my timer automatically when a meeting starts* (o
 - When a meeting starts while a timer runs: *Keep timing*, *Pause* or *Track the meeting* (its linked task, or one you
   pick). With the automatic pause, the timer stops and a notification offers *Undo*.
 - *Today's meetings* lists the rest of the day in the main window and in the tray, with *Join*.
-- Only meetings inside your working hours (Settings → My schedule) and never on days off, unless switched on; free,
+- Only meetings inside your working hours (Settings → Schedule → My schedule) and never on days off, unless switched on; free,
   all-day and past meetings never remind; each meeting reminds once per start time (a moved meeting reminds again).
 - The list (today and tomorrow) is fetched on start, on wake, when the network comes back and every 5 minutes (or
   Beacon's `refreshAfterSeconds`), honouring `429 Retry-After`; it is kept for at most 48 hours so reminders work
@@ -309,7 +315,7 @@ what TimeTrack deliberately will not do: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 <img src="docs/images/desktop-update-running.webp" alt="Update offered while a timer runs: After I stop" width="200"> <img src="docs/images/desktop-update-required.webp" alt="Update required screen with Remind me later" width="200"> <img src="docs/images/desktop-update-progress-dark.webp" alt="Update download progress, dark theme" width="200">
 
-Microsoft Store build (`TIMETRACK_CHANNEL=store`): the Store updates the app, so Settings → About and the "update
+Microsoft Store build (`TIMETRACK_CHANNEL=store`): the Store updates the app, so Settings → Updates and the "update
 required" screen send you to the Store listing instead.
 
 <img src="docs/images/desktop-store-about.webp" alt="Settings, About: Updates come from the Microsoft Store" width="200"> <img src="docs/images/desktop-store-update-required.webp" alt="Update required in the Store build: Open Microsoft Store" width="200">

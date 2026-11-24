@@ -97,6 +97,8 @@ function freshState() {
       meetings: null,
       // `meetings:read` is a known scope (1.14+); false = device/code refuses it like an older server.
       meetingsScope: true,
+      // Extra generated tasks after the eight above (T-201 "Sample task 1", …): a long list for the scrolling tests.
+      extraTasks: 0,
     },
   };
 }
@@ -174,6 +176,11 @@ export function createMockServer(options = {}) {
     return { token: value, expiresAt: new Date(expiresAt).toISOString(), scopes: [...scopes] };
   }
 
+  function allTasks() {
+    const extra = Math.max(0, Math.min(Number(state.config.extraTasks) || 0, 200));
+    return [...TASKS, ...Array.from({ length: extra }, (_, i) => ({ id: `T-${201 + i}`, title: `Sample task ${i + 1}`, boardId: 'misc', boardTitle: 'Miscellaneous' }))];
+  }
+
   function withUrl(item, taskId) {
     const url = state.config.taskUrls?.[taskId];
     const extras = state.config.taskExtras?.[taskId] ?? {};
@@ -181,7 +188,7 @@ export function createMockServer(options = {}) {
   }
 
   function startTimer(userId, taskId, note, source, origin = null) {
-    const task = TASKS.find((t) => t.id === taskId);
+    const task = allTasks().find((t) => t.id === taskId);
     const timer = withUrl(
       {
         id: randomUUID(),
@@ -275,7 +282,7 @@ export function createMockServer(options = {}) {
   }
 
   function validTask(body) {
-    return typeof body.taskId === 'string' && TASKS.some((t) => t.id === body.taskId);
+    return typeof body.taskId === 'string' && allTasks().some((t) => t.id === body.taskId);
   }
 
   function validSource(body, res) {
@@ -353,7 +360,7 @@ export function createMockServer(options = {}) {
         const search = (url.searchParams.get('search') ?? '').toLowerCase();
         const limit = Math.min(Number(url.searchParams.get('limit') ?? 50) || 50, 50);
         const offset = Number(url.searchParams.get('offset') ?? 0) || 0;
-        const tasks = TASKS.filter(
+        const tasks = allTasks().filter(
           (t) => search === '' || t.title.toLowerCase().includes(search) || t.id.toLowerCase() === search,
         );
         return send(res, 200, { tasks: tasks.slice(offset, offset + limit).map((t) => withUrl(t, t.id)) });

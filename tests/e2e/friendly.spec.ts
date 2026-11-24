@@ -54,6 +54,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.locator('#cheer-dismiss').click();
     await expect(card).toHaveCount(0);
     await page.locator('#open-settings').click();
+    await page.locator('#settings-tab-notifications').click();
     await expect(page.getByLabel('Fun messages from the robot')).toBeChecked();
     await expect(page.getByLabel('Wellbeing reminders')).toBeChecked();
     await page.getByLabel('Fun messages from the robot').uncheck();

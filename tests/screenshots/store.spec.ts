@@ -7,9 +7,8 @@ test.beforeEach(reset);
 test('desktop-store-about', async ({ page }) => {
   await signIn(page);
   await page.locator('#open-settings').click();
+  await page.locator('#settings-tab-updates').click();
   await expect(page.locator('#update-status')).toHaveText('Updates come from the Microsoft Store.');
-  await page.locator('#about').scrollIntoViewIfNeeded();
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await shot(page, 'desktop-store-about');
 });
 

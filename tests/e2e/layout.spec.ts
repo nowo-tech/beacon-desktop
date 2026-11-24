@@ -97,12 +97,13 @@ for (const scheme of ['light', 'dark'] as const) {
     await noOverlap(page, `${scheme} compact`);
     await axe(page, `${scheme} compact`);
 
-    // Between the compact column and the breakpoint: still one centred column, never stretched.
+    // Between the compact column and the breakpoint: still one centred column (--content-max), never stretched.
     await page.setViewportSize(MIDDLE);
     await expect(page.locator('#app')).toHaveAttribute('data-layout', 'compact');
-    const column = await page.locator('#app').boundingBox();
-    expect(column?.width).toBeLessThanOrEqual(33 * 16 + 1);
-    expect(Math.abs((column?.x ?? 0) * 2 + (column?.width ?? 0) - MIDDLE.width)).toBeLessThanOrEqual(2);
+    const column = await page.locator('#main').boundingBox();
+    const pane = await page.locator('#main-pane').evaluate((el) => ({ left: el.getBoundingClientRect().left, inner: el.clientWidth }));
+    expect(column?.width).toBeLessThanOrEqual(31 * 16 + 1);
+    expect(Math.abs(((column?.x ?? 0) - pane.left) * 2 + (column?.width ?? 0) - pane.inner)).toBeLessThanOrEqual(2);
     await noHorizontalScroll(page, `${scheme} middle`);
 
     await page.setViewportSize(FULL);
@@ -115,11 +116,11 @@ for (const scheme of ['light', 'dark'] as const) {
     await noOverlap(page, `${scheme} full`);
     await axe(page, `${scheme} full`);
 
-    // The running timer stays in view while the task list scrolls.
+    // The running timer stays in view while the task list scrolls (inside its own container).
     await page.locator('#detail-start').click();
     await expect(page.locator('#timer-task')).toHaveText('Fix invoice rounding bug');
     await page.setViewportSize({ width: FULL.width, height: 560 });
-    await page.locator('#main-pane').evaluate((el) => el.scrollTo(0, el.scrollHeight));
+    await page.locator('#task-scroll').evaluate((el) => el.scrollTo(0, el.scrollHeight));
     const timer = await page.locator('#timer').boundingBox();
     const header = await page.locator('.bar').boundingBox();
     expect(timer?.y).toBeGreaterThanOrEqual((header?.y ?? 0) + (header?.height ?? 0) - 1);
