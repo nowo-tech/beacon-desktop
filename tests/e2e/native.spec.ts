@@ -101,6 +101,7 @@ test('denied by the OS: the toast stays and Settings says so', async ({ page }) 
   await expect(page.locator('#cheer')).toBeVisible();
   await expect(page.getByRole('region', { name: 'Desktop notifications are off' })).toBeVisible();
   await page.locator('#open-settings').click();
+  await page.locator('#settings-tab-notifications').click();
   await expect(page.locator('#native-status')).toContainText('turned off for TimeTrack');
   await expect(page.getByLabel('Show them as desktop notifications')).toBeChecked();
 });
@@ -143,6 +144,7 @@ test('tray: pause friendly messages for an hour and resume', async ({ page }) =>
   await page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.trayAction('pause-friendly'));
   await expect.poll(async () => (await item())?.id).toBe('resume-friendly');
   await page.locator('#open-settings').click();
+  await page.locator('#settings-tab-notifications').click();
   await expect(page.locator('#friendly-paused-text')).toContainText('Paused until');
   await page.locator('#friendly-resume').click();
   await expect.poll(async () => (await item())?.id).toBe('pause-friendly');

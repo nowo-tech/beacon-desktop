@@ -35,6 +35,7 @@ type App = {
   state: Record<string, unknown>;
   render(): void;
   show(view: string): void;
+  showSettings(tab: string): void;
   setFeature(feature: string, on: boolean): Promise<void>;
   setMeetingSetting(patch: Record<string, unknown>): void;
   meetingAction(action: string): Promise<void>;
@@ -172,7 +173,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.evaluate(() => {
       const { app } = (window as unknown as Tt).__timeTrack;
       app.setMeetingSetting({ meetingGeneric: { id: 'T-103', title: 'Customer call: quarterly review' }, meetingMuted: ['slack'] });
-      app.show('settings');
+      app.showSettings('meetings');
     });
     await call(page, 0, 0, ['teams']);
     const section = page.locator('#meeting-settings');

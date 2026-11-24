@@ -374,7 +374,7 @@
   "reassignSearchFailed": "The search did not work. Try again.",
   "reassignEmpty": "No pinned or recent tasks yet: search for one.",
   "reassignSave": "Move the time here",
-  "helpersTitle": "Continue, reminders and lock",
+  "helpersTitle": "Reminders and lock",
   "resumeShortcutLabel": "“Continue last” shortcut",
   "resumeShortcutHelp": "Starts your last task again (a new entry) from any app, even with TimeTrack hidden in the tray. Default: Ctrl+Alt+T (⌘⌥T on macOS, Ctrl+Alt+Shift+R on Linux). Format: CommandOrControl+Alt+T.",
   "shortcutSame": "“{shortcut}” is already the other shortcut: choose a different one.",
@@ -445,5 +445,13 @@
   "meetingLinkRefused": "This link cannot be opened from TimeTrack.",
   "meetingReminderLabel": "Meeting reminder",
   "meetingTrackPick": "Which task is this meeting?",
-  "privacyLocalReminders": "Meeting reminders: today's and tomorrow's meetings as Beacon sends them (title, times, join link, internal attendees' names, linked tasks), for at most 48 hours, deleted on sign-out; and which reminders were shown, as hashes and times only."
+  "privacyLocalReminders": "Meeting reminders: today's and tomorrow's meetings as Beacon sends them (title, times, join link, internal attendees' names, linked tasks), for at most 48 hours, deleted on sign-out; and which reminders were shown, as hashes and times only.",
+  "settingsSections": "Settings sections",
+  "settingsTabGeneral": "General",
+  "settingsTabShortcuts": "Shortcuts",
+  "settingsTabTimer": "Timer",
+  "settingsTabSchedule": "Schedule",
+  "settingsTabNotifications": "Notifications",
+  "settingsTabMeetings": "Meetings",
+  "settingsTabUpdates": "Updates"
 }

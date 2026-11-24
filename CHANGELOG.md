@@ -7,6 +7,21 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ### Changed
 
+- **Settings in tabs** (owner request 2026-11-24): the single long page (about 3,500 px at the default 400 × 640
+  window) is split into seven tabs, each short enough to need little or no scrolling: *General* (theme, *Open Beacon
+  in*, start at login, the tray note, connection security, *What we collect*, *Sign out*), *Shortcuts* (global shortcut,
+  "Continue last"), *Timer* ("Still there?", working without a timer, pause on lock), *Schedule*, *Notifications*
+  (friendly messages, desktop notifications, *Show notifications*), *Meetings* (meeting detection, meeting reminders)
+  and *Updates* (version, *Check for updates* or the Microsoft Store note). The section formerly titled "Continue,
+  reminders and lock" is now "Reminders and lock" (its "Continue last" shortcut moved to *Shortcuts*). Accessible tabs
+  (`src/ui/tabs.ts`): `tablist` / `tab` / `tabpanel` with `aria-selected` and `aria-controls`, one Tab stop with a
+  roving tabindex, ←/→ (wrapping), Home and End, selection follows focus, a visible focus ring drawn inside the tab, an
+  underline (not colour alone, kept in forced-colours mode) that never changes the tab's size, and the tablist sticks
+  to the top while a panel scrolls. Tabs that do not fit scroll sideways with faded edges (scroll-driven animation,
+  `IntersectionObserver` fallback). Hidden panels are `hidden="until-found"`, so find-in-page still reaches them where
+  the webview supports it and selects their tab. The tabs and panels are built once per session and only their
+  contents are patched in place; the last tab opened is remembered on this computer (`time-track-desktop.settingsTab`,
+  removed by *Clear local data*).
 - **The window no longer scrolls; the task list does** (owner request 2026-11-24): the header, the running timer,
   the totals, the search and the footer stay in place and only the lists (with the banners above them) scroll, inside
   their own container (flex with `min-height: 0`, no fixed heights, so it follows window resizes;
@@ -19,8 +34,11 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ### Tests
 
-- Playwright: `shell.spec.ts` checks that with 48 tasks only the list scrolls (wheel and End key), the window never
-  does, and that every view has the same content width. The mock server takes `extraTasks` for long lists.
+- Vitest: tabs (roles, labels, grouping, click, ←/→/Home/End, roving tabindex, remembered tab and its fallbacks,
+  find-in-page, renamed tabs, right-to-left, fade fallback). Playwright: `settings-tabs.spec.ts` opens every tab (no
+  layout shift, the window never scrolls, axe) and drives the keyboard; `shell.spec.ts` checks that with 48 tasks only
+  the list scrolls and that every view has the same content width. The mock server takes `extraTasks` for long lists;
+  the axe helper no longer waits for scroll-driven animations (they never finish).
 
 ## [0.6.0] - 2026-11-18
 

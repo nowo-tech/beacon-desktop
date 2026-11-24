@@ -220,8 +220,11 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
   }
 }
 
+/** The last Settings tab opened (src/ui/app.ts): a convenience only, every read and write may fail. */
+export const SETTINGS_TAB_KEY = `${KEY}.settingsTab`;
+
 /** Every key this app writes to its local storage (for "Clear local data"). */
-export const LOCAL_KEYS = [KEY, `${KEY}.queue`, MEETINGS_KEY];
+export const LOCAL_KEYS = [KEY, `${KEY}.queue`, MEETINGS_KEY, SETTINGS_TAB_KEY];
 
 export function saveLocal(state: LocalState, storage: Storage = localStorage): void {
   storage.setItem(KEY, JSON.stringify(state));

@@ -148,11 +148,15 @@ test('"Working without a timer?" in working hours: a toast with Start and Choose
 test('Settings: the "Continue last" shortcut, the nudge and the lock switches are labelled and accessible', async ({ page }) => {
   await signIn(page);
   await page.keyboard.press('Control+,');
-  await expect(page.locator('#helpers-title')).toHaveText('Continue, reminders and lock');
-  // Linux default (Ctrl+Alt+T is the terminal there); the e2e browser runs on Linux.
-  await expect(page.locator('#resume-shortcut')).toHaveValue('CommandOrControl+Alt+Shift+R');
+  // Timer tab: the nudge and the lock switches.
+  await page.locator('#settings-tab-timer').click();
+  await expect(page.locator('#helpers-title')).toHaveText('Reminders and lock');
   await expect(page.getByLabel('Remind me when I work without a timer during my working hours')).toBeChecked();
   await expect(page.getByLabel('Pause on screen lock or sleep')).toBeChecked();
+  expect(await axe(page)).toEqual([]);
+  // Shortcuts tab: "Continue last". Linux default (Ctrl+Alt+T is the terminal there); the e2e browser runs on Linux.
+  await page.locator('#settings-tab-shortcuts').click();
+  await expect(page.locator('#resume-shortcut')).toHaveValue('CommandOrControl+Alt+Shift+R');
   expect(await axe(page)).toEqual([]);
   await page.locator('#resume-shortcut').fill('Alt+F9');
   await page.locator('#resume-shortcut-save').click();

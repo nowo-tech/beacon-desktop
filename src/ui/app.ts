@@ -15,7 +15,8 @@ import { OfflineQueue } from '../lib/queue';
 import { type ClampNote, type QueuedAction, type SyncResult, applyLocally } from '../lib/replay';
 import { type ServerFeatures, effectiveThreshold, serverFeatures, thresholdChoices } from '../lib/serverFeatures';
 import { hostOf, prepareServerUrl, type ServerUrlProblem } from '../lib/serverUrl';
-import { type Feature, type LocalState, DEFAULT_SETTINGS, LOCAL_KEYS, MAX_PINNED, emptyState, hasConsent, loadLocal, recordConsent, saveLocal } from '../lib/settings';
+import { type Feature, type LocalState, DEFAULT_SETTINGS, LOCAL_KEYS, MAX_PINNED, SETTINGS_TAB_KEY, emptyState, hasConsent, loadLocal, recordConsent, saveLocal } from '../lib/settings';
+import { createTabs, type Tabs } from './tabs';
 import { computeTotals, formatHoursMinutes, recentTasks, startOfDay, startOfWeek, taskContext, todayByTask, type Totals } from '../lib/summary';
 import { elapsedSeconds, formatElapsed } from '../lib/time';
 import { applyTheme, forcedTheme, THEMES, type ThemePreference } from '../lib/theme';
@@ -114,6 +115,19 @@ import { toastAction, toastActions } from './toast';
 import { PromptMount, type PromptAnswer, type PromptBlock, type PromptButton, type PromptPicker, type PromptTaskOption, type PromptText, type PromptView } from './prompt';
 
 export type View = 'loading' | 'login' | 'device' | 'main' | 'settings' | 'privacy' | 'update-required';
+
+/** Settings tabs, in order (each panel short enough for the default 400 × 640 window). */
+export const SETTINGS_TABS = ['general', 'shortcuts', 'timer', 'schedule', 'notifications', 'meetings', 'updates'] as const;
+export type SettingsTab = (typeof SETTINGS_TABS)[number];
+const SETTINGS_TAB_LABELS: Record<SettingsTab, MessageKey> = {
+  general: 'settingsTabGeneral',
+  shortcuts: 'settingsTabShortcuts',
+  timer: 'settingsTabTimer',
+  schedule: 'settingsTabSchedule',
+  notifications: 'settingsTabNotifications',
+  meetings: 'settingsTabMeetings',
+  updates: 'settingsTabUpdates',
+};
 
 /** Sections of the full layout's sidebar (the compact layout shows the tasks section). */
 export type Section = 'tasks' | 'quick' | 'time';
@@ -380,6 +394,8 @@ export class DesktopApp {
   private readonly menuRegion: HTMLElement;
   private lastTrayMenu = '';
   private main: MainRegions | null = null;
+  /** Settings: the tablist and its panels, built once per session; each panel is patched in place. */
+  private settingsView: { root: HTMLElement; tabs: Tabs<SettingsTab> } | null = null;
   /** Layout drawn now (from the window width, lib/layout.ts). */
   layout: LayoutMode;
   /** Full layout: sidebar section shown in the main pane. */
@@ -807,6 +823,7 @@ export class DesktopApp {
     this.welcome = false;
     this.main?.prompt.dispose();
     this.main = null;
+    this.settingsView = null;
     this.query = '';
     this.section = 'tasks';
     this.selectedTaskId = null;
@@ -2914,6 +2931,7 @@ export class DesktopApp {
     this.clampNotes = [];
     this.main?.prompt.dispose();
     this.main = null;
+    this.settingsView = null;
     this.confirmClear = false;
     this.offline = false;
     this.view = 'login';
@@ -3203,13 +3221,15 @@ export class DesktopApp {
     this.root.setAttribute('data-view', this.view);
     if (this.view === 'main') {
       this.renderMain();
+    } else if (this.view === 'settings') {
+      this.main?.root.remove();
+      this.renderSettings();
     } else {
       this.main?.root.remove();
-      const views: Record<Exclude<View, 'main'>, () => HTMLElement> = {
+      const views: Record<Exclude<View, 'main' | 'settings'>, () => HTMLElement> = {
         loading: () => h('p', {}, '…'),
         login: () => this.renderLogin(),
         device: () => this.renderDevice(),
-        settings: () => this.renderSettings(),
         privacy: () => this.renderPrivacy(),
         'update-required': () => this.renderUpdateRequired(),
       };
@@ -4603,79 +4623,168 @@ export class DesktopApp {
     return h('p', { class: 'muted', id: 'connection-security', attrs: { 'data-status': security.status } }, this.t(key, params));
   }
 
-  private renderSettings(): HTMLElement {
+  /** Last Settings tab opened (local storage, a convenience: anything unreadable means the first tab). */
+  private storedSettingsTab(): SettingsTab {
+    try {
+      const value = this.storage.getItem(SETTINGS_TAB_KEY);
+      return SETTINGS_TABS.find((tab) => tab === value) ?? SETTINGS_TABS[0];
+    } catch {
+      return SETTINGS_TABS[0];
+    }
+  }
+
+  private rememberSettingsTab(tab: SettingsTab): void {
+    try {
+      this.storage.setItem(SETTINGS_TAB_KEY, tab);
+    } catch {
+      // Storage full or blocked: the tab is simply not remembered.
+    }
+  }
+
+  /** The selected Settings tab (`null` until Settings is first opened in this session). */
+  settingsTab(): SettingsTab | null {
+    return this.settingsView?.tabs.selected() ?? null;
+  }
+
+  /** Opens Settings on one tab. */
+  showSettings(tab: SettingsTab): void {
+    this.show('settings');
+    this.settingsView?.tabs.select(tab);
+  }
+
+  /**
+   * Settings: a tablist and one panel per tab, built once per session (tabs and panels are never re-created); each
+   * render patches the panels' contents in place, so focus and the selected tab survive every update.
+   */
+  private renderSettings(): void {
+    const t = this.t;
+    const labels = Object.fromEntries(SETTINGS_TABS.map((id) => [id, t(SETTINGS_TAB_LABELS[id])])) as Record<SettingsTab, string>;
+    if (this.settingsView === null) {
+      const tabs = createTabs<SettingsTab>({
+        idPrefix: 'settings',
+        label: t('settingsSections'),
+        tabs: SETTINGS_TABS.map((id) => ({ id, label: labels[id] })),
+        selected: this.storedSettingsTab(),
+        onSelect: (id) => this.rememberSettingsTab(id),
+      });
+      this.settingsView = { root: h('main', { id: 'settings' }, tabs.root), tabs };
+    }
+    const { root, tabs } = this.settingsView;
+    tabs.setLabels(t('settingsSections'), labels);
+    if (root.parentElement !== this.body) this.body.replaceChildren(root);
+    const panel = (id: SettingsTab) => tabs.panels.get(id) as HTMLElement;
+    patch(panel('general'), [
+      this.renderAppearance(),
+      this.renderBrowserSetting(),
+      // Store (MSIX) builds cannot register the login item the autostart plugin writes: no switch there.
+      this.channel === 'direct' && this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
+      h('p', { class: 'muted', id: 'background-note' }, t('backgroundNote')),
+      this.renderConnectionSecurity(),
+      h(
+        'div',
+        { class: 'row-actions account-actions' },
+        h('button', { class: 'link', id: 'open-privacy', attrs: { type: 'button' }, on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
+        h('button', { class: 'danger', id: 'logout', attrs: { type: 'button' }, on: { click: () => void this.logout() } }, t('logout')),
+      ),
+    ]);
+    patch(panel('shortcuts'), [this.renderShortcut(), this.renderResumeShortcut()]);
+    patch(panel('timer'), [this.renderIdleSettings(), this.renderHelpers()]);
+    patch(panel('schedule'), [this.renderSchedule()]);
+    patch(panel('notifications'), [this.renderFriendlySettings(), this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText')]);
+    patch(panel('meetings'), [this.renderMeetingSettings(), this.renderReminderSettings()]);
+    patch(panel('updates'), [this.renderAbout()]);
+  }
+
+  /** Settings → Shortcuts: the global shortcut that shows the window. */
+  private renderShortcut(): HTMLElement {
     const t = this.t;
     const shortcut = h('input', { id: 'shortcut', attrs: { type: 'text', spellcheck: 'false', autocomplete: 'off', 'aria-describedby': 'shortcut-help shortcut-message' } });
     shortcut.value = this.state.settings.shortcut;
     return h(
-      'main',
-      { id: 'settings' },
-      this.renderAppearance(),
-      h(
-        'form',
-        {
-          class: 'feature',
-          id: 'shortcut-form',
-          on: {
-            submit: (event) => {
-              event.preventDefault();
-              void this.applyShortcut(shortcut.value);
-            },
+      'form',
+      {
+        class: 'feature',
+        id: 'shortcut-form',
+        on: {
+          submit: (event) => {
+            event.preventDefault();
+            void this.applyShortcut(shortcut.value);
           },
         },
-        h('label', { attrs: { for: 'shortcut' } }, t('shortcutLabel')),
-        shortcut,
-        h('p', { class: 'help', id: 'shortcut-help' }, t('shortcutHelp')),
-        this.shortcutMessage !== null && h('p', { class: this.shortcutMessage.ok ? 'muted' : 'field-error', id: 'shortcut-message' }, this.shortcutMessage.text),
-        h(
-          'div',
-          { class: 'row-actions' },
-          h('button', { class: 'secondary small', id: 'shortcut-save', key: 'shortcut-save', attrs: { type: 'submit' } }, t('shortcutSave')),
-          h('button', { class: 'link', id: 'shortcut-default', attrs: { type: 'button' }, on: { click: () => void this.applyShortcut(DEFAULT_SETTINGS.shortcut) } }, t('shortcutDefault')),
-        ),
+      },
+      h('label', { attrs: { for: 'shortcut' } }, t('shortcutLabel')),
+      shortcut,
+      h('p', { class: 'help', id: 'shortcut-help' }, t('shortcutHelp')),
+      this.shortcutMessage !== null && h('p', { class: this.shortcutMessage.ok ? 'muted' : 'field-error', id: 'shortcut-message' }, this.shortcutMessage.text),
+      h(
+        'div',
+        { class: 'row-actions' },
+        h('button', { class: 'secondary small', id: 'shortcut-save', key: 'shortcut-save', attrs: { type: 'submit' } }, t('shortcutSave')),
+        h('button', { class: 'link', id: 'shortcut-default', attrs: { type: 'button' }, on: { click: () => void this.applyShortcut(DEFAULT_SETTINGS.shortcut) } }, t('shortcutDefault')),
       ),
-      this.renderBrowserSetting(),
-      this.renderIdleSettings(),
-      this.renderHelpers(),
-      this.renderSchedule(),
-      this.renderFriendlySettings(),
-      this.renderMeetingSettings(),
-      this.renderReminderSettings(),
-      this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText'),
-      // Store (MSIX) builds cannot register the login item the autostart plugin writes: no switch there.
-      this.channel === 'direct' && this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
-      h('p', { class: 'muted', id: 'background-note' }, this.t('backgroundNote')),
-      this.renderConnectionSecurity(),
-      h('button', { class: 'link', id: 'open-privacy', on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
-      h('section', { class: 'about', id: 'about', attrs: { 'aria-labelledby': 'about-title' } },
-        moment('about', 'mascot tiny', t),
-        h(
-          'div',
-          {},
-          h('h2', { id: 'about-title' }, t('about')),
-          h('p', { class: 'muted' }, t('aboutText', { version: this.version })),
-          ...(this.channel === 'store'
-            ? [
-                h('p', { class: 'muted', id: 'update-status' }, t('updateStoreManaged')),
-                h('p', { class: 'muted', id: 'store-about' }, t('storeAbout')),
-                h('button', { class: 'secondary small', id: 'open-store', attrs: { type: 'button' }, on: { click: () => this.openStore() } }, t('openStore')),
-              ]
-            : [
-                this.updateStatus !== null && h('p', { class: 'muted', id: 'update-status' }, this.updateStatus),
-                h('button', { class: 'secondary small', id: 'check-updates', key: 'check-updates', attrs: { type: 'button', disabled: this.busy }, on: { click: () => void this.checkUpdates(true) } }, t('checkUpdates')),
-              ]),
-        ),
-      ),
-      h('button', { class: 'danger', id: 'logout', on: { click: () => void this.logout() } }, t('logout')),
     );
   }
 
-  /** Settings → "Continue last" shortcut, "Working without a timer?" and "Pause on lock or sleep". */
+  /** Settings → Shortcuts: the "Continue last" shortcut. */
+  private renderResumeShortcut(): HTMLElement {
+    const t = this.t;
+    const shortcut = h('input', { id: 'resume-shortcut', attrs: { type: 'text', spellcheck: 'false', autocomplete: 'off', 'aria-describedby': 'resume-shortcut-help resume-shortcut-message' } });
+    shortcut.value = this.state.settings.resumeShortcut;
+    return h(
+      'form',
+      {
+        class: 'feature',
+        id: 'resume-shortcut-form',
+        on: {
+          submit: (event) => {
+            event.preventDefault();
+            void this.applyShortcut(shortcut.value, true, 'resume');
+          },
+        },
+      },
+      h('label', { attrs: { for: 'resume-shortcut' } }, t('resumeShortcutLabel')),
+      shortcut,
+      h('p', { class: 'help', id: 'resume-shortcut-help' }, t('resumeShortcutHelp')),
+      this.resumeShortcutMessage !== null && h('p', { class: this.resumeShortcutMessage.ok ? 'muted' : 'field-error', id: 'resume-shortcut-message' }, this.resumeShortcutMessage.text),
+      h(
+        'div',
+        { class: 'row-actions' },
+        h('button', { class: 'secondary small', id: 'resume-shortcut-save', key: 'resume-shortcut-save', attrs: { type: 'submit' } }, t('shortcutSave')),
+        h('button', { class: 'link', id: 'resume-shortcut-default', attrs: { type: 'button' }, on: { click: () => void this.applyShortcut(DEFAULT_SETTINGS.resumeShortcut, true, 'resume') } }, t('shortcutDefault')),
+      ),
+    );
+  }
+
+  /** Settings → Updates: the version, then "Check for updates" (direct download) or the Microsoft Store note. */
+  private renderAbout(): HTMLElement {
+    const t = this.t;
+    return h(
+      'section',
+      { class: 'about', id: 'about', attrs: { 'aria-labelledby': 'about-title' } },
+      moment('about', 'mascot tiny', t),
+      h(
+        'div',
+        {},
+        h('h2', { id: 'about-title' }, t('about')),
+        h('p', { class: 'muted' }, t('aboutText', { version: this.version })),
+        ...(this.channel === 'store'
+          ? [
+              h('p', { class: 'muted', id: 'update-status' }, t('updateStoreManaged')),
+              h('p', { class: 'muted', id: 'store-about' }, t('storeAbout')),
+              h('button', { class: 'secondary small', id: 'open-store', attrs: { type: 'button' }, on: { click: () => this.openStore() } }, t('openStore')),
+            ]
+          : [
+              this.updateStatus !== null && h('p', { class: 'muted', id: 'update-status' }, this.updateStatus),
+              h('button', { class: 'secondary small', id: 'check-updates', key: 'check-updates', attrs: { type: 'button', disabled: this.busy }, on: { click: () => void this.checkUpdates(true) } }, t('checkUpdates')),
+            ]),
+      ),
+    );
+  }
+
+  /** Settings → Timer: "Working without a timer?" and "Pause on lock or sleep". */
   private renderHelpers(): HTMLElement {
     const t = this.t;
     const settings = this.state.settings;
-    const shortcut = h('input', { id: 'resume-shortcut', attrs: { type: 'text', spellcheck: 'false', autocomplete: 'off', 'aria-describedby': 'resume-shortcut-help resume-shortcut-message' } });
-    shortcut.value = settings.resumeShortcut;
     const nudge = h('input', { id: 'nudge-toggle', attrs: { type: 'checkbox', 'aria-describedby': 'nudge-help' } });
     nudge.checked = settings.nudgeWithoutTimer;
     nudge.addEventListener('change', () => this.setHelper({ nudgeWithoutTimer: nudge.checked }));
@@ -4693,28 +4802,6 @@ export class DesktopApp {
       'section',
       { class: 'feature', id: 'helpers', attrs: { 'aria-labelledby': 'helpers-title' } },
       h('h2', { id: 'helpers-title' }, t('helpersTitle')),
-      h(
-        'form',
-        {
-          id: 'resume-shortcut-form',
-          on: {
-            submit: (event) => {
-              event.preventDefault();
-              void this.applyShortcut(shortcut.value, true, 'resume');
-            },
-          },
-        },
-        h('label', { attrs: { for: 'resume-shortcut' } }, t('resumeShortcutLabel')),
-        shortcut,
-        h('p', { class: 'help', id: 'resume-shortcut-help' }, t('resumeShortcutHelp')),
-        this.resumeShortcutMessage !== null && h('p', { class: this.resumeShortcutMessage.ok ? 'muted' : 'field-error', id: 'resume-shortcut-message' }, this.resumeShortcutMessage.text),
-        h(
-          'div',
-          { class: 'row-actions' },
-          h('button', { class: 'secondary small', id: 'resume-shortcut-save', key: 'resume-shortcut-save', attrs: { type: 'submit' } }, t('shortcutSave')),
-          h('button', { class: 'link', id: 'resume-shortcut-default', attrs: { type: 'button' }, on: { click: () => void this.applyShortcut(DEFAULT_SETTINGS.resumeShortcut, true, 'resume') } }, t('shortcutDefault')),
-        ),
-      ),
       h('label', { class: 'switch' }, nudge, t('nudgeSwitch')),
       settings.nudgeWithoutTimer && h('label', { class: 'inline' }, t('nudgeMinutes'), minutes),
       h('p', { class: 'help', id: 'nudge-help' }, t('nudgeHelp')),

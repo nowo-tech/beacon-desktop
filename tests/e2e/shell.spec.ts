@@ -87,6 +87,7 @@ test('every view has the same content width at the default window size', async (
   widths.main = await contentBox(page);
   await page.locator('#open-settings').click();
   widths.settings = await contentBox(page);
+  await page.locator('#settings-tab-general').click();
   await page.locator('#open-privacy').click();
   await expect(page.locator('#privacy')).toBeVisible();
   widths.privacy = await contentBox(page);

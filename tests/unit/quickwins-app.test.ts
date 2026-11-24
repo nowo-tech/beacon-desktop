@@ -294,8 +294,12 @@ describe('"Continue last" and its global shortcut', () => {
 
   it('Settings: change it, refuse the other shortcut or one the OS refuses, back to the default', async () => {
     const ui = await signedIn((hooks) => (hooks.refusedShortcuts = ['Alt+F1']));
-    ui.app.show('settings');
-    expect(ui.$('#helpers-title').textContent).toBe('Continue, reminders and lock');
+    ui.app.showSettings('shortcuts');
+    // "Continue last" is on the Shortcuts tab, next to the global shortcut; nudge and lock stay on the Timer tab.
+    expect(ui.$('#settings-tab-shortcuts').getAttribute('aria-selected')).toBe('true');
+    expect(ui.$('#settings-panel-shortcuts').contains(ui.$('#resume-shortcut-form'))).toBe(true);
+    expect(ui.$('#settings-panel-timer').contains(ui.$('#helpers'))).toBe(true);
+    expect(ui.$('#helpers-title').textContent).toBe('Reminders and lock');
     const input = ui.$<HTMLInputElement>('#resume-shortcut');
     expect(input.value).toBe('CommandOrControl+Alt+Shift+R');
     input.value = 'CommandOrControl+Alt+Shift+T';
