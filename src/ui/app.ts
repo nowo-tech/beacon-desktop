@@ -158,6 +158,8 @@ export interface AppDeps {
   viewportWidth?: () => number;
   /** Pause before a moved / resized window is remembered (ms). */
   windowSaveMs?: number;
+  /** Called after every render (the app shell follows the view, the timer and sign-out). */
+  onRender?: () => void;
 }
 
 export type Channel = 'direct' | 'store';
@@ -551,6 +553,11 @@ export class DesktopApp {
     for (const timer of [this.searchTimer, this.noticeTimer, this.dailyTimer, this.windowTimer]) if (timer !== null) clearTimeout(timer);
     this.main?.prompt.dispose();
     this.settingsResize?.disconnect();
+  }
+
+  /** The time API of the signed-in session (the chat module chains its device code to it), `null` when signed out. */
+  timeApi(): TimeTrackApi | null {
+    return this.state.session === null || this.token === null ? null : this.api();
   }
 
   private api(): TimeTrackApi {
@@ -2767,6 +2774,12 @@ export class DesktopApp {
   }
 
   /** A link with no handler of its own: a Beacon page when it is on the connected server, else an https page. */
+  /** A device-flow verification page (the chat's "Connect chat" too): only on the signed-in server's host. */
+  openVerification(url: string): Promise<boolean> {
+    const server = this.state.session?.server;
+    return server === undefined ? Promise.resolve(false) : this.openExternal(url, { kind: 'device', server });
+  }
+
   openLink(url: string): void {
     void this.openExternal(url, sameOriginHttps(url, this.state.session?.server) !== null ? this.beaconRule() : { kind: 'help' });
   }
@@ -3078,7 +3091,8 @@ export class DesktopApp {
    * Ctrl/⌘+Shift+L compact / full view, F6 / Shift+F6 next / previous pane (full view).
    */
   private onKey(event: KeyboardEvent): void {
-    if (!this.root.isConnected) return;
+    // Another module of the shell is shown (chat): its own keys apply.
+    if (!this.root.isConnected || this.root.closest('[hidden]') !== null) return;
     if (this.view !== 'main' && this.view !== 'settings' && this.view !== 'privacy') return;
     const mod = event.ctrlKey || event.metaKey;
     const target = event.target as HTMLElement | null;
@@ -3247,6 +3261,7 @@ export class DesktopApp {
     this.root.setAttribute('aria-busy', this.busy ? 'true' : 'false');
     this.syncPromptWindow();
     this.syncWakePlan();
+    this.deps.onRender?.();
   }
 
   /**
