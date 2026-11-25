@@ -124,11 +124,11 @@ describe('desktop app', () => {
     await until(() => ui.$('#timer-task')?.textContent === 'Write onboarding guide' && ui.platform.hooks.tray.running, 'the running timer');
     expect(ui.platform.hooks.tray).toEqual({
       title: '0:00 Write onboarding gu…',
-      tooltip: 'TimeTrack — Tracking “Write onboarding guide” · 0:00 · Today 0:00',
+      tooltip: 'Beacon Desktop — Tracking “Write onboarding guide” · 0:00 · Today 0:00',
       status: '● 0:00 · Write onboarding guide',
       running: true,
       // The host keeps the elapsed time current every minute by itself (tray_clock.rs).
-      clock: expect.objectContaining({ title: '{time} Write onboarding gu…', tooltip: 'TimeTrack — Tracking “Write onboarding guide” · {time} · Today {today}', todayBaseSeconds: 0 }),
+      clock: expect.objectContaining({ title: '{time} Write onboarding gu…', tooltip: 'Beacon Desktop — Tracking “Write onboarding guide” · {time} · Today {today}', todayBaseSeconds: 0 }),
     });
     expect(ui.platform.hooks.trayMenu?.primary).toEqual({ id: 'stop', label: 'Stop timer' });
     expect(ui.platform.hooks.trayMenu?.openBeacon).toBeNull();
@@ -504,7 +504,7 @@ describe('desktop app', () => {
     expect(ui.app.state.pinned).toEqual([]);
     ui.app.show('privacy');
     ui.click('#clear-local');
-    expect(ui.$('#clear-local-question').textContent).toBe('Delete all TimeTrack data on this computer?');
+    expect(ui.$('#clear-local-question').textContent).toBe('Delete all Beacon Desktop data on this computer?');
     await ui.app.clearLocalData();
     expect(ui.app.view).toBe('login');
   });
@@ -519,7 +519,7 @@ describe('desktop app', () => {
     ui.click('#update-now');
     await until(() => ui.platform.hooks.installed === 1 && ui.$('#update')?.textContent?.includes('Installing') === true, 'the install');
     expect(ui.platform.hooks.installed).toBe(1);
-    expect(ui.$('#update').textContent).toContain('Installing version 0.2.0. TimeTrack will restart.');
+    expect(ui.$('#update').textContent).toContain('Installing version 0.2.0. Beacon Desktop will restart.');
     // The real app relaunches here; the browser fake stays, so go back to "offered".
     ui.app.updateStage = 'offer';
     await env.control('config', { failNext: { status: 500, error: 'x' } });

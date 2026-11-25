@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Merged by Tauri into the bundle's Info.plist. Only the name people see changes (design Q-BD-1, option A):
+	     CFBundleName and the TimeTrack.app file name follow productName and stay, so the updater keeps replacing the
+	     same bundle and the bundle id (tech.nowo.timetrack) keeps its Keychain, notification and login-item state. -->
+	<key>CFBundleDisplayName</key>
+	<string>Beacon Desktop</string>
+</dict>
+</plist>

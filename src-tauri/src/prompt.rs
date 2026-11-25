@@ -187,7 +187,7 @@ pub fn prompt_open(app: AppHandle, window: tauri::Window, view: Value) -> Result
     let title = view
         .get("windowTitle")
         .and_then(Value::as_str)
-        .unwrap_or("TimeTrack")
+        .unwrap_or(crate::APP_DISPLAY_NAME)
         .chars()
         .take(80)
         .collect::<String>();
@@ -251,7 +251,7 @@ pub fn prompt_focus(app: AppHandle, window: tauri::Window) -> Result<(), String>
     Ok(())
 }
 
-/// "Open TimeTrack" in the prompt window: brings the main window forward (the prompt stays until it is answered).
+/// "Open Beacon Desktop" in the prompt window: brings the main window forward (the prompt stays until it is answered).
 #[tauri::command]
 pub fn prompt_show_main(app: AppHandle, window: tauri::Window) -> Result<(), String> {
     crate::only_from(&window, LABEL)?;

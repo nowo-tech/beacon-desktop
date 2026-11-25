@@ -229,7 +229,7 @@ export interface ReminderSettings {
   meetingDaysOff: boolean;
   meetingAskOnStart: boolean;
   meetingAutoPause: boolean;
-  /** The main window's "Allow TimeTrack to read your upcoming meetings" card was answered (shown once, §23.7). */
+  /** The main window's "Allow Beacon Desktop to read your upcoming meetings" card was answered (shown once, §23.7). */
   meetingConsentSeen: boolean;
 }
 

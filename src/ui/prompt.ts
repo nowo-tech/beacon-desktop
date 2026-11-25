@@ -32,7 +32,7 @@ export type PromptAction =
   | 'resume'
   | 'not-now'
   | 'escape'
-  /** "Open TimeTrack" in the prompt window: brings the main window forward; the prompt stays. */
+  /** "Open Beacon Desktop" in the prompt window: brings the main window forward; the prompt stays. */
   | 'open-app'
   /** Meeting reminders without desktop notifications (`meeting` = the meeting's short key, lib/meetingReminders.ts). */
   | 'meeting-join'
@@ -156,7 +156,7 @@ export interface PromptView {
   theme: 'light' | 'dark' | null;
   /** Said (politely) when Esc is pressed: the prompt needs an answer and Esc does not dismiss it. */
   escapeHint: string;
-  /** "Open TimeTrack" link (prompt window only; `null` in the in-app modal). */
+  /** "Open Beacon Desktop" link (prompt window only; `null` in the in-app modal). */
   openApp: string | null;
   /** Element to focus after this update (`focusSeq` changes each time the host asks for it). */
   focus: string | null;

@@ -78,7 +78,7 @@ export const MAX_JOIN_URL = 2048;
 /**
  * A meeting's *Join* link checked again on this computer (defence in depth, contract §23.8): https on the default port,
  * no user info, no control, whitespace or quote characters, at most 2048 characters, and a host of the allow-list.
- * Anything else is `null` ("This link cannot be opened from TimeTrack").
+ * Anything else is `null` ("This link cannot be opened from Beacon Desktop").
  */
 export function meetingJoinUrl(url: unknown): { url: string; provider: JoinProvider } | null {
   if (typeof url !== 'string' || url === '' || url.length > MAX_JOIN_URL || [...url].some(unsafeLinkChar)) return null;

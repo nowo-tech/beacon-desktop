@@ -77,7 +77,10 @@ describe('MSIX manifest (Microsoft Store)', () => {
     expect(xml).toContain('<Identity Name="12345NowoTech.TimeTrackforBeacon" Publisher="CN=ABCDEF12-3456-7890-ABCD-EF1234567890" Version="1.4.0.0" ProcessorArchitecture="x64" />');
     expect(xml).toContain('EntryPoint="Windows.FullTrustApplication"');
     expect(xml).toContain('<rescap:Capability Name="runFullTrust" />');
-    expect(xml).toContain('<DisplayName>TimeTrack for Beacon</DisplayName>');
+    expect(xml).toContain('<DisplayName>Beacon Desktop</DisplayName>');
+    expect(xml).toContain('uap:VisualElements DisplayName="Beacon Desktop"');
+    // Q-BD-1 option A: the MSIX application id (part of the Store AUMID) and the executable never change.
+    expect(xml).toContain('<Application Id="TimeTrack" Executable="TimeTrack.exe"');
     expect(xml).toContain('<Resource Language="es-es" />');
     expect(xml).toContain('MinVersion="10.0.17763.0"');
     expect(buildManifest({ ...identity, version: '0.4.0', arch: 'arm64', displayName: 'A & B' })).toContain('<DisplayName>A &amp; B</DisplayName>');

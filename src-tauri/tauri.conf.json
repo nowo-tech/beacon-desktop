@@ -14,7 +14,7 @@
       {
         "label": "main",
         "create": false,
-        "title": "TimeTrack",
+        "title": "Beacon Desktop",
         "width": 400,
         "height": 640,
         "minWidth": 380,
@@ -56,6 +56,11 @@
     },
     "macOS": {
       "signingIdentity": "-"
+    },
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/main.desktop"
+      }
     }
   },
   "plugins": {

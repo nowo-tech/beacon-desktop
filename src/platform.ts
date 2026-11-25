@@ -572,7 +572,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
 export interface BrowserPromptHooks {
   view: PromptView | null;
   answers: PromptAnswer[];
-  /** Times "Open TimeTrack" was pressed. */
+  /** Times "Open Beacon Desktop" was pressed. */
   openedMain?: number;
   /** Replaces the content (as the main window's updates do). */
   setView?(view: PromptView): void;

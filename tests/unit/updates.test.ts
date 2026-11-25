@@ -100,10 +100,10 @@ describe('updates (0.4.0)', () => {
       });
     ui.click('#update-now');
     await tick();
-    expect(seen).toEqual(['Downloading version 0.5.0…', 'Downloading version 0.5.0… 25%', 'Installing version 0.5.0. TimeTrack will restart.']);
+    expect(seen).toEqual(['Downloading version 0.5.0…', 'Downloading version 0.5.0… 25%', 'Installing version 0.5.0. Beacon Desktop will restart.']);
     expect(ui.platform.hooks.installed).toBe(1);
     expect(ui.$<HTMLProgressElement>('#update-progress').value).toBe(100);
-    expect(ui.$('#live').textContent).toBe('Installing version 0.5.0. TimeTrack will restart.');
+    expect(ui.$('#live').textContent).toBe('Installing version 0.5.0. Beacon Desktop will restart.');
     // No second check or install while it installs.
     await ui.app.checkUpdates(true);
     await ui.app.installUpdate();
@@ -126,8 +126,8 @@ describe('updates (0.4.0)', () => {
     expect(document.activeElement?.id).toBe('update-now');
     ui.click('#update-now');
     ui.click('#update-after-stop');
-    expect(ui.$('#update-waiting').textContent).toBe('TimeTrack will update when you stop the timer.');
-    expect(ui.$('#live').textContent).toBe('TimeTrack will update when you stop the timer.');
+    expect(ui.$('#update-waiting').textContent).toBe('Beacon Desktop will update when you stop the timer.');
+    expect(ui.$('#live').textContent).toBe('Beacon Desktop will update when you stop the timer.');
     // A periodic check does not reset the choice.
     await ui.app.checkUpdates();
     expect(ui.app.updateStage).toBe('after-stop');
@@ -190,7 +190,7 @@ describe('updates (0.4.0)', () => {
     await tick();
     expect(ui.app.state.activeTimer).toBeNull();
     expect(ui.platform.hooks.installed).toBe(1);
-    expect(ui.$('#update-progress-label').textContent).toBe('Installing version 0.5.0. TimeTrack will restart.');
+    expect(ui.$('#update-progress-label').textContent).toBe('Installing version 0.5.0. Beacon Desktop will restart.');
   });
 
   it('forced update from GET me minSupportedVersion (higher than the updater minimum)', async () => {
@@ -229,9 +229,9 @@ describe('updates (0.4.0)', () => {
     await ui.platform.hooks.trayAction('check-updates');
     await tick();
     expect(ui.app.view).toBe('main');
-    expect(ui.$('#notice').textContent).toBe('TimeTrack 0.4.0 is up to date.');
+    expect(ui.$('#notice').textContent).toBe('Beacon Desktop 0.4.0 is up to date.');
     ui.app.show('settings');
-    expect(ui.$('#update-status').textContent).toBe('TimeTrack 0.4.0 is up to date.');
+    expect(ui.$('#update-status').textContent).toBe('Beacon Desktop 0.4.0 is up to date.');
     ui.platform.checkUpdate = async () => {
       throw new Error('offline');
     };
@@ -283,7 +283,7 @@ describe('updates (0.4.0)', () => {
     await tick();
     expect(calls).toBe(0);
     expect(ui.app.view).toBe('update-required');
-    expect(ui.$('#update-required-text').textContent).toBe('This version (0.4.0) is no longer supported by your server. Update TimeTrack to version 0.5.0 or later from the Microsoft Store.');
+    expect(ui.$('#update-required-text').textContent).toBe('This version (0.4.0) is no longer supported by your server. Update Beacon Desktop to version 0.5.0 or later from the Microsoft Store.');
     expect(ui.$('#install-required')).toBeNull();
     expect(ui.$('#download-required')).toBeNull();
     ui.click('#open-store-required');

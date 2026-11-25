@@ -85,7 +85,7 @@ describe('error catalogue', () => {
     expect(plain.details).toContain('server: -');
     const details = describeError(new ApiError(404, 'not_found', 'Not Found'), ctx).details;
     expect(details).toBe(
-      'TimeTrack desktop 0.2.0\nserver: https://beacon.example.com\nstage: action\ncode: not_found\nstatus: 404\nmessage: Not Found\nat: 2026-11-04T10:00:00.000Z',
+      'Beacon Desktop 0.2.0\nserver: https://beacon.example.com\nstage: action\ncode: not_found\nstatus: 404\nmessage: Not Found\nat: 2026-11-04T10:00:00.000Z',
     );
   });
 });

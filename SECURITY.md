@@ -3,7 +3,7 @@
 ## Reporting
 
 Report vulnerabilities privately through
-[GitHub security advisories](https://github.com/nowo-tech/time-track-desktop/security/advisories/new). Do not open
+[GitHub security advisories](https://github.com/nowo-tech/beacon-desktop/security/advisories/new). Do not open
 public issues. We answer within 5 working days.
 
 ## Supported versions

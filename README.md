@@ -1,11 +1,23 @@
-# TimeTrack desktop
+# Beacon Desktop
 
-Tray app (Tauri 2) to start, stop and switch your [symfony-beacon](https://github.com/nowo-tech/symfony-beacon) time
-tracking. Talks to the TimeTrackBundle **1.9.0** client API only. Windows, macOS and Linux. English and Spanish.
+Formerly **TimeTrack desktop** (renamed in 0.9.0). Tray app (Tauri 2) to start, stop and switch your
+[symfony-beacon](https://github.com/nowo-tech/symfony-beacon) time tracking; Beacon chat follows
+([design](docs/design/BEACON_DESKTOP.md)). Talks to the TimeTrackBundle **1.9.0** client API only. Windows, macOS and Linux. English and Spanish.
 
 <img src="docs/images/desktop-device-code-light.webp" alt="Device sign-in code" width="300"> <img src="docs/images/desktop-timer-light.webp" alt="Running timer and task list" width="300">
 
 It records only the time you choose to track — see [PRIVACY.md](PRIVACY.md).
+
+### The name, and what is still called TimeTrack
+
+0.9.0 changes only the name people see (design Q-BD-1, option A): window and tray titles, notifications, About, the
+Start-menu shortcut, the name in Settings → Apps, the Linux menu entry and the macOS display name say **Beacon
+Desktop**. Everything an installed copy depends on keeps its old name, so 0.8.x updates itself in place and keeps its
+sign-in and settings: the install folder (`%LOCALAPPDATA%\TimeTrack`), the Uninstall key, the start-at-login value
+(`TimeTrack`) and the Windows installer's own title, `TimeTrack.app`, the Debian package and file names
+(`TimeTrack_*`), the executable, the bundle identifier and Windows AppUserModelID `tech.nowo.timetrack`, the keychain
+entry `tech.nowo.time-track-desktop`, the local settings keys, the updater key and URL, and the release bucket prefix
+`time-track-clients/`. `tests/unit/identifiers.test.ts` fails if one of them changes.
 
 ## Install
 
@@ -24,8 +36,9 @@ Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile 
 ### Upgrading on Windows
 
 From 0.4.0 on, the app updates itself (signed, in place, no questions: *Update now* closes the app, installs and
-starts it again). Running a newer `*-setup.exe` by hand also upgrades in place: it closes TimeTrack, tray included
-(it asks first), keeps your sign-in and settings, and leaves a single *TimeTrack* entry in Settings → Apps. If the
+starts it again). Running a newer `*-setup.exe` by hand also upgrades in place: it closes the app, tray included
+(it asks first), keeps your sign-in and settings, and leaves a single entry in Settings → Apps (*Beacon Desktop* from
+0.9.0, *TimeTrack* before). If the
 installer offers *Uninstall before installing*, either choice works; the second one is quicker.
 
 Coming from **0.1.0**:
@@ -92,7 +105,7 @@ a ghost Windows removes when the mouse passes over it.
 - Tray timer (`H:MM` and task, tooltip with today's total, running / stopped icon) in the Windows notification area
   (bottom right, like Docker Desktop), the macOS menu bar and the Linux StatusNotifier / AppIndicator, with a translated
   menu: the running task and its time (refreshed every 30 s), Stop / Resume, Switch to (pinned and recent tasks),
-  Search task…, Open TimeTrack, Full view / Compact view, Open Beacon, My time, *Pause friendly messages for 1 h*, Settings, Quit. A left click
+  Search task…, Open Beacon Desktop, Full view / Compact view, Open Beacon, My time, *Pause friendly messages for 1 h*, Settings, Quit. A left click
   shows or hides the window (Windows, macOS; Linux AppIndicators only open the menu). Closing or minimising the
   window keeps the app running in the tray: the timer, the "Still there?" check and the friendly messages carry on,
   woken on time by a wall-clock heartbeat in Rust (`src-tauri/src/heartbeat.rs`), not by the webview's timers, which
@@ -190,7 +203,7 @@ gap of the friendly messages. Rules: `src/lib/schedule.ts`; texts: `reminders` i
 while the main window is in the tray (`src-tauri/src/prompt.rs`, `src/ui/prompt.ts`), with a countdown (2 minutes, 10
 during meetings): with no answer the timer stops at the start of the idle time, and the window offers **Resume …
 now** on the same task. There is only ever one; it closes once answered, Esc does not dismiss it, and on Windows it
-flashes in the taskbar when focus-stealing prevention keeps it from taking the focus. A small *Open TimeTrack* link in
+flashes in the taskbar when focus-stealing prevention keeps it from taking the focus. A small *Open Beacon Desktop* link in
 it brings the main window forward. It shows the running task's title above every other window, so it is also visible
 to anyone watching a shared screen. Where it cannot open (a plain browser), it is a modal inside the main window.
 
@@ -199,8 +212,8 @@ to anyone watching a shared screen. Where it cannot open (a plain browser), it i
 | | Where | Picture | Click |
 |---|---|---|---|
 | Windows 10 / 11 | Bottom right, then the Action Center, under the app's AppUserModelID (`tech.nowo.timetrack` for the NSIS install, `<package family>!TimeTrack` for the Microsoft Store / MSIX package) | The pose as the square app logo of the toast | Brings TimeTrack forward (while the toast is on screen) |
-| macOS | Notification Center (top right) | The pose as the content image, the app icon as the sender | Brings TimeTrack forward |
-| Linux | The desktop's notification service (GNOME, KDE, …) | The pose through the `image-path` hint | Brings TimeTrack forward (servers that support the `default` action) |
+| macOS | Notification Center (top right) | The pose as the content image, the app icon as the sender | Brings Beacon Desktop forward |
+| Linux | The desktop's notification service (GNOME, KDE, …) | The pose through the `image-path` hint | Brings Beacon Desktop forward (servers that support the `default` action) |
 
 The first time one is due, the app asks the OS for permission (macOS asks you; the others allow it) and explains once,
 inside the window, where the messages went (*Keep them inside the app* is one click away). A refusal or a missing
@@ -309,7 +322,7 @@ The mock server serves `GET me/meetings` (`POST /__mock/config {"meetings": {"st
 `"meetingsScope": false` makes it an older server that refuses the scope).
 
 Everything stays on this computer except the entries you confirm — see [PRIVACY.md](PRIVACY.md). What comes next, and
-what TimeTrack deliberately will not do: [docs/ROADMAP.md](docs/ROADMAP.md).
+what Beacon Desktop deliberately will not do: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ### Updates
 
@@ -380,11 +393,11 @@ required" screen send you to the Store listing instead.
   `menu`, `path`, `resources`, `webview`, `window`) instead of `core:default`, which includes `core:tray:default` and
   would let the webview create a second tray icon. The tray is built once, in Rust (a Rust test checks both).
 - `src-tauri/capabilities/prompt.json`, window `prompt` (the "Still there?" window): `core:event:allow-listen` /
-  `allow-unlisten` (its content) and `prompt_view`, `prompt_answer`, `prompt_show_main` ("Open TimeTrack"). No
+  `allow-unlisten` (its content) and `prompt_view`, `prompt_answer`, `prompt_show_main` ("Open Beacon Desktop"). No
   keychain, updater, tray, network, opener, notification, window or autostart permission.
 - Defence in depth: every command also checks the calling window's label (`main` for the keychain, updater, tray,
   shortcut, heartbeat, notifications and opening / focusing / closing the prompt; `prompt` for reading its view,
-  answering and "Open TimeTrack"). Answers are allow-listed (`{ action, note?, taskId? }`), pose ids are looked up in
+  answering and "Open Beacon Desktop"). Answers are allow-listed (`{ action, note?, taskId? }`), pose ids are looked up in
   the compiled-in list (never a path from the webview) and notification texts are capped. On Linux, notification
   bodies are escaped to plain text (`<`, `>`, `&`), since servers with `body-markup` would render markup from a task
   title.

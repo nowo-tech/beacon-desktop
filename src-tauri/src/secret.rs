@@ -340,7 +340,7 @@ pub fn confirm_texts(
             .unwrap_or_default();
         SignInTexts {
             title: format!("¿Iniciar sesión en {host}?"),
-            body: format!("TimeTrack va a iniciar sesión en {origin} y guardará la sesión en el llavero de este equipo.{warning}\n\nSi no acabas de pedir iniciar sesión en este servidor, elige Cancelar."),
+            body: format!("Beacon Desktop va a iniciar sesión en {origin} y guardará la sesión en el llavero de este equipo.{warning}\n\nSi no acabas de pedir iniciar sesión en este servidor, elige Cancelar."),
             stay_out: "Cancelar".into(),
             sign_in: "Iniciar sesión".into(),
             cancel: "Ahora no".into(),
@@ -351,7 +351,7 @@ pub fn confirm_texts(
             .unwrap_or_default();
         SignInTexts {
             title: format!("Sign in to {host}?"),
-            body: format!("TimeTrack is about to sign in to {origin} and keep the session in this computer's keychain.{warning}\n\nIf you did not just ask to sign in to this server, choose Cancel."),
+            body: format!("Beacon Desktop is about to sign in to {origin} and keep the session in this computer's keychain.{warning}\n\nIf you did not just ask to sign in to this server, choose Cancel."),
             stay_out: "Cancel".into(),
             sign_in: "Sign in".into(),
             cancel: "Not now".into(),
@@ -363,13 +363,13 @@ pub fn confirm_texts(
 pub fn signed_in_notice(origin: &str, spanish: bool) -> (String, String) {
     if spanish {
         (
-            "TimeTrack ha iniciado sesión".into(),
-            format!("Sesión iniciada en {origin}. Si no has sido tú, cierra sesión en TimeTrack y revoca este dispositivo en Beacon (Cuenta → Seguridad)."),
+            "Beacon Desktop ha iniciado sesión".into(),
+            format!("Sesión iniciada en {origin}. Si no has sido tú, cierra sesión en Beacon Desktop y revoca este dispositivo en Beacon (Cuenta → Seguridad)."),
         )
     } else {
         (
-            "TimeTrack signed in".into(),
-            format!("Signed in to {origin}. If this was not you, sign out in TimeTrack and revoke this device in Beacon (Account → Security)."),
+            "Beacon Desktop signed in".into(),
+            format!("Signed in to {origin}. If this was not you, sign out in Beacon Desktop and revoke this device in Beacon (Account → Security)."),
         )
     }
 }
@@ -1205,7 +1205,7 @@ pub mod tests {
         let idn = confirm_texts(&url("https://bеacon.nowo.tech"), None, official);
         assert!(idn.title.contains("xn--"), "{}", idn.title);
         let (title, body) = signed_in_notice("https://beacon.nowo.tech", false);
-        assert_eq!(title, "TimeTrack signed in");
+        assert_eq!(title, "Beacon Desktop signed in");
         assert!(body.contains("https://beacon.nowo.tech") && body.contains("revoke"));
         assert!(signed_in_notice("https://b.example", true)
             .1

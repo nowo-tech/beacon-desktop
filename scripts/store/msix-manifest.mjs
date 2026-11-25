@@ -11,7 +11,12 @@
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-export const DISPLAY_NAME = 'TimeTrack for Beacon';
+/**
+ * Store and Start-menu name (0.9.0, design Q-BD-1 option A). Partner Center only accepts a name reserved for the
+ * product: reserve "Beacon Desktop" as an additional name of the existing product (no new product, the identity and
+ * `Application Id` below stay), or set MSIX_DISPLAY_NAME to the reserved name until then.
+ */
+export const DISPLAY_NAME = 'Beacon Desktop';
 export const DESCRIPTION = 'Start, stop and switch your Beacon time tracking from the tray. Records only the time you choose to track.';
 export const EXECUTABLE = 'TimeTrack.exe';
 /** Windows 10 1809: the oldest build where MSIX full-trust desktop apps and WebView2 are both supported. */

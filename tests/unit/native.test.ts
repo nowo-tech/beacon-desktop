@@ -129,7 +129,7 @@ describe('friendly messages as desktop notifications', () => {
     // Later messages go straight to the toast, without asking again.
     ui.app.dismissNativeNotice();
     ui.app.show('settings');
-    expect(ui.$('#native-status').textContent).toContain('turned off for TimeTrack in your system settings');
+    expect(ui.$('#native-status').textContent).toContain('turned off for Beacon Desktop in your system settings');
     ui.$<HTMLButtonElement>('#native-retry').click();
     expect(ui.app.state.settings.nativeStatus).toBe('unknown');
     ui.app.destroy();
@@ -311,7 +311,7 @@ describe('"Still there?" in its own window', () => {
     await tick();
     expect(ui.hooks.promptOpened).toBe(1);
     const view = ui.hooks.prompt as PromptView;
-    expect(view).toMatchObject({ id: 'idle', title: 'Still there?', windowTitle: 'Still there?', lang: 'en', escapeHint: expect.any(String), openApp: 'Open TimeTrack' });
+    expect(view).toMatchObject({ id: 'idle', title: 'Still there?', windowTitle: 'Still there?', lang: 'en', escapeHint: expect.any(String), openApp: 'Open Beacon Desktop' });
     ui.hooks.answerPrompt({ action: 'open-app' });
     await tick();
     expect(ui.app.state.idleCheck.phase).toBe('asking');
@@ -396,7 +396,7 @@ describe('"Still there?" in its own window', () => {
     expect(ui.app.promptWindowFailed).toBe(true);
     expect(ui.$('#idle')).not.toBeNull();
     expect(ui.$('#idle').getAttribute('role')).toBe('dialog');
-    // The in-app modal is already in the main window: no "Open TimeTrack" there.
+    // The in-app modal is already in the main window: no "Open Beacon Desktop" there.
     expect(ui.$('#prompt-open-app')).toBeNull();
     expect(ui.$('#prompt-elsewhere')).toBeNull();
     ui.app.destroy();
@@ -430,7 +430,7 @@ const VIEW: PromptView = {
   lang: 'en',
   theme: 'dark',
   escapeHint: 'This question needs an answer.',
-  openApp: 'Open TimeTrack',
+  openApp: 'Open Beacon Desktop',
   focus: null,
   focusSeq: 0,
   blocks: [
@@ -477,7 +477,7 @@ describe('the prompt renderer and the prompt window', () => {
     expect(document.activeElement?.id).toBe('idle-here');
     root.querySelector<HTMLButtonElement>('#idle-here')?.click();
     expect(hooks.answers).toEqual([{ action: 'escape' }, { action: 'here' }]);
-    // "Open TimeTrack" brings the main window forward and is not an answer.
+    // "Open Beacon Desktop" brings the main window forward and is not an answer.
     root.querySelector<HTMLButtonElement>('#prompt-open-app')?.click();
     expect(hooks.openedMain).toBe(1);
     expect(hooks.answers).toHaveLength(2);

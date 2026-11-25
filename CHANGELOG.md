@@ -5,6 +5,47 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-25
+
+TimeTrack is now **Beacon Desktop**. Same app, same sign-in, same settings: only the name changes. Beacon chat comes
+in a later version.
+
+### Changed
+
+- **Visible rename to "Beacon Desktop"** (BD-1, design `docs/design/BEACON_DESKTOP.md` §2.2, owner Q-BD-1 = option A,
+  Q-BD-17 = A): the main and prompt window titles, the tray tooltip and menu ("Open Beacon Desktop"), the in-app
+  header, About, every English and Spanish text that named the app, meeting-reminder group notifications (7
+  languages), the sign-in confirmation dialog and notification, the Linux / macOS notification sender name, the
+  client name shown in Beacon's connected apps for new sign-ins (`Beacon Desktop (<host>)`) and "Copy details".
+  - Windows (NSIS hooks): the Start-menu shortcut becomes `Beacon Desktop.lnk` (same target, same AppUserModelID
+    `tech.nowo.timetrack`, so toasts are titled "Beacon Desktop" and keep their notification setting), a desktop
+    shortcut is renamed the same way, and Settings → Apps lists **Beacon Desktop** (DisplayName; the key stays
+    `Uninstall\TimeTrack`). The uninstaller removes the renamed shortcuts. A desktop shortcut ticked on the finish page
+    of a first interactive install keeps the name "TimeTrack" until the next update.
+  - Linux: the menu entry (`.desktop` `Name=`) says Beacon Desktop (custom template `src-tauri/linux/main.desktop`).
+  - macOS: `CFBundleDisplayName` is Beacon Desktop (`src-tauri/Info.plist`); `CFBundleName` and the file name
+    `TimeTrack.app` stay.
+  - Microsoft Store (dormant, no `MSIX_*` variables): the MSIX display name defaults to Beacon Desktop; reserve the
+    name in Partner Center (additional name of the same product) or set `MSIX_DISPLAY_NAME` before a submission.
+- **Kept on purpose** (an installed 0.8.x must update in place and keep its sign-in and settings): `productName`
+  "TimeTrack" (install folder `%LOCALAPPDATA%\TimeTrack`, Uninstall and `HKCU\Software\nowo.tech\TimeTrack` keys,
+  start-at-login value, NSIS installer title, `TimeTrack.app`, Debian package and artifact names), the bundle
+  identifier and AUMID `tech.nowo.timetrack`, the keychain service `tech.nowo.time-track-desktop`, the localStorage
+  keys, the Cargo package and binary `time-track-desktop`, the npm package name, the updater public key, the updater
+  endpoint `/api/time-track/updates/desktop/…`, the S3 prefix `time-track-clients/`, the MSIX `Application Id`, and
+  the HTTP User-Agent `TimeTrack-desktop/<version>`. Server-side names (TimeTrackBundle versions) are unchanged.
+- Repository renamed to `nowo-tech/beacon-desktop`: SECURITY.md and the issue template link there.
+
+### Tests
+
+- Vitest `identifiers.test.ts`: fails if any kept id changes (identifier, productName, binary and package names, no
+  `mainBinaryName`, channel overlays, keychain service and user, localStorage keys, updater key, endpoint path and
+  signed-only, S3 prefix, NSIS keys, MSIX application id), and checks the new visible name in the window, the tray,
+  the i18n, the NSIS hooks, the Linux desktop template and the macOS plist (only `CFBundleDisplayName`).
+- `scripts/windows/upgrade-test.ps1` (installer upgrade workflow): from 0.9.0 on, the Uninstall key is still
+  `TimeTrack` with DisplayName "Beacon Desktop", and the per-user Start-menu shortcut is `Beacon Desktop.lnk`
+  pointing at the new executable, with no `TimeTrack.lnk` left.
+
 ## [0.8.0] - 2026-11-24
 
 ### Changed
