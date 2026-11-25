@@ -18,6 +18,7 @@ mod notify;
 mod pinning;
 mod pose_art;
 mod prompt;
+mod realtime;
 mod secret;
 mod session;
 mod tray_clock;
@@ -60,6 +61,12 @@ struct TrayState {
     resume_shortcut: Mutex<Option<String>>,
     /// Elapsed time of the running timer, refreshed by the heartbeat thread (`tray_clock.rs`).
     clock: Mutex<tray_clock::TrayClock>,
+    /// Unread chat messages (BD-2): the tray icon gets a red dot.
+    unread: Mutex<bool>,
+    running_unread: Option<Image<'static>>,
+    stopped_unread: Option<Image<'static>>,
+    /// Whether the timer runs (the last `set_tray_status`), so the badge keeps the right icon.
+    running_now: Mutex<bool>,
 }
 
 /// Tray tooltip / title / status line, sent by the UI (translated) every ~30 s and on every timer change.
@@ -208,6 +215,81 @@ fn icon_variant(base: &Image<'_>, running: bool) -> Image<'static> {
     Image::new_owned(rgba, width, height)
 }
 
+/// The tray icon for the timer state and the unread dot.
+fn apply_tray_icon(tray: &tauri::tray::TrayIcon<Wry>, state: &TrayState) -> Result<(), String> {
+    let running = *state.running_now.lock().map_err(|e| e.to_string())?;
+    let unread = *state.unread.lock().map_err(|e| e.to_string())?;
+    let icon = match (running, unread) {
+        (true, false) => &state.running,
+        (false, false) => &state.stopped,
+        (true, true) => &state.running_unread,
+        (false, true) => &state.stopped_unread,
+    };
+    if let Some(icon) = icon {
+        tray.set_icon(Some(icon.clone()))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// A red unread dot in the icon's top-right corner (Beacon's `--badge` colour, white rim): the tray icon with unread
+/// chat messages, and the Windows taskbar overlay.
+fn unread_variant(base: &Image<'_>) -> Image<'static> {
+    let (width, height) = (base.width(), base.height());
+    let mut rgba = base.rgba().to_vec();
+    let radius = (width.min(height) as f32) * 0.2;
+    let (cx, cy) = (width as f32 - radius - 1.0, radius + 1.0);
+    for y in 0..height {
+        for x in 0..width {
+            let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+            let d = (dx * dx + dy * dy).sqrt();
+            if d <= radius {
+                let i = ((y * width + x) * 4) as usize;
+                let rim = d > radius - (radius * 0.25).max(1.0);
+                let (r, g, b) = if rim {
+                    (255, 255, 255)
+                } else {
+                    (0xc8, 0x37, 0x2d)
+                };
+                rgba[i..i + 4].copy_from_slice(&[r, g, b, 255]);
+            }
+        }
+    }
+    Image::new_owned(rgba, width, height)
+}
+
+/// Clamps the unread count the UI sends to what a badge shows (`None` hides it).
+fn badge_count(count: u32) -> Option<i64> {
+    (count > 0).then_some(i64::from(count.min(9999)))
+}
+
+/// Chat unread badge (BD-2, design §3.4): a dot on the tray icon, the Dock badge (macOS), the launcher count (Linux,
+/// Unity API where present) or a taskbar overlay dot (Windows). The count is the server's `unreadTotal` (muted
+/// conversations excluded); 0 clears it. Best effort: an OS without badges ignores it.
+#[tauri::command]
+fn set_unread_badge(app: AppHandle, window: tauri::Window, count: u32) -> Result<(), String> {
+    only_from(&window, "main")?;
+    if let Some(state) = app.try_state::<TrayState>() {
+        *state.unread.lock().map_err(|e| e.to_string())? = count > 0;
+        if let Some(tray) = app.tray_by_id(TRAY_ID) {
+            apply_tray_icon(&tray, &state)?;
+        }
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        #[cfg(windows)]
+        {
+            let overlay = (count > 0)
+                .then(|| unread_variant(&Image::new_owned(vec![0; 16 * 16 * 4], 16, 16)));
+            let _ = main.set_overlay_icon(overlay);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = main.set_badge_count(badge_count(count));
+        }
+    }
+    Ok(())
+}
+
 /// Defence in depth on top of the capabilities (build.rs declares every app command, each window gets only its own):
 /// the privileged commands also refuse any caller but the main window.
 pub(crate) fn only_from(window: &tauri::Window, label: &str) -> Result<(), String> {
@@ -262,15 +344,8 @@ fn set_tray_status(
         tray.set_tooltip(Some(tooltip)).map_err(|e| e.to_string())?;
         tray.set_title(title).map_err(|e| e.to_string())?;
         if let Some(state) = app.try_state::<TrayState>() {
-            let icon = if status.running {
-                &state.running
-            } else {
-                &state.stopped
-            };
-            if let Some(icon) = icon {
-                tray.set_icon(Some(icon.clone()))
-                    .map_err(|e| e.to_string())?;
-            }
+            *state.running_now.lock().map_err(|e| e.to_string())? = status.running;
+            apply_tray_icon(&tray, &state)?;
         }
     }
     if let Some(state) = app.try_state::<TrayState>() {
@@ -1020,6 +1095,8 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         ),
         None => (None, None),
     };
+    let running_unread = running.as_ref().map(unread_variant);
+    let stopped_unread = stopped.as_ref().map(unread_variant);
     if let Some(icon) = stopped.clone().or(base) {
         builder = builder.icon(icon);
     }
@@ -1031,6 +1108,10 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         shortcut: Mutex::new(None),
         resume_shortcut: Mutex::new(None),
         clock: Mutex::new(tray_clock::TrayClock::new()),
+        unread: Mutex::new(false),
+        running_unread,
+        stopped_unread,
+        running_now: Mutex::new(false),
     });
     Ok(())
 }
@@ -1151,12 +1232,16 @@ pub fn run() {
             app.manage(MainFocus::default());
             app.manage(prompt::PromptState::default());
             // The pause after a declined sign-in survives a restart (audit GO-I2).
-            let session = secret::Session::new(Box::new(secret::Keychain));
+            // Time token (`session-token`) and chat token (`chat-token`, BD-2): two entries of the same service.
+            let session = secret::Session::new(Box::new(secret::Keychain::time()))
+                .with_chat_store(Box::new(secret::Keychain::chat()));
             let session = match app.path().app_data_dir() {
                 Ok(dir) => session.with_declines_file(dir.join("sign-in-pause.json")),
                 Err(_) => session,
             };
             app.manage(std::sync::Arc::new(session));
+            // Chat realtime stream (realtime.rs): one per app, restarted on context changes.
+            app.manage(std::sync::Arc::new(realtime::Realtime::new()));
             // "Open Beacon in" lives on this side (browser.json in the app's config folder), see browser.rs.
             browser::manage(app.handle());
             create_main_window(app.handle())?;
@@ -1205,6 +1290,12 @@ pub fn run() {
             secret::secret_status,
             secret::sign_in_begin,
             secret::secret_delete,
+            secret::chat_status,
+            secret::chat_connect_begin,
+            secret::chat_disconnect,
+            realtime::chat_realtime_start,
+            realtime::chat_realtime_stop,
+            set_unread_badge,
             idle_seconds,
             set_tray_status,
             set_tray_menu,
@@ -1440,6 +1531,20 @@ mod tests {
         assert_eq!(&running.rgba()[dot..dot + 3], &[0x1f, 0x6f, 0x54]);
         assert_eq!(&running.rgba()[0..4], &[200, 200, 200, 200]);
         assert_eq!(&stopped.rgba()[0..4], &[200, 200, 200, 200]);
+    }
+
+    #[test]
+    fn unread_variant_paints_a_red_dot_top_right_and_badges_clamp() {
+        let base = Image::new_owned(vec![200; 32 * 32 * 4], 32, 32);
+        let dotted = unread_variant(&base);
+        assert_eq!((dotted.width(), dotted.height()), (32, 32));
+        let dot = (6 * 32 + 25) * 4;
+        assert_eq!(&dotted.rgba()[dot..dot + 3], &[0xc8, 0x37, 0x2d]);
+        let corner = (31 * 32) * 4;
+        assert_eq!(&dotted.rgba()[corner..corner + 4], &[200, 200, 200, 200]);
+        assert_eq!(badge_count(0), None);
+        assert_eq!(badge_count(3), Some(3));
+        assert_eq!(badge_count(u32::MAX), Some(9999));
     }
 
     #[test]
