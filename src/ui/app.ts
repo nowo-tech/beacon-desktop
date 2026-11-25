@@ -160,6 +160,8 @@ export interface AppDeps {
   windowSaveMs?: number;
   /** Called after every render (the app shell follows the view, the timer and sign-out). */
   onRender?: () => void;
+  /** Before "Sign out" revokes the time token: the shell revokes the chat token (best effort, ZBZ-L4). */
+  beforeSignOut?: () => Promise<void>;
 }
 
 export type Channel = 'direct' | 'store';
@@ -779,6 +781,11 @@ export class DesktopApp {
   }
 
   async logout(): Promise<void> {
+    try {
+      await this.deps.beforeSignOut?.();
+    } catch {
+      // Best effort: the chat token is deleted locally with the time token anyway.
+    }
     try {
       await this.api().logout();
     } catch {

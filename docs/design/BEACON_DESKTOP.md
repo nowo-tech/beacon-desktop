@@ -8,7 +8,8 @@ repository name, secret or release changes with it.
 approved prototype (Chat `Ctrl/Cmd+1`, Time `Ctrl/Cmd+2`, Tasks off); `GET me` is asked with the last context or
 `personal` (ChatKit needs a context on every request under a context policy) and falls back to `personal` on
 `403 context_forbidden`; the realtime hub must be on the signed-in origin (Beacon's default; another host is refused and
-the app polls); there is no chat-token revocation route yet, so "Disconnect chat" deletes the local token only.
+the app polls); "Disconnect chat" and sign-out call ChatKit 2.4.1 `POST /api/chat/v1/logout` best effort before the
+local delete (review ZBZ-L4).
 
 Owner decisions of 2026-11-25 this design starts from:
 

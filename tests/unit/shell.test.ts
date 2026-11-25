@@ -37,6 +37,7 @@ function mount(locale: 'en' | 'es' = 'en', freshSignIn = true, platform = browse
     storage: localStorage,
     locale,
     onRender: () => shell.onAppRender(),
+    beforeSignOut: () => shell.chat.revokeOnServer(),
     sleep: () => new Promise((resolve) => setTimeout(resolve, 5)),
     searchDelayMs: 1,
   });
@@ -396,6 +397,49 @@ describe('shell and chat module', () => {
     expect(document.querySelector('#shell-settings .btn.primary')?.textContent).toBe('Conectar chat');
     (document.querySelector('#shell-settings .btn.primary') as HTMLButtonElement).click();
     await until(() => ui.$('#chat-user-code') !== null, 'the code');
+  });
+
+  it('disconnect and sign-out revoke the chat token on the server first and forget the last conversations (ZBZ-L4, I3)', async () => {
+    const ui = await connected();
+    await inOrg(ui);
+    ui.$<HTMLButtonElement>(`[data-conv="${ENVELOPE}"]`).click();
+    await until(() => document.querySelector('#msg-list li.msg') !== null, 'the messages');
+    expect(JSON.parse(localStorage.getItem('beacon-desktop-chat-view') ?? '{}').lastConversation[ORG]).toBe(ENVELOPE);
+    // "No chat token for this URL" from the stream is not a refusal: chat stays connected (ZBZ-I2).
+    ui.platform.hooks.chatMode('stopped');
+    expect(ui.shell.chat.connected).toBe(true);
+    await ui.shell.chat.disconnect();
+    expect(((await env.control('chat/state')) as { logouts: number }).logouts).toBe(1);
+    expect(JSON.parse(localStorage.getItem('beacon-desktop-chat-view') ?? '{}').lastConversation).toEqual({});
+    // Connect again, then sign out: the chat token is revoked before the local delete, and an old server (404) or no
+    // answer never blocks it.
+    ui.$<HTMLButtonElement>('#chat-connect').click();
+    await until(() => ui.$('#chat-user-code') !== null, 'the code');
+    await env.control('device/approve', { userCode: ui.$('#chat-user-code').textContent });
+    await until(() => ui.$('.side .conv') !== null, 'the conversations');
+    await ui.app.logout();
+    expect(((await env.control('chat/state')) as { logouts: number }).logouts).toBe(2);
+    expect(ui.platform.hooks.chatToken).toBeNull();
+    expect(JSON.parse(localStorage.getItem('beacon-desktop-chat-view') ?? '{}').lastConversation).toEqual({});
+  });
+
+  it('falls back to Personal once after a 403 and never remembers the refused context', async () => {
+    localStorage.setItem(SHELL_KEY, JSON.stringify({ context: 'org:gone' }));
+    const ui = await connected();
+    expect(ui.shell.context).toBe('personal');
+    expect(JSON.parse(localStorage.getItem(SHELL_KEY) ?? '{}').context).toBe('personal');
+    const before = ((await env.control('state')) as { requests: { path: string; context?: string | null }[] }).requests.filter((item) => item.context === 'org:gone');
+    expect(before.map((item) => item.path)).toEqual(['/api/chat/v1/me']);
+    // A list refused for an organization: Personal once, no loop, not remembered.
+    await inOrg(ui);
+    await ui.shell.chat.switchContext('org:revoked');
+    expect(ui.shell.context).toBe('personal');
+    const refused = ((await env.control('state')) as { requests: { path: string; context?: string | null }[] }).requests.filter((item) => item.context === 'org:revoked');
+    expect(refused).toHaveLength(1);
+    expect(JSON.parse(localStorage.getItem(SHELL_KEY) ?? '{}').context).toBe('personal');
+    // Asked for it again: no request, never a second fallback loop.
+    await ui.shell.chat.switchContext('org:revoked', false);
+    expect(ui.$('#chat-banner').hidden).toBe(false);
   });
 
   it('a revoked chat token disconnects chat only; sign-out forgets everything', async () => {

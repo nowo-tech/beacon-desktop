@@ -108,7 +108,7 @@ function seed() {
     const list = messages.get(row.uuid);
     return [row.uuid, list.length === 0 ? null : list[Math.max(0, list.length - 1 - row.unread)].id];
   }));
-  return { conversations, messages, threads: new Map([[root.uuid, threadReplies]]), reads, nextId: id, events: 0, reads_posted: [] };
+  return { conversations, messages, threads: new Map([[root.uuid, threadReplies]]), reads, nextId: id, events: 0, reads_posted: [], logouts: 0 };
 }
 
 export function createChatMock({ send, error }) {
@@ -149,7 +149,7 @@ export function createChatMock({ send, error }) {
     reset() {
       data = seed();
     },
-    state: () => ({ events: data.events, reads: data.reads_posted }),
+    state: () => ({ events: data.events, reads: data.reads_posted, logouts: data.logouts }),
     post({ conversation, author = 'maya', text: value = 'New message', thread = false }) {
       const conv = data.conversations.find((item) => item.uuid === conversation) ?? data.conversations[0];
       data.nextId += 1;
@@ -162,6 +162,16 @@ export function createChatMock({ send, error }) {
       return message;
     },
     handle(req, res, url, body, state) {
+      // ChatKit 2.4.1: revokes the presented token, with or without a context or a valid token; idempotent, always
+      // 204 (audit ZBZ-L4). `chatLogoutMissing` mimics a 2.4.0 server (404).
+      if (req.method === 'POST' && url.pathname === `${CHAT_PREFIX}/logout`) {
+        if (state.config.chatLogoutMissing) return error(res, 404, 'not_found', 'Not found.');
+        const presented = (req.headers.authorization ?? '').slice(7).trim();
+        if (state.tokens.get(presented)?.family === 'chat') state.tokens.delete(presented);
+        data.logouts += 1;
+        res.writeHead(204).end();
+        return;
+      }
       const session = tokenOf(req, state);
       if (session === null) return error(res, 401, 'invalid_token', 'Missing or revoked token.', { 'WWW-Authenticate': 'Bearer' });
       if (session.family !== 'chat') return error(res, 403, 'insufficient_scope', 'A chat token is required.', { 'WWW-Authenticate': 'Bearer error="insufficient_scope"' });

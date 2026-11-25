@@ -220,6 +220,15 @@ export function parseConversationsPage(raw: unknown): ConversationsPage {
 const MARKS: readonly Mark[] = ['bold', 'italic', 'strike'];
 const TONES = ['neutral', 'info', 'success', 'warning', 'danger'] as const;
 
+/** Mail parameters a chat link keeps (audit ZBZ-L3): never `attach=` and the like. */
+const MAILTO_PARAMS = new Set(['to', 'cc', 'bcc', 'subject', 'body']);
+
+function mailtoWithoutExtras(url: URL): string {
+  const kept = [...url.searchParams].filter(([name]) => MAILTO_PARAMS.has(name.toLowerCase()));
+  const query = new URLSearchParams(kept).toString();
+  return `mailto:${url.pathname}${query === '' ? '' : `?${query}`}`;
+}
+
 /** `http(s)` and `mailto` only, as an absolute URL (relative ones resolved against `origin`); anything else is `null`. */
 export function safeUrl(value: unknown, origin: string): string | null {
   if (typeof value !== 'string' || value.trim() === '') return null;
@@ -229,7 +238,7 @@ export function safeUrl(value: unknown, origin: string): string | null {
   } catch {
     return null;
   }
-  if (url.protocol === 'mailto:') return url.href;
+  if (url.protocol === 'mailto:') return mailtoWithoutExtras(url);
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
   if (url.username !== '' || url.password !== '') return null;
   return url.href;

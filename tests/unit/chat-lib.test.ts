@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest';
-import { plainText, renderBlocks, renderToken } from '../../src/chat/body';
+import { hostOf, plainText, renderBlocks, renderToken } from '../../src/chat/body';
 import { dayLabel, fuzzyScore, History, rankConversations, rows, step } from '../../src/chat/format';
 import { chatText } from '../../src/chat/i18n';
 import { chatIcon } from '../../src/chat/icons';
@@ -67,6 +67,9 @@ describe('chat API parsers', () => {
   it('keeps only http(s) and mailto links, resolves relative ones against the API origin', () => {
     expect(safeUrl('https://example.com/a', ORIGIN)).toBe('https://example.com/a');
     expect(safeUrl('mailto:ana@example.com', ORIGIN)).toBe('mailto:ana@example.com');
+    // ZBZ-L3: to / cc / bcc / subject / body only.
+    expect(safeUrl('mailto:x@example.com?subject=Hi&attach=~/.ssh/id_rsa&ATTACHMENT=/etc/passwd&Body=b', ORIGIN)).toBe('mailto:x@example.com?subject=Hi&Body=b');
+    expect(safeUrl('mailto:x@example.com?attach=a', ORIGIN)).toBe('mailto:x@example.com');
     expect(safeUrl('/dashboard/task/1', ORIGIN)).toBe('https://beacon.example/dashboard/task/1');
     for (const bad of ['javascript:alert(1)', 'data:text/html,x', 'file:///etc/passwd', 'https://u:p@example.com', '', '   ', 42, null, 'http://[bad']) expect(safeUrl(bad, ORIGIN)).toBeNull();
   });
@@ -184,6 +187,18 @@ describe('message bodies', () => {
     expect(hidden.className).toBe('ref ref-hidden');
     expect(hidden.textContent).toBe('Content not visible');
     expect(renderToken({ type: 'link', url: null, text: 'plain', card: false }, options)).toBeInstanceOf(HTMLSpanElement);
+  });
+
+  it('shows the real host when a link text names another site (ZBZ-I1)', () => {
+    expect(hostOf('https://bank.example/login')).toBe('bank.example');
+    expect(hostOf('www.Bank.example')).toBe('bank.example');
+    expect(hostOf('the benchmark run')).toBeNull();
+    expect(hostOf('mailto:x@example.com')).toBeNull();
+    const fake = renderToken({ type: 'link', url: 'https://evil.example/x', text: 'https://bank.example', card: false }, options) as HTMLElement;
+    expect(fake.className).toBe('m-link-wrap');
+    expect(fake.querySelector('.m-host')?.textContent).toBe(' (evil.example)');
+    const same = renderToken({ type: 'link', url: 'https://bank.example/x', text: 'bank.example', card: false }, options) as HTMLElement;
+    expect(same.tagName).toBe('A');
   });
 
   it('builds a short plain text', () => {

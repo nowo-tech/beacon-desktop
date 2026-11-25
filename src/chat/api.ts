@@ -99,6 +99,27 @@ export class ChatApi {
     return parseThreadPage(data, this.origin);
   }
 
+  /**
+   * Revokes the presented chat token on the server (ChatKit 2.4.1 `POST logout`, idempotent, always 204; audit
+   * ZBZ-L4). Best effort with a short timeout: an older server (404), a network error or a slow answer never blocks
+   * the local disconnect or sign-out. Resolves whether the server confirmed it.
+   */
+  async logout(timeoutMs = 3000): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+    const request = this.request('POST', 'logout', {}, {}).then(
+      () => true,
+      () => false,
+    );
+    try {
+      return await Promise.race([request, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Moves the read cursor (server caps it, never moves it back). Returns the new `readUpTo`. */
   async read(uuid: string, messageId: number): Promise<number | null> {
     const data = (await this.request('POST', `conversations/${uuidPath(uuid)}/read`, {}, { messageId })) as { readUpTo?: unknown } | null;

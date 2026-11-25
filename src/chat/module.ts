@@ -39,6 +39,8 @@ export interface ChatModuleDeps {
   onUnread(total: number, capped: boolean): void;
   /** Chat connected / disconnected. */
   onConnection(connected: boolean): void;
+  /** The context last used on this device (a fresh connection starts there). */
+  preferredContext?(): string | null;
   /** A slot at the sidebar's foot for the running timer ("title bar + sidebar"). */
   sidebarTimer(): HTMLElement | null;
   clock?: SyncClock;
@@ -126,6 +128,8 @@ export class ChatModule {
   private readonly clock: SyncClock;
   private readonly now: () => Date;
   private loadingOlder = false;
+  /** Contexts the server refused (`403`) in this run: never used or remembered again. */
+  private readonly refused = new Set<string>();
 
   constructor(private readonly deps: ChatModuleDeps) {
     this.clock = deps.clock ?? realClock;
@@ -210,6 +214,7 @@ export class ChatModule {
         this.me = await this.api.me();
       } catch (error) {
         if (!(error instanceof ApiError && error.status === 403 && context !== null && context !== 'personal')) throw error;
+        this.refused.add(context);
         this.api.setContext('personal');
         this.me = await this.api.me();
       }
@@ -221,24 +226,39 @@ export class ChatModule {
       return;
     }
     const contexts = this.me.contexts;
-    const wanted = context !== null && contexts.some((item) => item.key === context) ? context : (this.me.context ?? contexts[0]?.key ?? null);
+    // A context refused above is never used again in this run (Beacon's rule for the fallback).
+    const usable = context !== null && !this.refused.has(context) && contexts.some((item) => item.key === context);
+    const wanted = usable ? context : (this.me.context ?? contexts.find((item) => !this.refused.has(item.key))?.key ?? null);
     await this.switchContext(wanted);
   }
 
-  /** Switches the tenant: memory cleared, list loaded, the last conversation of that context reopened. */
-  async switchContext(context: string | null): Promise<void> {
+  /**
+   * Switches the tenant: memory cleared, list loaded, the last conversation of that context reopened. A `403` for an
+   * organization falls back to Personal **once** (no loop); a refused context is never remembered or used again.
+   */
+  async switchContext(context: string | null, fallback = true): Promise<void> {
     if (this.api === null || this.sync === null) return;
+    const previous = this.context;
     this.context = context;
     this.api.setContext(context);
     this.history.clear();
-    this.deps.onContexts(this.me?.contexts ?? [], context);
     this.error = null;
     this.render();
     try {
       await this.sync.start();
     } catch (error) {
+      if (error instanceof ApiError && error.status === 403 && context !== null && context !== 'personal') {
+        this.refused.add(context);
+        this.context = previous;
+        if (fallback) return this.switchContext('personal', false);
+        this.error = this.t('errorGeneric');
+        this.render();
+        return;
+      }
       if (!(error instanceof ApiError && error.status === 401)) this.error = this.t('errorGeneric');
     }
+    // Only a context the server served is shown as current and remembered.
+    this.deps.onContexts((this.me?.contexts ?? []).filter((item) => !this.refused.has(item.key)), context);
     const server = this.deps.server();
     if (server !== null && context !== null) void this.deps.host.realtimeStart(server, context).catch(() => this.setMode('polling'));
     const last = context === null ? undefined : this.prefs.lastConversation[context];
@@ -253,6 +273,9 @@ export class ChatModule {
 
   private setDisconnected(message: string | null): void {
     void this.deps.host.realtimeStop().catch(() => undefined);
+    // Which conversation was open last (ids only) goes too (audit ZBZ-I3).
+    this.prefs.lastConversation = {};
+    this.savePrefs();
     this.sync?.reset();
     this.sync = null;
     this.api = null;
@@ -266,11 +289,26 @@ export class ChatModule {
     this.render();
   }
 
-  /** "Disconnect chat" (Settings): chat token deleted, memory cleared; time stays signed in. */
+  /**
+   * Revokes the chat token on the server before it is deleted here (ChatKit 2.4.1 `POST logout`, audit ZBZ-L4): best
+   * effort, short timeout; a 2.4.0 server (404) or no network just continues.
+   */
+  async revokeOnServer(): Promise<void> {
+    const server = this.deps.server();
+    const token = this.api === null && server !== null && this.connected ? await this.deps.host.token() : null;
+    const api = this.api ?? (server !== null && token !== null ? new ChatApi({ baseUrl: server, token, context: null, fetchImpl: this.deps.fetchImpl }) : null);
+    await api?.logout(this.logoutTimeoutMs);
+  }
+
+  /** "Disconnect chat" (Settings): revoked on the server (best effort), then deleted here; time stays signed in. */
   async disconnect(): Promise<void> {
+    await this.revokeOnServer();
     await this.deps.host.disconnect();
     this.setDisconnected(null);
   }
+
+  /** How long a best-effort logout may take (ms). */
+  logoutTimeoutMs = 3000;
 
   /** Sign-out of the whole app: Rust already deleted both tokens; forget everything in memory. */
   signedOut(): void {
@@ -314,7 +352,7 @@ export class ChatModule {
       if (token === null) throw new Error('not stored');
       this.connect = { kind: 'done' };
       this.deps.announce(this.t('connectDone'));
-      await this.start(server, token, this.context);
+      await this.start(server, token, this.context ?? this.deps.preferredContext?.() ?? null);
     } catch (error) {
       if (abort.signal.aborted && !(error instanceof DeviceFlowError && error.reason !== 'cancelled')) return;
       const message =

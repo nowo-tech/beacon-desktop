@@ -107,14 +107,19 @@ Only the latest release receives fixes. The server can force an update with `min
   `device/token` answer with `scopeFamily: "chat"` after `chat_connect_begin` (main window, a person at the app, the
   time token stored for the bound origin, no chat token yet, within 30 minutes). A `chat` answer is never stored as the
   time token, a `time` answer never as the chat token, any other family is scrubbed.
-- **Routing.** A chat route (`…/api/chat/…`, decoded path) gets the chat token or nothing; every other route the time
-  token or nothing. `X-Beacon-Context` is the only extra request header the window may set.
+- **Routing.** A chat route (`<server base path>/api/chat/v1/…`, decoded path, anchored) gets the chat token or
+  nothing; a path that only looks like one gets no token; every other route the time token or nothing.
+  `X-Beacon-Context` is the only extra request header the window may set.
+- **Revocation.** "Disconnect chat" and sign-out call `POST …/api/chat/v1/logout` with the chat token first (best
+  effort, 3 s), then delete it from the keychain.
 - **Realtime** (`src-tauri/src/realtime.rs`): the ticket (`GET …/api/chat/v1/realtime`) and the SSE stream are made in
   Rust through the pinned client, no redirects; the hub must be on the signed-in origin; the subscriber JWT goes in
   `Authorization`, never in the URL, and never reaches the window; hub events are reduced to ids before the window
-  sees them (kind, conversation / message uuids, message id, thread root, deleted).
+  sees them (kind, conversation / message uuids, message id, thread root, deleted); one event's data and one line are
+  capped at 64 KiB.
 - **Rendering.** Message bodies are structured tokens rendered as text nodes; links open outside the app through
-  `open_chat_link` (`http(s)` / `mailto`, checked again in Rust); a reference type becomes a CSS class only when it is a
+  `open_chat_link` (`http(s)` / `mailto`, checked again in Rust; `mailto` keeps only `to`, `cc`, `bcc`, `subject`,
+  `body`); a reference type becomes a CSS class only when it is a
   known one.
 
 ## Known limitations

@@ -37,6 +37,17 @@ function linkTo(url: string, label: string, options: BodyOptions, className: str
   return link;
 }
 
+/** The host a link text or URL names (`bank.example`, `https://bank.example/x`), lower case, or `null`. */
+export function hostOf(text: string): string | null {
+  const match = /^(?:https?:\/\/)?((?:[a-z0-9-]+\.)+[a-z]{2,})(?::\d+)?(?:[/?#]|$)/i.exec(text.trim());
+  if (match === null) return null;
+  try {
+    return new URL(`https://${match[1]}`).hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
 export function renderToken(token: Token, options: BodyOptions): Child {
   switch (token.type) {
     case 'text':
@@ -49,8 +60,14 @@ export function renderToken(token: Token, options: BodyOptions): Child {
       const me = token.userUuid !== null && token.userUuid === options.me;
       return h('span', { class: me ? 'mention me' : 'mention' }, `@${token.name.replace(/^@/, '')}`);
     }
-    case 'link':
-      return token.url === null ? h('span', {}, token.text) : linkTo(token.url, token.text, options, 'm-link');
+    case 'link': {
+      if (token.url === null) return h('span', {}, token.text);
+      const link = linkTo(token.url, token.text, options, 'm-link');
+      // Text that reads like another site than the target shows the real host next to it (audit ZBZ-I1).
+      const shown = hostOf(token.text);
+      const real = hostOf(token.url);
+      return shown !== null && real !== null && shown !== real ? h('span', { class: 'm-link-wrap' }, link, h('span', { class: 'm-host' }, ` (${real})`)) : link;
+    }
     case 'reference': {
       if (!token.visible) {
         return h(

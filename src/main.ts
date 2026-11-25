@@ -25,6 +25,7 @@ if (root !== null && new URLSearchParams(location.search).get('window') === 'pro
   const shell = new Shell(root, platform, { locale: detectLocale(globalThis.navigator?.language), storage: localStorage });
   const app = new DesktopApp(shell.timeRoot, platform, {
     onRender: () => shell.onAppRender(),
+    beforeSignOut: () => shell.chat.revokeOnServer(),
     beaconUrl: __BEACON_URL__,
     channel: __CHANNEL__,
     ...(__STORE_URL__ !== '' ? { storeUrl: __STORE_URL__ } : {}),

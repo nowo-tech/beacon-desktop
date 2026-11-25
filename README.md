@@ -111,8 +111,9 @@ Beacon chat sits next to the timer: **Chat** and **Time** on the left rail (`Ctr
 3. Read conversations, threads and reactions. Replying, reacting and notifications come in 0.11.0: use "Open in
    Beacon" meanwhile.
 
-Messages stay in memory only. "Disconnect chat" (Settings) removes the chat approval from this computer and keeps time
-tracking signed in; revoke the device in Beacon (Account → Security) to end it on the server too. Needs Beacon with
+Messages stay in memory only. "Disconnect chat" (Settings) revokes the chat approval (Beacon with ChatKit 2.4.1; older
+servers: revoke the device in Beacon, Account → Security) and removes it from this computer, keeping time tracking
+signed in. Needs Beacon with
 TimeTrackBundle 2.2 and ChatKitBundle 2.4. Shortcuts: `?` in Chat.
 
 ## Features

@@ -25,7 +25,8 @@ the server.
   (only the same person can approve it; a separate approval and a separate token, revocable on its own). The chat
   token lives in the OS keychain next to the time token (same service `tech.nowo.time-track-desktop`, user
   `chat-token`); only Rust reads it, attaches it to chat routes only (`…/api/chat/…`) and never sends the time token
-  there. "Disconnect chat" (Settings) deletes it and keeps time tracking signed in; sign-out deletes both. A `401` on
+  there. "Disconnect chat" (Settings) revokes it on the server and deletes it, keeping time tracking signed in;
+  sign-out revokes and deletes both. A `401` on
   chat disconnects chat only.
 - **Chat, read-only**: conversations of the chosen organization (`X-Beacon-Context: personal` / `org:<uuid>` on every
   request; the web context is never changed) in sections Channels, Projects (project channels apart, owner Q3), Direct
@@ -54,6 +55,23 @@ the server.
   `chat_realtime_start`, `chat_realtime_stop`, `set_unread_badge`, `open_chat_link`. The webview never sees the chat
   token, the subscriber JWT or the hub URL. Messages are kept in memory only (Q-BD-15), cleared on an organization
   switch, "Disconnect chat" and sign-out.
+- Review ZBZ (ship, Lows closed before the release):
+  - **ZBZ-L1**: the chat token goes only to `<server base path>/api/chat/v1/…` (decoded, anchored prefix); a path that
+    only looks like a chat route (another base, other case, doubled slashes, `/api/chat` without `v1/`) gets no token
+    at all, neither chat nor time.
+  - **ZBZ-L2**: the realtime parser caps one event's `data` at 64 KiB and a line at 64 KiB; past it the stream is
+    dropped and reconnected with backoff.
+  - **ZBZ-L3**: `mailto:` links keep only `to`, `cc`, `bcc`, `subject` and `body` (no `attach=` and the like), in the
+    window and again in Rust.
+  - **ZBZ-L4**: "Disconnect chat" and sign-out revoke the chat token on the server first (ChatKit 2.4.1
+    `POST /api/chat/v1/logout`, best effort, 3 s timeout; an older server's 404 or no network just continue), then
+    delete it here.
+  - **ZBZ-I1**: a link whose text names another site shows the real host next to it.
+  - **ZBZ-I2**: a realtime start without a chat token for that URL stops the stream without disconnecting chat; only
+    a real `401` does.
+  - **ZBZ-I3**: the last open conversation per organization (ids) is forgotten on sign-out and "Disconnect chat".
+  - Context fallback (Beacon): after a `403` for an organization the app retries Personal exactly once, and never
+    remembers or reuses the refused context in that run.
 
 ## [0.9.0] - 2026-11-25
 

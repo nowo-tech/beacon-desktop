@@ -124,6 +124,22 @@ describe('chat client API v1 (mock ChatKit)', () => {
     await expect(limited.me()).rejects.toMatchObject({ code: 'rate_limited' });
   });
 
+  it('revokes the chat token on logout, best effort (ZBZ-L4)', async () => {
+    const token = (await chatToken(time)).token;
+    const api = new ChatApi({ baseUrl: env.url, token, context: null, fetchImpl: nodeFetch });
+    expect(await api.logout()).toBe(true);
+    await expect(api.me()).rejects.toMatchObject({ status: 401 });
+    // Idempotent: again 204.
+    expect(await api.logout()).toBe(true);
+    await env.control('config', { chatLogoutMissing: true });
+    expect(await api.logout()).toBe(false);
+    await env.control('config', { chatLogoutMissing: false });
+    const offline = new ChatApi({ baseUrl: env.url, token, context: null, fetchImpl: (async () => Promise.reject(new Error('down'))) as unknown as typeof fetch });
+    expect(await offline.logout()).toBe(false);
+    const slow = new ChatApi({ baseUrl: env.url, token, context: null, fetchImpl: (() => new Promise(() => undefined)) as unknown as typeof fetch });
+    expect(await slow.logout(10)).toBe(false);
+  });
+
   it('denies a chained request approved by another person', async () => {
     const api = new TimeTrackApi({ baseUrl: env.url, source: 'desktop', token: time, fetchImpl: nodeFetch });
     await expect(

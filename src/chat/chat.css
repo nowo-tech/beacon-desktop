@@ -258,6 +258,7 @@ svg.i.lg { width: 20px; height: 20px; }
 .m-body.deleted { color: var(--ink-3); font-style: italic; }
 .mention { color: var(--slate); background: var(--slate-soft); border-radius: var(--r-xs); padding: 0 3px; font-weight: 600; }
 .mention.me { color: var(--warn); background: color-mix(in srgb, var(--mention-line) 22%, transparent); }
+.m-host { color: var(--ink-3); font-size: var(--fs-xs); }
 .m-link { color: var(--moss); text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
 .ref { display: inline-flex; align-items: center; gap: 5px; vertical-align: baseline; max-width: 100%; padding: 0 6px 0 4px; height: 22px; line-height: 20px; border-radius: var(--r-xs); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: var(--fs-sm); font-weight: 500; text-decoration: none; transform: translateY(-1px); }
 a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }

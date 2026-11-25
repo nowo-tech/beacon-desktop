@@ -151,6 +151,7 @@ export class Shell {
       },
       onConnection: () => this.renderChrome(),
       sidebarTimer: () => this.sidebarTimer(),
+      preferredContext: () => this.prefs.context,
       storage: deps.storage,
     });
     this.chatPanel = h('section', { class: 'module', id: 'mod-chat', attrs: { role: 'tabpanel', 'aria-labelledby': 'tab-chat' } }, this.chat.root);
@@ -443,11 +444,10 @@ export class Shell {
         return;
       }
     }
-    this.prefs.context = key;
-    this.save();
+    // Remembered by `onContexts` only once the server served it (a refused context is never kept).
     await this.chat.switchContext(key);
     const label = this.contexts.find((item) => item.key === key)?.label ?? key;
-    this.announce(this.t('contextSwitched', { name: label }));
+    if (this.context === key) this.announce(this.t('contextSwitched', { name: label }));
     this.renderChrome();
   }
 
