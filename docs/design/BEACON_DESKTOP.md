@@ -392,6 +392,10 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
   user's own); events for other contexts are hints that only refetch the current context's lists.
 - Time and chat may use different contexts at the same time only if Beacon allows it; recommendation: one context for
   the whole app at a time, simpler to explain.
+- **Owner decisions 2026-11-25:** the switcher is a setting (rail tiles or a title-bar dropdown). A timer never keeps
+  running in another organisation: switching while a timer runs asks "Stop the timer in <org> and switch?" (stop
+  through the stop dialog when required fields are missing, then switch) or Cancel (details in
+  [BEACON_DESKTOP_TASKS.md §9](BEACON_DESKTOP_TASKS.md#9-the-tasks-module-in-the-app)).
 
 ### 4.5 Token storage
 

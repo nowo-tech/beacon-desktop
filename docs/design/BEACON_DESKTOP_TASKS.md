@@ -14,6 +14,11 @@ name, secret or release changes with it.
 **Owner UX decision (2026-11-25): sidebar.** Sidebar density is a setting (**comfortable** or **compact**), and in
 Chat the **project channels have their own section**, separate from the organisation's channels (main design §5).
 
+**Owner UX decision (2026-11-25): context switcher and timer.** The context switcher is a setting: **rail tiles** or a
+**title-bar dropdown**. A timer never keeps running in another organisation: switching context while a timer runs asks
+"Stop the timer in <org> and switch?" (stop, through the stop dialog when required fields are missing, then switch) or
+**Cancel** (§9; main design §4.4).
+
 This addendum extends [BEACON_DESKTOP.md](BEACON_DESKTOP.md) (Q-BD-1..19 accepted). The owner decided on 2026-11-25 that
 Beacon Desktop has **three modules**: chat (on ChatKitBundle), **tasks (on TaskBoardBundle)** and time tracking (on
 TimeTrackBundle), with a first-class, professional UX. Beacon's fixed requirements R1–R7
@@ -486,6 +491,15 @@ The clickable prototype (built in parallel) fixes the visuals; this section fixe
   shown in both modes.
 - **Sidebar density (owner decision 2026-11-25).** A setting per device, **comfortable** or **compact**; it applies to
   every module's sidebar (Tasks: boards and My tasks sections).
+- **Context switcher (owner decision 2026-11-25).** A setting per device: **rail tiles** (one tile per context) or a
+  **title-bar dropdown**. Same contexts either way (`GET me.contexts`).
+- **No timer across contexts (owner decision 2026-11-25).** A timer never keeps running while the app shows another
+  organisation. Switching context with a running timer asks **"Stop the timer in <org> and switch?"** with *Stop and
+  switch* and *Cancel*. *Stop and switch* calls `POST /api/time-track/v1/timer/stop` in the **timer's** context; when
+  TimeTrack answers `409 allocation_required` / `activity_type_required`, the usual stop dialog asks for the required
+  fields first (the timer keeps running until it succeeds), and only after a successful stop does the app switch.
+  *Cancel* (or closing the dialog) keeps the current context and the timer. The same rule applies from the mini timer
+  window and the tray.
 - **My tasks** (landing view): sections *Overdue*, *Today*, *Upcoming*, *No date*, *To review*, with counts; a card per
   task (§4.4); inline actions: complete (move to the done column), start timer, open.
 - **Boards**: picker grouped by project / team / personal; **kanban** with lazy columns (30 cards, "Load more"), column
