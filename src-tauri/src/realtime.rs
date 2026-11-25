@@ -44,7 +44,10 @@ pub const BACKOFF_MAX: Duration = Duration::from_secs(10 * 60);
 /// Longest `Retry-After` honoured (as the UI's `MAX_RETRY_AFTER_SECONDS`).
 pub const RETRY_AFTER_MAX: Duration = Duration::from_secs(30 * 60);
 /// Longest SSE line kept in memory (a hub that never sends a newline cannot grow the buffer).
-pub const MAX_LINE: usize = 256 * 1024;
+pub const MAX_LINE: usize = 64 * 1024;
+/// Most `data` one event may carry (audit ZBZ-L2): an ids-only hint is well under 1 KiB. Past it the stream is
+/// dropped and reconnected with backoff.
+pub const MAX_EVENT_DATA: usize = 64 * 1024;
 
 /// Hint kinds forwarded to the UI; any other event (`typing`, `status`, `prefs`, …) is dropped.
 const HINT_KINDS: &[&str] = &[
@@ -126,6 +129,8 @@ pub struct SseParser {
     event: Option<String>,
     id: Option<String>,
     has_data: bool,
+    /// Bytes of `data` gathered for the current event.
+    data_bytes: usize,
     /// The previous byte was `\r` (a following `\n` is the same line end).
     after_cr: bool,
 }
@@ -142,7 +147,7 @@ impl SseParser {
             self.after_cr = byte == b'\r';
             if byte == b'\n' || byte == b'\r' {
                 let line = std::mem::take(&mut self.line);
-                if let Some(event) = self.line_end(&String::from_utf8_lossy(&line)) {
+                if let Some(event) = self.line_end(&String::from_utf8_lossy(&line))? {
                     events.push(event);
                 }
             } else {
@@ -155,7 +160,7 @@ impl SseParser {
         Ok(events)
     }
 
-    fn line_end(&mut self, line: &str) -> Option<SseEvent> {
+    fn line_end(&mut self, line: &str) -> Result<Option<SseEvent>, String> {
         if line.is_empty() {
             let event = self.has_data.then(|| SseEvent {
                 id: self.id.clone(),
@@ -163,12 +168,13 @@ impl SseParser {
                 data: self.data.join("\n"),
             });
             self.data.clear();
+            self.data_bytes = 0;
             self.has_data = false;
             self.event = None;
-            return event;
+            return Ok(event);
         }
         if line.starts_with(':') {
-            return None;
+            return Ok(None);
         }
         let (field, value) = match line.split_once(':') {
             Some((field, value)) => (field, value.strip_prefix(' ').unwrap_or(value)),
@@ -176,6 +182,10 @@ impl SseParser {
         };
         match field {
             "data" => {
+                self.data_bytes += value.len() + 1;
+                if self.data_bytes > MAX_EVENT_DATA {
+                    return Err("event stream event too large".into());
+                }
                 self.data.push(value.to_string());
                 self.has_data = true;
             }
@@ -183,7 +193,7 @@ impl SseParser {
             "id" if !value.contains('\0') => self.id = Some(value.to_string()),
             _ => {}
         }
-        None
+        Ok(None)
     }
 
     /// The last event id seen (`Last-Event-ID` of the next connection).
@@ -388,8 +398,10 @@ enum Step {
     Refresh,
     /// Polling mode for this long.
     Wait(Duration),
-    /// Stop for good (stopped, disconnected, unauthorized).
-    Done,
+    /// The server refused the chat token (`401`): the UI disconnects chat.
+    Unauthorized,
+    /// Stop without touching the token: a newer generation, or no chat token for this URL (audit ZBZ-I2).
+    Stopped,
 }
 
 fn jitter() -> f64 {
@@ -439,7 +451,7 @@ async fn ticket(
     let url = crate::net::validate_url(&format!("{base}{TICKET_PATH}"))?;
     let (owner, target) = (Arc::clone(session), url.clone());
     let Some(bearer) = blocking(move || owner.chat_bearer_for(&target)).await? else {
-        return Ok(Err(Step::Done));
+        return Ok(Err(Step::Stopped));
     };
     let mut headers = HeaderMap::new();
     headers.insert(AUTHORIZATION, bearer);
@@ -456,7 +468,7 @@ async fn ticket(
         .map_err(crate::net::describe_error)?;
     let status = response.status();
     if status.as_u16() == 401 {
-        return Ok(Err(Step::Done));
+        return Ok(Err(Step::Unauthorized));
     }
     if status.as_u16() == 429 {
         return Ok(Err(Step::Wait(
@@ -523,7 +535,7 @@ async fn stream(
         return Err(format!("hub answered HTTP {}", status.as_u16()));
     }
     if *rx.borrow() != generation {
-        return Ok(Step::Done);
+        return Ok(Step::Stopped);
     }
     sink.mode("live");
     let mut parser = SseParser::default();
@@ -533,7 +545,7 @@ async fn stream(
     loop {
         tokio::select! {
             _ = &mut refresh => return Ok(Step::Refresh),
-            _ = stop.wait_for(|value| *value != generation) => return Ok(Step::Done),
+            _ = stop.wait_for(|value| *value != generation) => return Ok(Step::Stopped),
             chunk = tokio::time::timeout(READ_TIMEOUT, response.chunk()) => {
                 let chunk = chunk.map_err(|_| "realtime hub silent".to_string())?.map_err(crate::net::describe_error)?;
                 let Some(chunk) = chunk else {
@@ -542,7 +554,7 @@ async fn stream(
                 for event in parser.push(&chunk)? {
                     if let Some(hint) = hint_of(&event.data) {
                         if *rx.borrow() != generation {
-                            return Ok(Step::Done);
+                            return Ok(Step::Stopped);
                         }
                         sink.hint(hint);
                     }
@@ -618,9 +630,15 @@ pub async fn run(
         };
         match step {
             Step::Refresh => continue,
-            Step::Done => {
+            Step::Unauthorized => {
                 if *rx.borrow() == generation {
                     sink.mode("unauthorized");
+                }
+                return;
+            }
+            Step::Stopped => {
+                if *rx.borrow() == generation {
+                    sink.mode("stopped");
                 }
                 return;
             }
@@ -794,6 +812,28 @@ mod tests {
         // A line that never ends cannot grow the buffer.
         let mut parser = SseParser::default();
         assert!(parser.push(&vec![b'a'; MAX_LINE + 1]).is_err());
+        // ZBZ-L2: many `data:` lines without the blank line that ends the event cannot grow without bound.
+        let mut parser = SseParser::default();
+        let line = format!("data: {}\n", "x".repeat(8 * 1024));
+        let mut failed = false;
+        for _ in 0..20 {
+            if parser.push(line.as_bytes()).is_err() {
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed);
+        // A finished event resets the count.
+        let mut parser = SseParser::default();
+        for _ in 0..20 {
+            assert_eq!(
+                parser
+                    .push(format!("data: {}\n\n", "y".repeat(8 * 1024)).as_bytes())
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
     }
 
     #[test]
@@ -1110,8 +1150,36 @@ mod tests {
             rx,
         )
         .await;
-        assert_eq!(sink.modes.lock().unwrap().as_slice(), ["unauthorized"]);
+        // ZBZ-I2: no chat token for this URL is not a refusal: stopped, the token is never deleted for it.
+        assert_eq!(sink.modes.lock().unwrap().as_slice(), ["stopped"]);
         assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn only_a_real_401_reports_unauthorized() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let refused = "HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+            .to_string();
+        let (_, seen) = serve_at(&base, vec![refused]).await;
+        let session = chat_session(&base);
+        let realtime = Arc::new(Realtime::new());
+        let (generation, rx) = realtime.begin();
+        let sink = Arc::new(Collect::default());
+        run(
+            test_client(),
+            realtime,
+            session,
+            url::Url::parse(&base).unwrap(),
+            "personal".into(),
+            sink.clone(),
+            generation,
+            rx,
+        )
+        .await;
+        assert_eq!(sink.modes.lock().unwrap().as_slice(), ["unauthorized"]);
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

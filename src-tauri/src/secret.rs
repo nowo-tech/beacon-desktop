@@ -26,7 +26,7 @@
 //! the `chat` family token (TimeTrackBundle 2.2 scope families, contract v0.5). Same rules as the time token, plus:
 //!
 //! - It is attached **only** to chat client API routes (`…/api/chat/…`), and the time token never is: a chat route
-//!   gets the chat token or nothing, every other route the time token or nothing ([`is_chat_route`]).
+//!   gets the chat token or nothing, every other route the time token or nothing, anchored to `<base path>/api/chat/v1/` ([`route_of`]).
 //! - It is captured only from a 2xx `device/token` answer whose `scopeFamily` is `chat`, after `chat_connect_begin`
 //!   (main window, a person at the app, the time token stored for the bound origin, no chat token yet), within
 //!   [`SIGN_IN_WINDOW`], from the time token's own origin. A `chat` answer never lands in the time entry and a `time`
@@ -238,10 +238,38 @@ pub fn is_sign_in(method: &reqwest::Method, url: &url::Url) -> bool {
             .is_some_and(|path| SIGN_IN_PATHS.iter().any(|route| path.ends_with(route)))
 }
 
-/// A chat client API route (`…/api/chat/…`, decoded path): the chat token goes there and nowhere else, and the time
-/// token never does.
-pub fn is_chat_route(url: &url::Url) -> bool {
-    decoded_path(url).is_some_and(|path| path.contains("/api/chat/"))
+/// The chat client API v1 under the bound server's base path (ChatKit 2.4, Beacon `/api/chat/v1`).
+pub const CHAT_PREFIX: &str = "/api/chat/v1/";
+
+/// Which token a request may carry (audit ZBZ-L1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Route {
+    /// `<base path>/api/chat/v1/…` exactly (decoded path, anchored): the chat token or nothing.
+    Chat,
+    /// Any other route: the time token or nothing.
+    Time,
+    /// Looks like a chat route but is not the anchored one (another base, other case, doubled slashes, `/api/chat`
+    /// without `v1/`), or a path that cannot be decoded: no token at all.
+    Neither,
+}
+
+/// The route of `url` for a server bound with base path `base` (no trailing slash; `""` at the root).
+pub fn route_of(url: &url::Url, base: &str) -> Route {
+    let Some(path) = decoded_path(url) else {
+        return Route::Neither;
+    };
+    if path.starts_with(&format!("{base}{CHAT_PREFIX}")) {
+        return Route::Chat;
+    }
+    let mut folded = path.to_ascii_lowercase();
+    while folded.contains("//") {
+        folded = folded.replace("//", "/");
+    }
+    if folded.contains("/api/chat") {
+        Route::Neither
+    } else {
+        Route::Time
+    }
 }
 
 /// The scope family of a `device/token` answer (`scopeFamily`, contract v0.5). Absent: `time` (older servers).
@@ -447,6 +475,8 @@ struct State {
     loaded: bool,
     stored: Option<Stored>,
     bound: Option<url::Origin>,
+    /// Path of the bound server URL without the trailing slash (`""` at the root): chat routes are anchored to it.
+    base: String,
     /// The sign-in `sign_in_begin` started (and the person confirmed).
     sign_in: Option<Pending>,
     /// The chat keychain entry was read (`chat` is then what it holds).
@@ -746,7 +776,7 @@ impl Session {
     /// The chat token for a request to `url` (the realtime client, realtime.rs): only a chat route of the chat token's
     /// own origin, which must also be the bound one.
     pub fn chat_bearer_for(&self, url: &url::Url) -> Result<Option<HeaderValue>, String> {
-        if !is_chat_route(url) || self.bound_origin() != Some(url.origin()) {
+        if self.route(url)? != Route::Chat || self.bound_origin() != Some(url.origin()) {
             return Ok(None);
         }
         let origin = url.origin().ascii_serialization();
@@ -757,6 +787,11 @@ impl Session {
             }) if owner == origin => Ok(Some(bearer(&token)?)),
             _ => Ok(None),
         }
+    }
+
+    /// The route of `url` against the bound server's base path.
+    pub fn route(&self, url: &url::Url) -> Result<Route, String> {
+        Ok(route_of(url, &self.lock()?.base))
     }
 
     /// Whether a token is stored (`secret_status`). A keychain that cannot be read is an error.
@@ -794,7 +829,9 @@ impl Session {
             }
             _ => {}
         }
-        self.lock()?.bound = Some(origin);
+        let mut state = self.lock()?;
+        state.bound = Some(origin);
+        state.base = base_path(server);
         Ok(())
     }
 
@@ -848,6 +885,7 @@ impl Session {
         }
         let origin = server.origin();
         state.bound = Some(origin.clone());
+        state.base = base_path(server);
         state.sign_in = Some(Pending {
             origin,
             at: Instant::now(),
@@ -858,12 +896,17 @@ impl Session {
 
     /// The `Authorization` for a request to `url`: only the stored token's own origin gets it.
     pub fn authorization_for(&self, url: &url::Url) -> Result<Authorization, String> {
-        // Chat routes get the chat token or nothing; the time token never goes there (R3).
-        if is_chat_route(url) {
-            return Ok(match self.chat_bearer_for(url)? {
-                Some(value) => Authorization::Bearer(value),
-                None => Authorization::None,
-            });
+        // Chat routes get the chat token or nothing; the time token never goes there (R3). A route that only looks
+        // like a chat route gets nothing at all (ZBZ-L1).
+        match self.route(url)? {
+            Route::Chat => {
+                return Ok(match self.chat_bearer_for(url)? {
+                    Some(value) => Authorization::Bearer(value),
+                    None => Authorization::None,
+                })
+            }
+            Route::Neither => return Ok(Authorization::None),
+            Route::Time => {}
         }
         let origin = url.origin().ascii_serialization();
         match self.current()? {
@@ -998,6 +1041,11 @@ impl Session {
         self.state.clear_poison();
         Ok(())
     }
+}
+
+/// The path of a server URL without its trailing slash (`""` at the root).
+fn base_path(server: &url::Url) -> String {
+    server.path().trim_end_matches('/').to_string()
 }
 
 /// Runs keychain work (and the native dialog) off the async workers and the main thread (GM-D-4).
@@ -1526,7 +1574,6 @@ pub mod tests {
         for route in [
             "/api/chat/v1/me",
             "/api/chat/v1/conversations?cursor=x",
-            "/beacon/api/chat/v1/realtime",
             "/api/%63hat/v1/me",
         ] {
             assert_eq!(
@@ -1538,7 +1585,6 @@ pub mod tests {
         for route in [
             "/api/time-track/me",
             "/api/time-track/v1/device/code",
-            "/api/chatty/x",
             "/api/time-track/chat",
         ] {
             assert_eq!(
@@ -1546,6 +1592,17 @@ pub mod tests {
                 Some("Bearer time-secret"),
                 "{route}"
             );
+        }
+        // ZBZ-L1: only the anchored prefix is a chat route; look-alikes get no token at all.
+        for route in [
+            "/api/time-track/v1/x/api/chat/v1/me",
+            "/beacon/api/chat/v1/realtime",
+            "/API/chat/v1/me",
+            "/api//chat/v1/me",
+            "/api/chat/me",
+            "/api/chatty/x",
+        ] {
+            assert_eq!(bearer_of(&session, &format!("{A}{route}")), None, "{route}");
         }
         // Another origin gets neither.
         assert_eq!(bearer_of(&session, &format!("{B}/api/chat/v1/me")), None);
@@ -1559,6 +1616,42 @@ pub mod tests {
             Some("Bearer time-secret")
         );
         assert_eq!(time.stored().unwrap().token, "time-secret");
+    }
+
+    #[test]
+    fn chat_routes_are_anchored_to_the_bound_base_path() {
+        let based = |path: &str| url(&format!("{A}{path}"));
+        assert_eq!(
+            route_of(&based("/beacon/api/chat/v1/me"), "/beacon"),
+            Route::Chat
+        );
+        assert_eq!(
+            route_of(&based("/api/chat/v1/me"), "/beacon"),
+            Route::Neither
+        );
+        assert_eq!(
+            route_of(&based("/beacon/api/time-track/me"), "/beacon"),
+            Route::Time
+        );
+        assert_eq!(
+            route_of(&based("/beacon/x/api/chat/v1/me"), "/beacon"),
+            Route::Neither
+        );
+        let (time, chat) = (
+            MemoryStore::with(A, "time-secret"),
+            MemoryStore::with(A, "chat-secret"),
+        );
+        let session = chat_session(&time, &chat);
+        session.bind(&url(&format!("{A}/beacon/"))).unwrap();
+        assert_eq!(
+            bearer_of(&session, &format!("{A}/beacon/api/chat/v1/me")).as_deref(),
+            Some("Bearer chat-secret")
+        );
+        assert_eq!(bearer_of(&session, &format!("{A}/api/chat/v1/me")), None);
+        assert_eq!(
+            bearer_of(&session, &format!("{A}/beacon/api/time-track/me")).as_deref(),
+            Some("Bearer time-secret")
+        );
     }
 
     #[test]

@@ -188,6 +188,11 @@ pub fn check_chat_url(raw: &str) -> Result<String, String> {
     if !allowed || !url.username().is_empty() || url.password().is_some() {
         return Err("only http(s) and mailto links are opened".into());
     }
+    let url = if url.scheme() == "mailto" {
+        mailto_without_extras(url)
+    } else {
+        url
+    };
     let text = url.to_string();
     if text.len() > 4096
         || text.chars().any(|c| {
@@ -197,6 +202,26 @@ pub fn check_chat_url(raw: &str) -> Result<String, String> {
         return Err("unexpected characters in the link".into());
     }
     Ok(text)
+}
+
+/// Mail handler parameters a chat link may keep (audit ZBZ-L3): `attach=` and the like are dropped, so a message cannot
+/// pre-attach a local file to a draft.
+const MAILTO_PARAMS: &[&str] = &["to", "cc", "bcc", "subject", "body"];
+
+/// The `mailto:` URL with only [`MAILTO_PARAMS`] (names compared without case), and no fragment.
+fn mailto_without_extras(mut url: url::Url) -> url::Url {
+    let kept: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(name, _)| MAILTO_PARAMS.contains(&name.to_ascii_lowercase().as_str()))
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect();
+    url.set_fragment(None);
+    if kept.is_empty() {
+        url.set_query(None);
+    } else {
+        url.query_pairs_mut().clear().extend_pairs(kept);
+    }
+    url
 }
 
 /// Opens a chat message link: `mailto` with the system's mail handler, `http(s)` like every other link (the
@@ -1299,6 +1324,15 @@ mod tests {
         ] {
             assert!(check_chat_url(good).is_ok(), "{good}");
         }
+        // ZBZ-L3: only to / cc / bcc / subject / body survive in a mailto link.
+        assert_eq!(
+            check_chat_url("mailto:x@example.com?subject=Hi&attach=~/.ssh/id_rsa&ATTACHMENT=/etc/passwd&Body=b").unwrap(),
+            "mailto:x@example.com?subject=Hi&Body=b"
+        );
+        assert_eq!(
+            check_chat_url("mailto:x@example.com?attach=a#frag").unwrap(),
+            "mailto:x@example.com"
+        );
         for bad in [
             "javascript:alert(1)",
             "file:///etc/passwd",
