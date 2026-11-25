@@ -19,6 +19,12 @@ Chat the **project channels have their own section**, separate from the organisa
 "Stop the timer in <org> and switch?" (stop, through the stop dialog when required fields are missing, then switch) or
 **Cancel** (§9; main design §4.4).
 
+**Owner UX decisions (2026-11-25), prototype questions Q4–Q8:** timer prompts for required activity type / client on
+start, on stop (default) or both, and inheriting the task's last activity type, both per-user settings (§6.1); chat
+notification previews capped per organization at *Sender only* or *None* (refines Q-BD-9, main design §3.4, also
+applies to task notifications §5.4); column markers as emojis or colour dots (§9); threads and reactions in the first
+chat version (main design §3.2, §7).
+
 This addendum extends [BEACON_DESKTOP.md](BEACON_DESKTOP.md) (Q-BD-1..19 accepted). The owner decided on 2026-11-25 that
 Beacon Desktop has **three modules**: chat (on ChatKitBundle), **tasks (on TaskBoardBundle)** and time tracking (on
 TimeTrackBundle), with a first-class, professional UX. Beacon's fixed requirements R1–R7
@@ -367,7 +373,8 @@ every host-object link reads `{visible: false}` in v1 — deny by default). Beac
 ### 5.4 Notifications
 
 Task notifications on the desktop (Q-BD-32) carry **no task text by default** ("New activity in Beacon · Tasks"); the
-preview level and organisation cap of the main design (§3.4, Q-BD-9) apply, and the content comes from a server preview
+preview level and organisation cap of the main design (§3.4, Q-BD-9: the organization's maximum is *Sender only* or
+*None*, users may only go stricter) apply, and the content comes from a server preview
 (`GET notifications/preview/{id}`), never from a realtime payload.
 
 ## 6. Cross-module flows
@@ -381,6 +388,11 @@ preview level and organisation cap of the main design (§3.4, Q-BD-9) apply, and
   (or `timer/switch` when a timer runs, after the user confirms "Switch from <task>?"), same `X-Beacon-Context`.
   TimeTrack checks the task through TaskBoard's `TaskBoardTaskDirectory` (`canTrackTask()`), the period lock and
   allocation rules; `409 period_locked` / `400 invalid_request` are shown as TimeTrack answers them. No new server code.
+- **Required fields (owner decision 2026-11-25).** When the context requires an activity type or a client (TimeTrack
+  2.1 `require_*`), a per-user setting decides when the app asks: **on start**, **on stop** (default, since TimeTrack
+  enforces it at stop with `409 allocation_required` / `activity_type_required`) or **both**. A per-user setting also
+  decides whether a timer started from a task **inherits the task's last activity type** (the user's last entry on that
+  task, from TimeTrack) or starts without one.
 - The running timer (from `GET /api/time-track/v1/timer`) marks its task in every task view (a ticking badge);
   `timeSpentMinutes` refreshes after `timer/stop` (TaskBoard's `total_time_seconds` updates from TimeTrack's events).
 - No token can open the other family's API: the tasks API never starts a timer, the time API never edits a task.
@@ -491,6 +503,8 @@ The clickable prototype (built in parallel) fixes the visuals; this section fixe
   shown in both modes.
 - **Sidebar density (owner decision 2026-11-25).** A setting per device, **comfortable** or **compact**; it applies to
   every module's sidebar (Tasks: boards and My tasks sections).
+- **Column markers (owner decision 2026-11-25).** A per-user setting: TaskBoard's column emojis as they are (📝 🚧 👀 ✅),
+  or colour dots in the column's colour. Column names are always shown, so state never depends on the marker alone.
 - **Context switcher (owner decision 2026-11-25).** A setting per device: **rail tiles** (one tile per context) or a
   **title-bar dropdown**. Same contexts either way (`GET me.contexts`).
 - **No timer across contexts (owner decision 2026-11-25).** A timer never keeps running while the app shows another
