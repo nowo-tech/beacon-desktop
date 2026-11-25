@@ -36,8 +36,23 @@ in a later version.
   the HTTP User-Agent `TimeTrack-desktop/<version>`. Server-side names (TimeTrackBundle versions) are unchanged.
 - Repository renamed to `nowo-tech/beacon-desktop`: SECURITY.md and the issue template link there.
 
+### Fixed
+
+- **Windows: start at login lost on an interactive upgrade** (since 0.4.0, seen from 0.7.0 / 0.8.0). On the installer's
+  "Already Installed" page, "Uninstall before installing" (the default, also `/P` without `/UPDATE`) runs the old
+  version's uninstaller without `/UPDATE`, and Tauri's uninstall step then deletes `HKCU\…\Run\TimeTrack`. From 0.5.1
+  on the running app keeps start at login as that single value, so nothing was left and the app no longer started at
+  login (before, a duplicate value under another name sometimes survived by chance). The installer now remembers the
+  app's own value before that page and writes it back for this install (quoted, `--hidden`) when it is gone; its Task
+  Manager state ("Disabled") is kept, and start at login that was off stays off. The in-app updater (`/P /UPDATE`) and
+  silent installs never lost it.
+
 ### Tests
 
+- `scripts/windows/upgrade-test.ps1` and the installer upgrade workflow: start-at-login scenarios `single` (only the
+  app's value, as most users have it) and `off` (none, none after), and three interactive scenarios
+  (`v04-interactive-autostart-single`, `-disabled`, `-off`); `prev_run_id` documents the 0.4.0 and 0.8.0 release runs,
+  and the scenarios run from either. Vitest checks the snapshot / restore in the NSIS hooks.
 - Vitest `identifiers.test.ts`: fails if any kept id changes (identifier, productName, binary and package names, no
   `mainBinaryName`, channel overlays, keychain service and user, localStorage keys, updater key, endpoint path and
   signed-only, S3 prefix, NSIS keys, MSIX application id), and checks the new visible name in the window, the tray,
