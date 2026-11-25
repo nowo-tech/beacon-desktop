@@ -6,7 +6,7 @@ import { availableMonitors, currentMonitor, getCurrentWindow, type Monitor, Phys
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { type NativeRequest, type NativeResponse, nativeFetch, SESSION_HANDLE } from './lib/nativeFetch';
-import { type ConnectionSecurity, notificationBody, type NotificationPermission, type Platform, type WindowHost, type PromptClient, type PromptHost, type SessionEvent, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
+import { type ChatHost, type ChatRealtimeMode, type ConnectionSecurity, notificationBody, type NotificationPermission, type Platform, type WindowHost, type PromptClient, type PromptHost, type SessionEvent, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
 import { type BrowserChoice, type DetectedBrowser, type OpenOutcome, sanitizeBrowser } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 
@@ -57,9 +57,26 @@ export function tauriPromptClient(): PromptClient {
   };
 }
 
+/** Chat (BD-2): the chat token stays in Rust (src-tauri/src/secret.rs), the stream too (src-tauri/src/realtime.rs). */
+const chatHost: ChatHost = {
+  token: async () => ((await invoke<boolean>('chat_status')) ? SESSION_HANDLE : null),
+  tokenSet: async (token) => {
+    if (token !== SESSION_HANDLE) throw new Error('The chat token is stored by the app from the connect answer only.');
+  },
+  connectBegin: () => invoke('chat_connect_begin', { locale: typeof document === 'undefined' ? null : document.documentElement.lang || null }),
+  disconnect: () => invoke('chat_disconnect'),
+  realtimeStart: (server, context) => invoke('chat_realtime_start', { server, context }),
+  realtimeStop: () => invoke('chat_realtime_stop'),
+  onHint: (handler) => void listen<unknown>('chat-hint', (event) => handler(event.payload)),
+  onRealtime: (handler) => void listen<ChatRealtimeMode>('chat-realtime', (event) => handler(event.payload)),
+  openLink: async (url) => void (await invoke<string>('open_chat_link', { url })),
+  setUnreadBadge: (count) => invoke('set_unread_badge', { count: Math.max(0, Math.min(Math.trunc(count), 9999)) }),
+};
+
 export function tauriPlatform(): Platform {
   return {
     kind: 'tauri',
+    chat: chatHost,
     // Rust HTTP client with TLS public-key pinning for the official Beacon host (src-tauri/src/net.rs, docs/PINNING.md).
     // No redirects: the Bearer token stays bound to the configured server (audit CN D8).
     fetch: nativeFetch((request: NativeRequest) => invoke<NativeResponse>('beacon_fetch', { request })),

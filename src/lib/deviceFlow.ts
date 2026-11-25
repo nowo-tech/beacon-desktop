@@ -30,7 +30,7 @@ const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, 
  * RFC 8628 device flow against TimeTrackBundle 1.9.0: `device/code`, show the user code, poll `device/token` every
  * `interval` seconds; `slow_down` adds 5 s; `expired_token`, `access_denied`, `invalid_scope` end the flow.
  */
-export async function runDeviceFlow(api: TimeTrackApi, options: DeviceFlowOptions): Promise<LoginResult> {
+export async function runDeviceFlow(api: Pick<TimeTrackApi, 'deviceCode' | 'deviceToken'>, options: DeviceFlowOptions): Promise<LoginResult> {
   const sleep = options.sleep ?? wait;
   const now = options.now ?? Date.now;
   let code: DeviceCode;

@@ -326,10 +326,23 @@ export class TimeTrackApi {
 
   /** Device flow step 1. Throws `ApiError` with code `invalid_scope` when the server refuses a scope. */
   async deviceCode(clientName: string, scopes: readonly Scope[] = ALL_SCOPES): Promise<DeviceCode> {
+    return this.requestDeviceCode({ clientType: this.source, clientName, scopes }, false);
+  }
+
+  /**
+   * Device flow step 1 for the `chat` scope family (TimeTrackBundle 2.2, contract v0.5, BD-2): chained to this device
+   * with the time token as `Authorization` (only the same user can approve it). The answer of `device/token` then
+   * carries `scopeFamily: "chat"`, and the host keeps that token apart from the time token.
+   */
+  async chatDeviceCode(clientName: string): Promise<DeviceCode> {
+    return this.requestDeviceCode({ clientType: this.source, clientName, scopes: ['chat:read'], family: 'chat' }, true);
+  }
+
+  private async requestDeviceCode(body: Record<string, unknown>, chained: boolean): Promise<DeviceCode> {
     const data = await this.json<Partial<DeviceCode>>('device/code', {
       method: 'POST',
-      auth: false,
-      body: { clientType: this.source, clientName, scopes },
+      auth: chained,
+      body,
     });
     if (typeof data.deviceCode !== 'string' || typeof data.userCode !== 'string' || typeof data.verificationUri !== 'string') {
       throw new ApiError(200, 'invalid_response', 'The server returned an invalid device code.');
