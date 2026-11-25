@@ -275,7 +275,7 @@ export class ChatModule {
     void this.deps.host.realtimeStop().catch(() => undefined);
     // Which conversation was open last (ids only) goes too (audit ZBZ-I3).
     this.prefs.lastConversation = {};
-    this.savePrefs();
+    this.savePrefs(true);
     this.sync?.reset();
     this.sync = null;
     this.api = null;
@@ -1133,8 +1133,10 @@ export class ChatModule {
     });
   }
 
-  private savePrefs(): void {
+  /** `onlyIfStored`: update what is there, never write a fresh entry (sign-out after "Clear local data" stays clear). */
+  private savePrefs(onlyIfStored = false): void {
     try {
+      if (onlyIfStored && this.deps.storage?.getItem(PREFS_KEY) === null) return;
       this.deps.storage?.setItem(PREFS_KEY, JSON.stringify(this.prefs));
     } catch {
       // Storage unavailable: the view still works, it just does not remember.
