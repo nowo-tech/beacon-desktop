@@ -654,13 +654,18 @@ export class ChatModule {
     return chatIcon(name, size);
   }
 
-  private convLabel(row: Conversation): string {
+  /** Read before the name by screen readers (the name itself is the visible text, WCAG 2.5.3). */
+  private convKind(row: Conversation): string {
     const t = this.t;
-    const kind = row.kind === 'direct' ? t('kindDirect') : row.kind === 'support' ? t('kindSupport') : sectionOf(row) === 'projects' ? t('kindProject') : t('kindChannel');
-    const parts = [t('convLabel', { kind, title: row.title })];
-    if (row.unread > 0 && row.uuid !== this.openUuid()) parts.push(t('convUnread', { count: row.unread }));
-    if (isMuted(row, this.clock.now())) parts.push(t('convMuted'));
-    return parts.join(', ');
+    return row.kind === 'direct' ? t('kindDirect') : row.kind === 'support' ? t('kindSupport') : sectionOf(row) === 'projects' ? t('kindProject') : t('kindChannel');
+  }
+
+  /** Unread and muted, after the name (not by colour or weight alone). */
+  private convSuffix(row: Conversation): string {
+    const parts: string[] = [];
+    if (row.unread > 0 && row.uuid !== this.openUuid()) parts.push(this.t('convUnread', { count: row.unread }));
+    if (isMuted(row, this.clock.now())) parts.push(this.t('convMuted'));
+    return parts.length === 0 ? '' : `, ${parts.join(', ')}`;
   }
 
   private renderSide(): void {
@@ -707,10 +712,12 @@ export class ChatModule {
           'button',
           {
             class: `conv${unread && !muted ? ' unread' : ''}${muted ? ' muted' : ''}`,
-            attrs: { type: 'button', 'data-conv': row.uuid, 'aria-current': row.uuid === open ? 'true' : 'false', 'aria-label': this.convLabel(row) },
+            attrs: { type: 'button', 'data-conv': row.uuid, 'aria-current': row.uuid === open ? 'true' : 'false' },
           },
           h('span', { class: 'c-ico' }, this.convIcon(row)),
+          h('span', { class: 'sr-only' }, `${this.convKind(row)} `),
           h('span', { class: 'c-name' }, row.title),
+          h('span', { class: 'sr-only' }, this.convSuffix(row)),
           row.ticketStatus !== null ? h('span', { class: 'sup' }, row.ticketStatus) : null,
           muted ? chatIcon('bell-off', 'xs') : null,
           unread ? h('span', { class: `badge${muted ? ' soft' : ''}`, attrs: { 'aria-hidden': 'true' } }, row.unread > 99 ? '99+' : String(row.unread)) : null,
@@ -830,7 +837,7 @@ export class ChatModule {
         store !== undefined && store.loaded && store.conversations().length === 0
           ? emptyState('chat', t('emptyContext', { name: this.contextName() }), t('emptyContextHint'))
           : emptyState('chat', t('emptyPick'), t('emptyPickHint', { keys: `${modKey()} K` }));
-      this.list.replaceChildren(h('li', { class: 'empty-li', attrs: { role: 'presentation' } }, empty));
+      this.list.replaceChildren(h('li', { class: 'empty-li' }, empty));
       this.pill.hidden = true;
       return;
     }
@@ -848,11 +855,13 @@ export class ChatModule {
     const row = sync.store.conversation(open);
     const items: Node[] = [];
     if (timeline.hasMore) items.push(...skeletonMessages(2, true));
-    else if (row !== null) items.push(h('li', { class: 'conv-start', attrs: { role: 'presentation' } }, this.convIcon(row, ''), h('span', {}, t('startOfConversation', { title: row.title }))));
+    else if (row !== null) items.push(h('li', { class: 'conv-start' }, this.convIcon(row, ''), h('span', {}, t('startOfConversation', { title: row.title }))));
     for (const item of rows(timeline.messages, this.dividerAt, this.now(), t, this.deps.locale)) {
-      if (item.day !== null) items.push(h('li', { class: 'day-div', attrs: { role: 'presentation' } }, h('span', {}, item.day)));
-      if (item.firstUnread) items.push(h('li', { class: 'new-div', id: 'new-div', attrs: { role: 'separator', 'aria-label': t('newMessages') } }, t('newDivider')));
-      items.push(this.messageItem(item.message, item.continued, false));
+      if (item.day !== null) items.push(h('li', { class: 'day-div', attrs: { 'aria-hidden': 'true' } }, h('span', {}, item.day)));
+      if (item.firstUnread) items.push(h('li', { class: 'new-div', id: 'new-div', attrs: { 'aria-hidden': 'true' } }, t('newDivider')));
+      const node = this.messageItem(item.message, item.continued, false);
+      if (item.firstUnread) node.setAttribute('aria-label', `${t('newMessages')}. ${node.getAttribute('aria-label') ?? ''}`);
+      items.push(node);
     }
     this.list.replaceChildren(...items);
     this.setRovingStop(this.list, focused);
@@ -947,9 +956,10 @@ export class ChatModule {
       const count = message.thread.count === 1 ? t('reply') : t('replies', { count: message.thread.count });
       const link = h(
         'button',
-        { class: 'thread-link', attrs: { type: 'button', 'aria-label': t('openThread', { count }) } },
+        { class: 'thread-link', attrs: { type: 'button' } },
         chatIcon('thread', 'sm'),
         h('span', {}, count),
+        h('span', { class: 'sr-only' }, `, ${t('thread')}`),
         message.thread.lastReplyAt !== null ? h('span', { class: 'tl-meta' }, t('lastReply', { time: this.time(message.thread.lastReplyAt) })) : null,
       );
       link.addEventListener('click', () => void this.openThread(message.uuid));

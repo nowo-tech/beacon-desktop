@@ -174,7 +174,7 @@ describe('message bodies', () => {
   it('shows references for the reader: visible chips with a safe class, hidden ones neutral', () => {
     const visible = renderToken({ type: 'reference', visible: true, refType: 'task', id: 'EV-1', typeLabel: 'Task', title: 'Parser', subtitle: '', badge: 'Open', tone: 'info', url: 'https://beacon.example/t/1' }, options) as HTMLElement;
     expect(visible.className).toBe('ref ref-task');
-    expect(visible.getAttribute('aria-label')).toBe('Open Task EV-1 Parser in Beacon');
+    expect(visible.getAttribute('title')).toBe('Open Task EV-1 Parser in Beacon');
     expect(visible.querySelector('.r-s.tone-info')?.textContent).toBe('Open');
     const odd = renderToken({ type: 'reference', visible: true, refType: 'evil" onclick', id: '', typeLabel: 'X', title: '', subtitle: '', badge: '', tone: 'neutral', url: null }, options) as HTMLElement;
     expect(odd.className).toBe('ref ref-other');
@@ -183,7 +183,7 @@ describe('message bodies', () => {
     const hidden = renderToken({ type: 'reference', visible: false, text: '' }, options) as HTMLElement;
     expect(hidden.className).toBe('ref ref-hidden');
     expect(hidden.textContent).toBe('Content not visible');
-    expect(renderToken({ type: 'link', url: null, text: 'plain' }, options)).toBeInstanceOf(HTMLSpanElement);
+    expect(renderToken({ type: 'link', url: null, text: 'plain', card: false }, options)).toBeInstanceOf(HTMLSpanElement);
   });
 
   it('builds a short plain text', () => {

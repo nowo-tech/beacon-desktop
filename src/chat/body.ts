@@ -72,7 +72,7 @@ export function renderToken(token: Token, options: BodyOptions): Child {
       const label = [token.typeLabel, token.id, token.title].filter((part) => part !== '').join(' ');
       if (token.url === null) return h('span', { class: typeClass, attrs: { title: label } }, ...parts);
       const link = linkTo(token.url, label, options, typeClass, ...parts);
-      link.setAttribute('aria-label', options.t('refOpen', { label }));
+      link.title = options.t('refOpen', { label });
       return link;
     }
   }

@@ -43,7 +43,7 @@ for (const scheme of ['light', 'dark'] as const) {
     const code = await page.locator('#chat-user-code').textContent();
     await control('device/approve', { userCode: code });
     await expect(page.locator('.side .conv').first()).toBeVisible({ timeout: 15_000 });
-    await page.locator('.ctx-tile[aria-label="Lumen Works"]').click();
+    await page.locator('.ctx-tile[title="Lumen Works"]').click();
     await expect(page.locator('.side .conv', { hasText: 'envelope-v2' })).toBeVisible();
     await shot(page, '02-chat-list', scheme);
     await page.locator('.side .conv', { hasText: 'envelope-v2' }).click();
@@ -86,7 +86,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.locator('#tab-chat').click();
     await expect(page.locator('#side-timer')).toBeVisible();
     await shot(page, '09-compact-density-sidebar-timer', scheme);
-    await page.locator('.ctx-tile[aria-label="Harbor Studio"]').click();
+    await page.locator('.ctx-tile[title="Harbor Studio"]').click();
     await expect(page.locator('#shell-confirm')).toBeVisible();
     await shot(page, '07-stop-and-switch', scheme);
     await page.locator('#confirm-stop-switch').click();
@@ -108,7 +108,7 @@ test('chat screens (es, light)', async ({ browser }) => {
   await page.locator('#chat-connect').click();
   const code = await page.locator('#chat-user-code').textContent();
   await control('device/approve', { userCode: code });
-  await page.locator('.ctx-tile[aria-label="Lumen Works"]').click();
+  await page.locator('.ctx-tile[title="Lumen Works"]').click();
   await expect(page.locator('.side .conv', { hasText: 'envelope-v2' })).toBeVisible();
   await page.waitForTimeout(250);
   await page.screenshot({ path: `${OUT}/02-chat-list-light-es.png` });

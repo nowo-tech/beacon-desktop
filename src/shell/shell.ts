@@ -326,7 +326,7 @@ export class Shell {
     const time = elapsed(timer.startedAt, this.now());
     const main = h(
       'button',
-      { class: 'tp-main', attrs: { type: 'button', 'aria-label': t('timerOpen', { task: timer.taskTitle, time }) } },
+      { class: 'tp-main', attrs: { type: 'button', title: t('timerOpen', { task: timer.taskTitle, time }) } },
       h('span', { class: 'tp-dot', attrs: { 'aria-hidden': 'true' } }),
       h('span', { class: 'tp-task' }, timer.taskTitle),
       h('span', { class: 'tp-time', attrs: { 'aria-hidden': 'true' } }, time),
@@ -376,7 +376,12 @@ export class Shell {
       this.contexts.forEach((context, index) => {
         const badge = contextBadge(context, index);
         const current = context.key === this.context;
-        const tile = h('button', { class: 'ctx-tile', attrs: { type: 'button', style: `background:${badge.color}`, 'aria-current': current ? 'true' : 'false', 'aria-label': context.label, title: context.label, 'data-context': context.key } }, badge.tile);
+        const tile = h(
+          'button',
+          { class: 'ctx-tile', attrs: { type: 'button', style: `background:${badge.color}`, 'aria-current': current ? 'true' : 'false', title: context.label, 'data-context': context.key } },
+          h('span', { attrs: { 'aria-hidden': 'true' } }, badge.tile),
+          h('span', { class: 'sr-only' }, context.label),
+        );
         tile.addEventListener('click', () => void this.switchContext(context.key));
         tiles.append(tile);
       });
@@ -394,10 +399,11 @@ export class Shell {
         {
           class: 'rail-tab',
           id: `tab-${id}`,
-          attrs: { type: 'button', role: 'tab', 'aria-selected': selected ? 'true' : 'false', 'aria-controls': `mod-${id}`, tabindex: selected ? '0' : '-1', 'aria-label': aria, title: `${label} (${modKey()}+${index + 1})`, 'aria-keyshortcuts': `Control+${index + 1}` },
+          attrs: { type: 'button', role: 'tab', 'aria-selected': selected ? 'true' : 'false', 'aria-controls': `mod-${id}`, tabindex: selected ? '0' : '-1', title: `${label} (${modKey()}+${index + 1})`, 'aria-keyshortcuts': `Control+${index + 1}` },
         },
         h('span', { class: 'rt-ico' }, chatIcon(icon)),
         h('span', { class: 'rt-label' }, label),
+        aria !== label ? h('span', { class: 'sr-only' }, aria.slice(label.length)) : null,
       );
       if (id === 'chat' && this.unread > 0) tab.append(h('span', { class: 'badge', attrs: { 'aria-hidden': 'true' } }, this.badgeText()));
       if (id === 'time' && this.app?.state.activeTimer) tab.append(h('span', { class: 'live', attrs: { 'aria-hidden': 'true' } }));
