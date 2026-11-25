@@ -195,8 +195,38 @@ export function defaultResumeShortcut(os: HostOs = hostOs()): string {
   return os === 'linux' ? LINUX_RESUME_SHORTCUT : DEFAULT_RESUME_SHORTCUT;
 }
 
+/** Realtime state of the chat stream (src-tauri/src/realtime.rs). */
+export type ChatRealtimeMode = 'live' | 'polling' | 'unauthorized' | 'stopped';
+
+/**
+ * What the chat module needs from the host (BD-2). In the Tauri app the chat token stays in Rust (a second keychain
+ * entry, attached to chat routes only) and the realtime stream runs in Rust; only ids-only hints reach the UI.
+ */
+export interface ChatHost {
+  /** `SESSION_HANDLE` when a chat token is stored for the signed-in server (Tauri), the token itself (browser), else `null`. */
+  token(): Promise<string | null>;
+  /** Keeps the token of a "Connect chat" answer (the Tauri app stored it in Rust already and only accepts the handle). */
+  tokenSet(token: string): Promise<void>;
+  /** Arms the capture of the next `chat` answer of `device/token` (Rust `chat_connect_begin`). */
+  connectBegin(): Promise<void>;
+  /** Deletes the chat token only (time stays signed in). */
+  disconnect(): Promise<void>;
+  /** Starts the realtime stream for `context` (restarts it when running). */
+  realtimeStart(server: string, context: string): Promise<void>;
+  realtimeStop(): Promise<void>;
+  /** An ids-only hint from the stream. */
+  onHint(handler: (hint: unknown) => void): void;
+  onRealtime(handler: (mode: ChatRealtimeMode) => void): void;
+  /** Opens a message link (`http(s)` / `mailto`, checked again by the host). */
+  openLink(url: string): Promise<void>;
+  /** Unread badge: tray dot, Dock / launcher count, Windows overlay; 0 clears it. */
+  setUnreadBadge(count: number): Promise<void>;
+}
+
 export interface Platform {
   readonly kind: 'tauri' | 'browser';
+  /** Chat (BD-2); absent on hosts without it. */
+  readonly chat?: ChatHost;
   fetch: typeof fetch;
   /** TLS pinning state for `server`; `null` when the host does not know (plain browser: the browser validates TLS). */
   connectionSecurity(server: string): Promise<ConnectionSecurity | null>;
@@ -353,6 +383,15 @@ export interface BrowserHooks {
   boundServer: string | null;
   shortcutPressed(): void;
   resumeShortcutPressed(): void;
+  /** Chat (BD-2): the stored chat token, "Connect chat" calls, realtime starts, the badge, opened chat links. */
+  chatToken: string | null;
+  chatConnectBegins: number;
+  chatRealtime: { server: string; context: string } | null;
+  badge: number;
+  chatLinks: string[];
+  /** The fake stream sends a hint / changes mode. */
+  chatHint(hint: unknown): void;
+  chatMode(mode: ChatRealtimeMode): void;
   /** The fake OS locks / unlocks the screen or sleeps / wakes. */
   sessionEvent(event: SessionEvent): void;
   trayAction(action: string): void;
@@ -380,7 +419,16 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
   const windowHandlers: (() => void)[] = [];
   const externalHandlers: ((url: string) => void)[] = [];
   const micHandlers: ((signal: unknown) => void)[] = [];
+  const hintHandlers: ((hint: unknown) => void)[] = [];
+  const modeHandlers: ((mode: ChatRealtimeMode) => void)[] = [];
   const hooks: BrowserHooks = {
+    chatToken: null,
+    chatConnectBegins: 0,
+    chatRealtime: null,
+    badge: 0,
+    chatLinks: [],
+    chatHint: (hint) => hintHandlers.forEach((handler) => handler(hint)),
+    chatMode: (mode) => modeHandlers.forEach((handler) => handler(mode)),
     idleSeconds: 0,
     opened: [],
     openedWith: [],
@@ -445,9 +493,32 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     close: async () => void (hooks.prompt = null),
     onAnswer: (handler) => void answerHandlers.push(handler),
   };
+  const chat: ChatHost = {
+    token: async () => (secret === null ? null : hooks.chatToken),
+    tokenSet: async (token) => void (hooks.chatToken = token),
+    connectBegin: async () => {
+      if (secret === null) throw new Error('sign in first');
+      hooks.chatConnectBegins += 1;
+    },
+    disconnect: async () => {
+      hooks.chatToken = null;
+      hooks.chatRealtime = null;
+    },
+    // No hub in the browser: the fake stream reports polling unless a test drives it.
+    realtimeStart: async (server, context) => {
+      hooks.chatRealtime = { server, context };
+      setTimeout(() => modeHandlers.forEach((handler) => handler('polling')), 0);
+    },
+    realtimeStop: async () => void (hooks.chatRealtime = null),
+    onHint: (handler) => void hintHandlers.push(handler),
+    onRealtime: (handler) => void modeHandlers.push(handler),
+    openLink: async (url) => void hooks.chatLinks.push(url),
+    setUnreadBadge: async (count) => void (hooks.badge = count),
+  };
   return {
     kind: 'browser',
     hooks,
+    chat,
     fetch: fetchImpl,
     connectionSecurity: async () => hooks.connectionSecurity,
     appVersion: async () => version,
@@ -475,6 +546,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
       secret = null;
       secretOrigin = null;
       hooks.boundServer = null;
+      hooks.chatToken = null;
+      hooks.chatRealtime = null;
     },
     idleSeconds: async () => hooks.idleSeconds,
     openExternal: async (url) => {

@@ -45,7 +45,7 @@ test('every tab opens its own panel, without layout shift, the window never scro
   await expect(tablist.getByRole('tab')).toHaveCount(TABS.length);
   const place = async () => ({
     tablist: await tablist.boundingBox(),
-    panel: await page.locator('[role="tabpanel"]:not([hidden])').evaluate((el) => {
+    panel: await page.locator('#app [role="tabpanel"]:not([hidden])').evaluate((el) => {
       const r = el.getBoundingClientRect();
       return { left: r.left, top: r.top, width: r.width };
     }),
@@ -58,7 +58,7 @@ test('every tab opens its own panel, without layout shift, the window never scro
     await expect(tab).toHaveAttribute('aria-controls', `settings-panel-${id}`);
     await expect(page.getByRole('tabpanel', { name, exact: true })).toBeVisible();
     await expect(page.locator(control)).toBeVisible();
-    await expect(page.locator('[role="tabpanel"]:not([hidden])')).toHaveCount(1);
+    await expect(page.locator('#app [role="tabpanel"]:not([hidden])')).toHaveCount(1);
     // Same place for the tabs and the panel on every tab; the document never scrolls, only the pane does, and not much.
     expect(await place(), name).toEqual(first);
     const sizes = await page.evaluate(() => {
@@ -71,7 +71,7 @@ test('every tab opens its own panel, without layout shift, the window never scro
   }
   expect(await axe(page), 'settings tabs').toEqual([]);
   // The faded edges follow the writing direction (audit L2).
-  const fade = () => page.locator('[role="tablist"]').evaluate((el) => getComputedStyle(el).getPropertyValue('--fade-dir').trim());
+  const fade = () => page.locator('#app [role="tablist"]').evaluate((el) => getComputedStyle(el).getPropertyValue('--fade-dir').trim());
   expect(await fade()).toBe('right');
   await page.locator('#settings').evaluate((el) => el.setAttribute('dir', 'rtl'));
   expect(await fade()).toBe('left');

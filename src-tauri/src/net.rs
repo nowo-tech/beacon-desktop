@@ -29,7 +29,21 @@ use crate::secret::{self, blocking, Authorization, Session};
 const MAX_BODY: usize = 32 * 1024 * 1024;
 
 /// Request headers the UI may set; anything else is dropped. Never `authorization`: Rust sets it (`auth`).
-const ALLOWED_HEADERS: &[&str] = &["accept", "accept-language", "content-type"];
+/// `x-beacon-context` names the tenant of a chat request (`personal` / `org:<uuid>`, design §4.4, BD-2).
+const ALLOWED_HEADERS: &[&str] = &[
+    "accept",
+    "accept-language",
+    "content-type",
+    "x-beacon-context",
+];
+
+/// A sign-in or "Connect chat" answer whose token was stored: its origin, the notification language and which token.
+#[derive(Debug, PartialEq, Eq)]
+pub struct StoredFor {
+    pub origin: String,
+    pub spanish: bool,
+    pub family: secret::Family,
+}
 
 /// What an authenticated request gets, without touching the network, when no token is stored: the same answer as the
 /// server's for a missing token, so the UI asks to sign in again.
@@ -189,12 +203,12 @@ pub async fn send(
     Ok(send_and_capture(client, request, session).await?.0)
 }
 
-/// [`send`], plus the origin (and notification language) of a sign-in it stored.
+/// [`send`], plus the origin (and notification language) of a sign-in or chat connection it stored.
 pub async fn send_and_capture(
     client: &reqwest::Client,
     request: FetchRequest,
     session: &Arc<Session>,
-) -> Result<(FetchResponse, Option<(String, bool)>), String> {
+) -> Result<(FetchResponse, Option<StoredFor>), String> {
     let url = validate_url(&request.url)?;
     require_origin(session.bound_origin().as_ref(), &url)?;
     // `/api/time-track/%6Cogin` would reach the sign-in route unrecognised (GM-L1).
@@ -251,7 +265,19 @@ pub async fn send_and_capture(
     let (body, stored_for) = if sign_in && status.is_success() {
         let owner = Arc::clone(session);
         let captured = blocking(move || owner.capture(&target, &body)).await?;
-        (captured.body, captured.stored_for)
+        let stored = captured
+            .stored_for
+            .map(|(origin, spanish)| StoredFor {
+                origin,
+                spanish,
+                family: secret::Family::Time,
+            })
+            .or(captured.chat_stored_for.map(|(origin, spanish)| StoredFor {
+                origin,
+                spanish,
+                family: secret::Family::Chat,
+            }));
+        (captured.body, stored)
     } else {
         (secret::scrub(body), None)
     };
@@ -287,8 +313,16 @@ pub async fn beacon_fetch(
     crate::only_from(&window, "main")?;
     let (response, stored_for) = send_and_capture(client(), request, &session).await?;
     // Every stored sign-in is announced by the OS, from Rust (GM-D-1).
-    if let Some((origin, spanish)) = stored_for {
-        secret::notify_signed_in(&app, &origin, spanish);
+    match stored_for {
+        Some(StoredFor {
+            origin,
+            spanish,
+            family: secret::Family::Chat,
+        }) => secret::notify_chat_connected(&app, &origin, spanish),
+        Some(StoredFor {
+            origin, spanish, ..
+        }) => secret::notify_signed_in(&app, &origin, spanish),
+        None => {}
     }
     Ok(response)
 }

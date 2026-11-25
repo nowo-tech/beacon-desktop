@@ -3,6 +3,14 @@
 Status: **draft for owner review** (2026-11-25). Docs only: nothing in this document is built yet, and no app id,
 repository name, secret or release changes with it.
 
+**Implementation status:** BD-1 shipped in 0.9.0. BD-2 (chat read-only, planned 0.10.0) is built on
+`feat/bd-2-chat-read` (CHANGELOG `[Unreleased]`). Where the build differs from this text: the modules follow the
+approved prototype (Chat `Ctrl/Cmd+1`, Time `Ctrl/Cmd+2`, Tasks off); `GET me` is asked with the last context or
+`personal` (ChatKit needs a context on every request under a context policy) and falls back to `personal` on
+`403 context_forbidden`; the realtime hub must be on the signed-in origin (Beacon's default; another host is refused and
+the app polls); "Disconnect chat" and sign-out call ChatKit 2.4.1 `POST /api/chat/v1/logout` best effort before the
+local delete (review ZBZ-L4).
+
 Owner decisions of 2026-11-25 this design starts from:
 
 - `time-track-desktop` becomes **Beacon Desktop**: time tracking plus Beacon chat (ChatKitBundle).

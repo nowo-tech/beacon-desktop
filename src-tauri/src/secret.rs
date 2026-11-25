@@ -21,6 +21,19 @@
 //!   keychain entry first; on failure the token and the binding stay and the error is reported.
 //!
 //! Error texts never carry the token: keychain errors are reduced to fixed texts per kind.
+//!
+//! **Chat token (BD-2, design §2.3 / §4.5).** A second keychain entry under the same service, user `chat-token`, holds
+//! the `chat` family token (TimeTrackBundle 2.2 scope families, contract v0.5). Same rules as the time token, plus:
+//!
+//! - It is attached **only** to chat client API routes (`…/api/chat/…`), and the time token never is: a chat route
+//!   gets the chat token or nothing, every other route the time token or nothing, anchored to `<base path>/api/chat/v1/` ([`route_of`]).
+//! - It is captured only from a 2xx `device/token` answer whose `scopeFamily` is `chat`, after `chat_connect_begin`
+//!   (main window, a person at the app, the time token stored for the bound origin, no chat token yet), within
+//!   [`SIGN_IN_WINDOW`], from the time token's own origin. A `chat` answer never lands in the time entry and a `time`
+//!   answer never in the chat entry; any other family is scrubbed and never stored.
+//! - No native dialog: the approval page in Beacon accepts a chained request only from the time token's owner
+//!   (contract v0.5), so the origin and the person are already fixed. An OS notification still announces it.
+//! - "Disconnect chat" deletes the chat entry only; sign-out deletes the chat entry first, then the time entry.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -31,6 +44,8 @@ use serde_json::Value;
 
 const KEYCHAIN_SERVICE: &str = "tech.nowo.time-track-desktop";
 const KEYCHAIN_USER: &str = "session-token";
+/// The chat token's keychain user (same service): BD-2, design §4.5. Never changes (installed copies read it).
+const KEYCHAIN_CHAT_USER: &str = "chat-token";
 
 /// What the UI gets in place of the token (sign-in answers). Not a credential: Rust ignores it.
 pub const SESSION_HANDLE: &str = "stored-in-os-keychain";
@@ -90,11 +105,30 @@ pub trait TokenStore: Send + Sync {
     fn delete(&self) -> Result<(), String>;
 }
 
-/// The OS keychain entry of the app (raw: [`Session`] keeps the in-memory copy and the lock).
-pub struct Keychain;
+/// An OS keychain entry of the app (raw: [`Session`] keeps the in-memory copy and the lock): the time session
+/// ([`Keychain::time`]) or the chat token ([`Keychain::chat`]).
+pub struct Keychain {
+    user: &'static str,
+}
 
-fn entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER).map_err(|e| keychain_error(&e))
+impl Keychain {
+    /// User `session-token`: the time token (since 0.1).
+    pub fn time() -> Self {
+        Self {
+            user: KEYCHAIN_USER,
+        }
+    }
+
+    /// User `chat-token`: the chat token (BD-2).
+    pub fn chat() -> Self {
+        Self {
+            user: KEYCHAIN_CHAT_USER,
+        }
+    }
+
+    fn entry(&self) -> Result<keyring::Entry, String> {
+        keyring::Entry::new(KEYCHAIN_SERVICE, self.user).map_err(|e| keychain_error(&e))
+    }
 }
 
 /// A keychain error as a fixed text: never the stored data (`BadEncoding` carries the raw secret) nor a platform
@@ -115,7 +149,7 @@ pub fn keychain_error(error: &keyring::Error) -> String {
 
 impl TokenStore for Keychain {
     fn read(&self) -> Result<Option<Stored>, String> {
-        match entry()?.get_password() {
+        match self.entry()?.get_password() {
             Ok(value) => Ok(Some(Stored::decode(value))),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(keychain_error(&e)),
@@ -123,13 +157,13 @@ impl TokenStore for Keychain {
     }
 
     fn write(&self, stored: &Stored) -> Result<(), String> {
-        entry()?
+        self.entry()?
             .set_password(&stored.encode())
             .map_err(|e| keychain_error(&e))
     }
 
     fn delete(&self) -> Result<(), String> {
-        match entry()?.delete_credential() {
+        match self.entry()?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(keychain_error(&e)),
         }
@@ -202,6 +236,60 @@ pub fn is_sign_in(method: &reqwest::Method, url: &url::Url) -> bool {
     *method == reqwest::Method::POST
         && decoded_path(url)
             .is_some_and(|path| SIGN_IN_PATHS.iter().any(|route| path.ends_with(route)))
+}
+
+/// The chat client API v1 under the bound server's base path (ChatKit 2.4, Beacon `/api/chat/v1`).
+pub const CHAT_PREFIX: &str = "/api/chat/v1/";
+
+/// Which token a request may carry (audit ZBZ-L1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Route {
+    /// `<base path>/api/chat/v1/…` exactly (decoded path, anchored): the chat token or nothing.
+    Chat,
+    /// Any other route: the time token or nothing.
+    Time,
+    /// Looks like a chat route but is not the anchored one (another base, other case, doubled slashes, `/api/chat`
+    /// without `v1/`), or a path that cannot be decoded: no token at all.
+    Neither,
+}
+
+/// The route of `url` for a server bound with base path `base` (no trailing slash; `""` at the root).
+pub fn route_of(url: &url::Url, base: &str) -> Route {
+    let Some(path) = decoded_path(url) else {
+        return Route::Neither;
+    };
+    if path.starts_with(&format!("{base}{CHAT_PREFIX}")) {
+        return Route::Chat;
+    }
+    let mut folded = path.to_ascii_lowercase();
+    while folded.contains("//") {
+        folded = folded.replace("//", "/");
+    }
+    if folded.contains("/api/chat") {
+        Route::Neither
+    } else {
+        Route::Time
+    }
+}
+
+/// The scope family of a `device/token` answer (`scopeFamily`, contract v0.5). Absent: `time` (older servers).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Family {
+    Time,
+    Chat,
+    /// A family this app does not hold (never stored).
+    Other,
+}
+
+impl Family {
+    fn of(answer: &Value) -> Self {
+        match answer.get("scopeFamily") {
+            None | Some(Value::Null) => Self::Time,
+            Some(Value::String(family)) if family == "time" => Self::Time,
+            Some(Value::String(family)) if family == "chat" => Self::Chat,
+            _ => Self::Other,
+        }
+    }
 }
 
 /// The secret field names, compared without case, `_` or `-` (`access_token`, `accessToken`, `Access-Token` …).
@@ -387,8 +475,15 @@ struct State {
     loaded: bool,
     stored: Option<Stored>,
     bound: Option<url::Origin>,
+    /// Path of the bound server URL without the trailing slash (`""` at the root): chat routes are anchored to it.
+    base: String,
     /// The sign-in `sign_in_begin` started (and the person confirmed).
     sign_in: Option<Pending>,
+    /// The chat keychain entry was read (`chat` is then what it holds).
+    chat_loaded: bool,
+    chat: Option<Stored>,
+    /// The "Connect chat" `chat_connect_begin` started.
+    chat_connect: Option<Pending>,
 }
 
 /// The session of the app (managed by Tauri). Two locks, always taken in this order: `io` serialises every keychain
@@ -396,6 +491,8 @@ struct State {
 /// short, non-blocking reads and writes, never across a keychain call or a prompt (GM-D-4).
 pub struct Session {
     store: Box<dyn TokenStore>,
+    /// The chat token's entry (`chat-token`).
+    chat_store: Box<dyn TokenStore>,
     io: Mutex<()>,
     state: Mutex<State>,
     sign_in_window: Duration,
@@ -472,6 +569,25 @@ pub enum Authorization {
 pub struct Captured {
     pub body: Vec<u8>,
     pub stored_for: Option<(String, bool)>,
+    /// A chat token was stored ("Connect chat"): its origin and the notification language.
+    pub chat_stored_for: Option<(String, bool)>,
+}
+
+/// Refusal of "Connect chat" without a time session for the bound server.
+pub const CHAT_NEEDS_SIGN_IN: &str = "sign in first";
+/// Refusal of "Connect chat" while a chat token is stored.
+pub const CHAT_ALREADY_CONNECTED: &str = "chat already connected: disconnect first";
+
+/// The chat entry of a build without a keychain in tests: memory only (the real one in the app).
+fn default_chat_store() -> Box<dyn TokenStore> {
+    #[cfg(not(test))]
+    {
+        Box::new(Keychain::chat())
+    }
+    #[cfg(test)]
+    {
+        Box::new(tests::MemoryStore::default())
+    }
 }
 
 const UNAVAILABLE: &str = "session state unavailable";
@@ -492,6 +608,7 @@ impl Session {
     ) -> Self {
         Self {
             store,
+            chat_store: default_chat_store(),
             io: Mutex::new(()),
             state: Mutex::new(State::default()),
             sign_in_window,
@@ -500,6 +617,12 @@ impl Session {
             declines_file: None,
             clock: Arc::new(SystemTime::now),
         }
+    }
+
+    /// Keeps the chat token in `store` (the app: [`Keychain::chat`], the default outside tests).
+    pub fn with_chat_store(mut self, store: Box<dyn TokenStore>) -> Self {
+        self.chat_store = store;
+        self
     }
 
     /// Measures the pause with `clock` instead of the system clock (set it before [`Self::with_declines_file`]).
@@ -569,6 +692,108 @@ impl Session {
         Ok(self.lock()?.stored.clone())
     }
 
+    /// Reads the chat entry once; the caller holds `io`.
+    fn load_chat_locked(&self) -> Result<(), String> {
+        if self.lock()?.chat_loaded {
+            return Ok(());
+        }
+        let chat = self.chat_store.read()?;
+        let mut state = self.lock()?;
+        state.chat = chat;
+        state.chat_loaded = true;
+        Ok(())
+    }
+
+    /// The stored chat token, read from the keychain on first use.
+    fn current_chat(&self) -> Result<Option<Stored>, String> {
+        {
+            let state = self.lock()?;
+            if state.chat_loaded {
+                return Ok(state.chat.clone());
+            }
+        }
+        let _io = self.io()?;
+        self.load_chat_locked()?;
+        Ok(self.lock()?.chat.clone())
+    }
+
+    /// Whether a chat token is stored for the time token's origin (`chat_status`). Never the token.
+    pub fn chat_connected(&self) -> Result<bool, String> {
+        let time = self.current()?;
+        let chat = self.current_chat()?;
+        Ok(match (time, chat) {
+            (Some(time), Some(chat)) => time.origin.is_some() && time.origin == chat.origin,
+            _ => false,
+        })
+    }
+
+    /// Starts "Connect chat" (BD-2): only with the time token stored for the bound origin, no chat token, and a person
+    /// at the app. The next 2xx `chat` answer of `device/token` from that origin (within the window) is stored.
+    pub fn begin_chat_connect(&self, present: bool, locale: Option<&str>) -> Result<(), String> {
+        if !present {
+            return Err(SIGN_IN_NOT_PRESENT.into());
+        }
+        let _io = self.io()?;
+        self.load_locked()?;
+        self.load_chat_locked()?;
+        let mut state = self.lock()?;
+        let Some(bound) = state.bound.clone() else {
+            return Err(CHAT_NEEDS_SIGN_IN.into());
+        };
+        let owner = state
+            .stored
+            .as_ref()
+            .and_then(|stored| stored.origin.clone());
+        if owner.as_deref() != Some(bound.ascii_serialization().as_str()) {
+            return Err(CHAT_NEEDS_SIGN_IN.into());
+        }
+        if state.chat.is_some() {
+            return Err(CHAT_ALREADY_CONNECTED.into());
+        }
+        let spanish = spanish(locale);
+        state.chat_connect = Some(Pending {
+            origin: bound,
+            at: Instant::now(),
+            spanish,
+        });
+        Ok(())
+    }
+
+    /// "Disconnect chat": deletes the chat entry only (first), then forgets it. On failure nothing changes.
+    pub fn disconnect_chat(&self) -> Result<(), String> {
+        let _io = self.io.lock().unwrap_or_else(PoisonError::into_inner);
+        self.io.clear_poison();
+        self.chat_store.delete()?;
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.chat = None;
+        state.chat_loaded = true;
+        state.chat_connect = None;
+        drop(state);
+        self.state.clear_poison();
+        Ok(())
+    }
+
+    /// The chat token for a request to `url` (the realtime client, realtime.rs): only a chat route of the chat token's
+    /// own origin, which must also be the bound one.
+    pub fn chat_bearer_for(&self, url: &url::Url) -> Result<Option<HeaderValue>, String> {
+        if self.route(url)? != Route::Chat || self.bound_origin() != Some(url.origin()) {
+            return Ok(None);
+        }
+        let origin = url.origin().ascii_serialization();
+        match self.current_chat()? {
+            Some(Stored {
+                origin: Some(owner),
+                token,
+            }) if owner == origin => Ok(Some(bearer(&token)?)),
+            _ => Ok(None),
+        }
+    }
+
+    /// The route of `url` against the bound server's base path.
+    pub fn route(&self, url: &url::Url) -> Result<Route, String> {
+        Ok(route_of(url, &self.lock()?.base))
+    }
+
     /// Whether a token is stored (`secret_status`). A keychain that cannot be read is an error.
     pub fn signed_in(&self) -> Result<bool, String> {
         Ok(self.current()?.is_some())
@@ -604,7 +829,9 @@ impl Session {
             }
             _ => {}
         }
-        self.lock()?.bound = Some(origin);
+        let mut state = self.lock()?;
+        state.bound = Some(origin);
+        state.base = base_path(server);
         Ok(())
     }
 
@@ -658,6 +885,7 @@ impl Session {
         }
         let origin = server.origin();
         state.bound = Some(origin.clone());
+        state.base = base_path(server);
         state.sign_in = Some(Pending {
             origin,
             at: Instant::now(),
@@ -668,6 +896,18 @@ impl Session {
 
     /// The `Authorization` for a request to `url`: only the stored token's own origin gets it.
     pub fn authorization_for(&self, url: &url::Url) -> Result<Authorization, String> {
+        // Chat routes get the chat token or nothing; the time token never goes there (R3). A route that only looks
+        // like a chat route gets nothing at all (ZBZ-L1).
+        match self.route(url)? {
+            Route::Chat => {
+                return Ok(match self.chat_bearer_for(url)? {
+                    Some(value) => Authorization::Bearer(value),
+                    None => Authorization::None,
+                })
+            }
+            Route::Neither => return Ok(Authorization::None),
+            Route::Time => {}
+        }
         let origin = url.origin().ascii_serialization();
         match self.current()? {
             Some(Stored {
@@ -686,6 +926,7 @@ impl Session {
             return Ok(Captured {
                 body: b"{}".to_vec(),
                 stored_for: None,
+                chat_stored_for: None,
             });
         };
         let token = answer
@@ -694,8 +935,13 @@ impl Session {
             .filter(|token| !token.is_empty())
             .map(str::to_string);
         let origin = url.origin();
+        let family = Family::of(&answer);
         let mut stored_for = None;
-        if let Some(token) = token {
+        let mut chat_stored_for = None;
+        if let (Some(token), Family::Chat) = (token.clone(), family) {
+            chat_stored_for = self.capture_chat(&origin, token)?;
+        }
+        if let (Some(token), Family::Time) = (token, family) {
             let _io = self.io()?;
             self.load_locked()?;
             let pending = {
@@ -719,12 +965,55 @@ impl Session {
             }
         }
         scrub_value(&mut answer);
-        if stored_for.is_some() {
+        if stored_for.is_some() || chat_stored_for.is_some() {
             answer["token"] = Value::String(SESSION_HANDLE.into());
         }
         let body =
             serde_json::to_vec(&answer).map_err(|_| "invalid sign-in response".to_string())?;
-        Ok(Captured { body, stored_for })
+        Ok(Captured {
+            body,
+            stored_for,
+            chat_stored_for,
+        })
+    }
+
+    /// A `chat` answer: stored in the chat entry when "Connect chat" was started for this origin (within the window),
+    /// no chat token is stored, and the time token belongs to the same origin.
+    fn capture_chat(
+        &self,
+        origin: &url::Origin,
+        token: String,
+    ) -> Result<Option<(String, bool)>, String> {
+        let _io = self.io()?;
+        self.load_locked()?;
+        self.load_chat_locked()?;
+        let pending = {
+            let state = self.lock()?;
+            let serialised = origin.ascii_serialization();
+            let time_here = state
+                .stored
+                .as_ref()
+                .is_some_and(|stored| stored.origin.as_deref() == Some(serialised.as_str()));
+            state.chat_connect.clone().filter(|pending| {
+                pending.origin == *origin
+                    && pending.at.elapsed() <= self.sign_in_window
+                    && state.chat.is_none()
+                    && time_here
+            })
+        };
+        let Some(pending) = pending else {
+            return Ok(None);
+        };
+        let stored = Stored {
+            origin: Some(origin.ascii_serialization()),
+            token,
+        };
+        self.chat_store.write(&stored)?;
+        let mut state = self.lock()?;
+        state.chat = Some(stored);
+        state.chat_loaded = true;
+        state.chat_connect = None;
+        Ok(Some((origin.ascii_serialization(), pending.spanish)))
     }
 
     /// Signs out locally: deletes the keychain entry first; only then forgets the token, the binding and any pending
@@ -733,16 +1022,30 @@ impl Session {
     pub fn sign_out(&self) -> Result<(), String> {
         let _io = self.io.lock().unwrap_or_else(PoisonError::into_inner);
         self.io.clear_poison();
+        // The chat token first (BD-2): a time sign-out never leaves a chat token behind.
+        self.chat_store.delete()?;
+        {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.chat = None;
+            state.chat_loaded = true;
+            state.chat_connect = None;
+        }
         self.store.delete()?;
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         *state = State {
             loaded: true,
+            chat_loaded: true,
             ..State::default()
         };
         drop(state);
         self.state.clear_poison();
         Ok(())
     }
+}
+
+/// The path of a server URL without its trailing slash (`""` at the root).
+fn base_path(server: &url::Url) -> String {
+    server.path().trim_end_matches('/').to_string()
 }
 
 /// Runs keychain work (and the native dialog) off the async workers and the main thread (GM-D-4).
@@ -759,6 +1062,69 @@ pub fn notify_signed_in(app: &tauri::AppHandle, origin: &str, spanish: bool) {
     use tauri_plugin_notification::NotificationExt;
     let (title, body) = signed_in_notice(origin, spanish);
     let _ = app.notification().builder().title(title).body(body).show();
+}
+
+/// The "chat connected" OS notification, from Rust (best effort), after every stored chat token.
+pub fn notify_chat_connected(app: &tauri::AppHandle, origin: &str, spanish: bool) {
+    use tauri_plugin_notification::NotificationExt;
+    let (title, body) = chat_connected_notice(origin, spanish);
+    let _ = app.notification().builder().title(title).body(body).show();
+}
+
+/// Title and text of the "chat connected" notification.
+pub fn chat_connected_notice(origin: &str, spanish: bool) -> (String, String) {
+    if spanish {
+        (
+            "Chat conectado en Beacon Desktop".into(),
+            format!("El chat de {origin} está conectado. Si no fuiste tú, desconecta el chat en Beacon Desktop y revoca este dispositivo en Beacon (Cuenta → Seguridad)."),
+        )
+    } else {
+        (
+            "Beacon Desktop chat connected".into(),
+            format!("Chat on {origin} is connected. If this was not you, disconnect chat in Beacon Desktop and revoke this device in Beacon (Account → Security)."),
+        )
+    }
+}
+
+/// Whether a chat token is stored for the signed-in server. Never the token itself.
+#[tauri::command]
+pub async fn chat_status(
+    window: tauri::Window,
+    session: tauri::State<'_, Arc<Session>>,
+) -> Result<bool, String> {
+    crate::only_from(&window, "main")?;
+    let session = Arc::clone(&session);
+    blocking(move || session.chat_connected()).await
+}
+
+/// Starts "Connect chat": the next `chat` answer of `device/token` from the bound server is stored (see the module
+/// docs). Only for a person at the app (read here, in Rust).
+#[tauri::command]
+pub async fn chat_connect_begin(
+    window: tauri::Window,
+    session: tauri::State<'_, Arc<Session>>,
+    locale: Option<String>,
+) -> Result<(), String> {
+    crate::only_from(&window, "main")?;
+    let present = person_at_the_app(
+        window.is_focused().unwrap_or(false),
+        crate::read_idle_seconds(),
+    );
+    let session = Arc::clone(&session);
+    blocking(move || session.begin_chat_connect(present, locale.as_deref())).await
+}
+
+/// "Disconnect chat": deletes the chat token only (the realtime stream stops with it, realtime.rs).
+#[tauri::command]
+pub async fn chat_disconnect(
+    window: tauri::Window,
+    session: tauri::State<'_, Arc<Session>>,
+    realtime: tauri::State<'_, Arc<crate::realtime::Realtime>>,
+) -> Result<(), String> {
+    crate::only_from(&window, "main")?;
+    realtime.stop();
+    let session = Arc::clone(&session);
+    blocking(move || session.disconnect_chat()).await
 }
 
 /// Whether a session token is stored (the UI then starts signed in). Never the token itself.
@@ -823,8 +1189,10 @@ pub async fn sign_in_begin(
 pub async fn secret_delete(
     window: tauri::Window,
     session: tauri::State<'_, Arc<Session>>,
+    realtime: tauri::State<'_, Arc<crate::realtime::Realtime>>,
 ) -> Result<(), String> {
     crate::only_from(&window, "main")?;
+    realtime.stop();
     let session = Arc::clone(&session);
     blocking(move || session.sign_out()).await
 }
@@ -1174,6 +1542,329 @@ pub mod tests {
         let out = session.capture(&login, &bom).unwrap();
         assert_eq!(out.stored_for, Some((A.to_string(), false)));
         assert_eq!(json(out)["token"], SESSION_HANDLE);
+    }
+
+    /// A session over a time store and a chat store (both in memory).
+    fn chat_session(time: &MemoryStore, chat: &MemoryStore) -> Arc<Session> {
+        Arc::new(
+            Session::with_timing(Box::new(time.clone()), SIGN_IN_WINDOW, Duration::ZERO)
+                .with_chat_store(Box::new(chat.clone())),
+        )
+    }
+
+    const CHAT_ANSWER: &[u8] =
+        br#"{"token":"chat-secret","expiresAt":"2027-01-01T00:00:00Z","scopes":["chat:read"],"scopeFamily":"chat"}"#;
+
+    #[test]
+    fn keychain_entries_are_separate_users_of_one_service() {
+        assert_eq!(Keychain::time().user, "session-token");
+        assert_eq!(Keychain::chat().user, "chat-token");
+        assert_eq!(KEYCHAIN_SERVICE, "tech.nowo.time-track-desktop");
+    }
+
+    #[test]
+    fn chat_routes_get_the_chat_token_only_and_other_routes_the_time_token_only() {
+        let (time, chat) = (
+            MemoryStore::with(A, "time-secret"),
+            MemoryStore::with(A, "chat-secret"),
+        );
+        let session = chat_session(&time, &chat);
+        session.bind(&url(A)).unwrap();
+        assert!(session.chat_connected().unwrap());
+        for route in [
+            "/api/chat/v1/me",
+            "/api/chat/v1/conversations?cursor=x",
+            "/api/%63hat/v1/me",
+        ] {
+            assert_eq!(
+                bearer_of(&session, &format!("{A}{route}")).as_deref(),
+                Some("Bearer chat-secret"),
+                "{route}"
+            );
+        }
+        for route in [
+            "/api/time-track/me",
+            "/api/time-track/v1/device/code",
+            "/api/time-track/chat",
+        ] {
+            assert_eq!(
+                bearer_of(&session, &format!("{A}{route}")).as_deref(),
+                Some("Bearer time-secret"),
+                "{route}"
+            );
+        }
+        // ZBZ-L1: only the anchored prefix is a chat route; look-alikes get no token at all.
+        for route in [
+            "/api/time-track/v1/x/api/chat/v1/me",
+            "/beacon/api/chat/v1/realtime",
+            "/API/chat/v1/me",
+            "/api//chat/v1/me",
+            "/api/chat/me",
+            "/api/chatty/x",
+        ] {
+            assert_eq!(bearer_of(&session, &format!("{A}{route}")), None, "{route}");
+        }
+        // Another origin gets neither.
+        assert_eq!(bearer_of(&session, &format!("{B}/api/chat/v1/me")), None);
+        // Without a chat token, a chat route gets nothing (never the time token).
+        session.disconnect_chat().unwrap();
+        assert_eq!(chat.stored(), None);
+        assert!(!session.chat_connected().unwrap());
+        assert_eq!(bearer_of(&session, &format!("{A}/api/chat/v1/me")), None);
+        assert_eq!(
+            bearer_of(&session, &format!("{A}/api/time-track/me")).as_deref(),
+            Some("Bearer time-secret")
+        );
+        assert_eq!(time.stored().unwrap().token, "time-secret");
+    }
+
+    #[test]
+    fn chat_routes_are_anchored_to_the_bound_base_path() {
+        let based = |path: &str| url(&format!("{A}{path}"));
+        assert_eq!(
+            route_of(&based("/beacon/api/chat/v1/me"), "/beacon"),
+            Route::Chat
+        );
+        assert_eq!(
+            route_of(&based("/api/chat/v1/me"), "/beacon"),
+            Route::Neither
+        );
+        assert_eq!(
+            route_of(&based("/beacon/api/time-track/me"), "/beacon"),
+            Route::Time
+        );
+        assert_eq!(
+            route_of(&based("/beacon/x/api/chat/v1/me"), "/beacon"),
+            Route::Neither
+        );
+        let (time, chat) = (
+            MemoryStore::with(A, "time-secret"),
+            MemoryStore::with(A, "chat-secret"),
+        );
+        let session = chat_session(&time, &chat);
+        session.bind(&url(&format!("{A}/beacon/"))).unwrap();
+        assert_eq!(
+            bearer_of(&session, &format!("{A}/beacon/api/chat/v1/me")).as_deref(),
+            Some("Bearer chat-secret")
+        );
+        assert_eq!(bearer_of(&session, &format!("{A}/api/chat/v1/me")), None);
+        assert_eq!(
+            bearer_of(&session, &format!("{A}/beacon/api/time-track/me")).as_deref(),
+            Some("Bearer time-secret")
+        );
+    }
+
+    #[test]
+    fn a_chat_token_for_another_origin_is_never_used() {
+        let (time, chat) = (
+            MemoryStore::with(A, "time-secret"),
+            MemoryStore::with(B, "chat-secret"),
+        );
+        let session = chat_session(&time, &chat);
+        session.bind(&url(A)).unwrap();
+        assert!(!session.chat_connected().unwrap());
+        assert_eq!(bearer_of(&session, &format!("{A}/api/chat/v1/me")), None);
+        assert_eq!(
+            session
+                .chat_bearer_for(&url(&format!("{B}/api/chat/v1/me")))
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn connect_chat_needs_a_time_session_for_the_bound_origin_and_a_person() {
+        let (time, chat) = (MemoryStore::default(), MemoryStore::default());
+        let session = chat_session(&time, &chat);
+        assert_eq!(
+            session.begin_chat_connect(true, None).unwrap_err(),
+            CHAT_NEEDS_SIGN_IN
+        );
+        session.bind(&url(A)).unwrap();
+        assert_eq!(
+            session.begin_chat_connect(true, None).unwrap_err(),
+            CHAT_NEEDS_SIGN_IN
+        );
+        let (time, chat) = (MemoryStore::with(A, "time-secret"), MemoryStore::default());
+        let session = chat_session(&time, &chat);
+        assert_eq!(
+            session.begin_chat_connect(true, None).unwrap_err(),
+            CHAT_NEEDS_SIGN_IN
+        );
+        session.bind(&url(A)).unwrap();
+        assert_eq!(
+            session.begin_chat_connect(false, None).unwrap_err(),
+            SIGN_IN_NOT_PRESENT
+        );
+        session.begin_chat_connect(true, Some("es")).unwrap();
+        let (time, chat) = (
+            MemoryStore::with(A, "time-secret"),
+            MemoryStore::with(A, "chat-secret"),
+        );
+        let session = chat_session(&time, &chat);
+        session.bind(&url(A)).unwrap();
+        assert_eq!(
+            session.begin_chat_connect(true, None).unwrap_err(),
+            CHAT_ALREADY_CONNECTED
+        );
+    }
+
+    #[test]
+    fn a_chat_answer_is_stored_in_the_chat_entry_only_after_connect_chat() {
+        let token_route = url(&format!("{A}/api/time-track/device/token"));
+        let (time, chat) = (MemoryStore::with(A, "time-secret"), MemoryStore::default());
+        let session = chat_session(&time, &chat);
+        session.bind(&url(A)).unwrap();
+        // Not started: scrubbed, nothing stored.
+        let out = session.capture(&token_route, CHAT_ANSWER).unwrap();
+        assert!(out.chat_stored_for.is_none() && out.stored_for.is_none());
+        assert_eq!(json(out)["token"], Value::Null);
+        assert_eq!(chat.stored(), None);
+        // Started: stored in the chat entry with A's origin, the handle in its place, the time entry untouched.
+        session.begin_chat_connect(true, Some("es-ES")).unwrap();
+        // Another origin's answer is not captured.
+        let from_b = url(&format!("{B}/api/time-track/device/token"));
+        assert!(session
+            .capture(&from_b, CHAT_ANSWER)
+            .unwrap()
+            .chat_stored_for
+            .is_none());
+        // A time answer during "Connect chat" never lands anywhere (a time token is stored already).
+        let out = session.capture(&token_route, ANSWER).unwrap();
+        assert!(out.stored_for.is_none() && out.chat_stored_for.is_none());
+        let out = session.capture(&token_route, CHAT_ANSWER).unwrap();
+        assert_eq!(out.chat_stored_for, Some((A.to_string(), true)));
+        assert!(out.stored_for.is_none());
+        let body = json(out);
+        assert_eq!(body["token"], SESSION_HANDLE);
+        assert_eq!(body["scopeFamily"], "chat");
+        assert_eq!(
+            chat.stored(),
+            Some(Stored {
+                origin: Some(A.into()),
+                token: "chat-secret".into()
+            })
+        );
+        assert_eq!(time.stored().unwrap().token, "time-secret");
+        // Only once: a second answer is scrubbed and does not replace it.
+        let again = br#"{"token":"attacker","scopeFamily":"chat"}"#;
+        assert_eq!(
+            json(session.capture(&token_route, again).unwrap())["token"],
+            Value::Null
+        );
+        assert_eq!(chat.stored().unwrap().token, "chat-secret");
+    }
+
+    #[test]
+    fn a_chat_answer_never_becomes_the_time_token_and_unknown_families_are_dropped() {
+        let token_route = url(&format!("{A}/api/time-track/device/token"));
+        let (time, chat) = (MemoryStore::default(), MemoryStore::default());
+        let session = chat_session(&time, &chat);
+        begin(&session, A).unwrap();
+        // A time sign-in is pending, but the answer is a chat token: not stored as the time token.
+        let out = session.capture(&token_route, CHAT_ANSWER).unwrap();
+        assert!(out.stored_for.is_none() && out.chat_stored_for.is_none());
+        assert_eq!(time.stored(), None);
+        assert_eq!(chat.stored(), None);
+        for family in [r#""tasks""#, "1", r#"{"x":1}"#] {
+            let answer = format!(r#"{{"token":"other-secret","scopeFamily":{family}}}"#);
+            let out = session.capture(&token_route, answer.as_bytes()).unwrap();
+            assert!(
+                out.stored_for.is_none() && out.chat_stored_for.is_none(),
+                "{family}"
+            );
+            assert_eq!(json(out)["token"], Value::Null);
+        }
+        assert_eq!(time.stored(), None);
+        // An explicit `time` family is the time sign-in.
+        let time_answer = br#"{"token":"fresh-token","scopeFamily":"time"}"#;
+        assert_eq!(
+            session
+                .capture(&token_route, time_answer)
+                .unwrap()
+                .stored_for,
+            Some((A.to_string(), false))
+        );
+        assert_eq!(time.stored().unwrap().token, "fresh-token");
+    }
+
+    #[test]
+    fn an_expired_connect_chat_window_stores_nothing() {
+        let token_route = url(&format!("{A}/api/time-track/device/token"));
+        let (time, chat) = (MemoryStore::with(A, "time-secret"), MemoryStore::default());
+        let session = Arc::new(
+            Session::with_timing(Box::new(time.clone()), Duration::ZERO, Duration::ZERO)
+                .with_chat_store(Box::new(chat.clone())),
+        );
+        session.bind(&url(A)).unwrap();
+        session.begin_chat_connect(true, None).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(session
+            .capture(&token_route, CHAT_ANSWER)
+            .unwrap()
+            .chat_stored_for
+            .is_none());
+        assert_eq!(chat.stored(), None);
+    }
+
+    #[test]
+    fn sign_out_deletes_the_chat_token_first_and_both_entries() {
+        let (time, chat) = (
+            MemoryStore::with(A, "time-secret"),
+            MemoryStore::with(A, "chat-secret"),
+        );
+        let session = chat_session(&time, &chat);
+        session.bind(&url(A)).unwrap();
+        // The chat entry cannot be deleted: nothing changes, the error is returned.
+        chat.fail_delete.store(true, Ordering::SeqCst);
+        assert!(session.sign_out().is_err());
+        assert_eq!(time.stored().unwrap().token, "time-secret");
+        assert!(session.chat_connected().unwrap());
+        chat.fail_delete.store(false, Ordering::SeqCst);
+        session.sign_out().unwrap();
+        assert_eq!((time.stored(), chat.stored()), (None, None));
+        assert!(!session.chat_connected().unwrap());
+        assert_eq!(bearer_of(&session, &format!("{A}/api/chat/v1/me")), None);
+        // A locked chat keychain makes "Disconnect chat" fail and keeps the token.
+        let (time, chat) = (
+            MemoryStore::with(A, "time-secret"),
+            MemoryStore::with(A, "chat-secret"),
+        );
+        let session = chat_session(&time, &chat);
+        session.bind(&url(A)).unwrap();
+        chat.fail_delete.store(true, Ordering::SeqCst);
+        assert!(session.disconnect_chat().is_err());
+        assert_eq!(chat.stored().unwrap().token, "chat-secret");
+    }
+
+    #[test]
+    fn a_locked_chat_keychain_never_blocks_the_time_routes() {
+        let (time, chat) = (
+            MemoryStore::with(A, "time-secret"),
+            MemoryStore::with(A, "chat-secret"),
+        );
+        chat.fail_read.store(true, Ordering::SeqCst);
+        let session = chat_session(&time, &chat);
+        session.bind(&url(A)).unwrap();
+        assert!(session.signed_in().unwrap());
+        assert_eq!(
+            bearer_of(&session, &format!("{A}/api/time-track/me")).as_deref(),
+            Some("Bearer time-secret")
+        );
+        assert!(session.chat_connected().is_err());
+        assert!(session
+            .authorization_for(&url(&format!("{A}/api/chat/v1/me")))
+            .is_err());
+    }
+
+    #[test]
+    fn chat_connected_notice_names_the_host() {
+        let (title, body) = chat_connected_notice("https://beacon.example", false);
+        assert!(title.contains("chat"));
+        assert!(body.contains("https://beacon.example"));
+        let (title, body) = chat_connected_notice("https://beacon.example", true);
+        assert!(title.contains("Chat"));
+        assert!(body.contains("Cuenta"));
     }
 
     #[test]

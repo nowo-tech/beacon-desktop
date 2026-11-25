@@ -16,6 +16,7 @@
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { CHAT_PREFIX, CHAT_SCOPES, createChatMock } from './chat.mjs';
 
 const PREFIX = '/api/time-track';
 const ALL_SCOPES = ['timer:read', 'timer:write', 'tasks:read', 'entries:read'];
@@ -125,6 +126,7 @@ function readBody(req) {
 
 export function createMockServer(options = {}) {
   let state = freshState();
+  const chat = createChatMock({ send: (...args) => send(...args), error: (...args) => error(...args) });
   const allowedOrigins = options.allowedOrigins ?? null; // null = echo any origin (dev / tests)
 
   function cors(req, res) {
@@ -132,7 +134,7 @@ export function createMockServer(options = {}) {
     if (origin && (allowedOrigins === null || allowedOrigins.includes(origin))) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept, X-Beacon-Context');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
       res.setHeader('Access-Control-Expose-Headers', 'Retry-After, Content-Disposition, X-Min-Supported-Version');
       res.setHeader('Access-Control-Max-Age', '600');
@@ -162,6 +164,11 @@ export function createMockServer(options = {}) {
       error(res, 401, 'invalid_token', 'The access token is missing, expired or revoked.');
       return null;
     }
+    // Contract v0.5: only a `time` token opens the time API.
+    if ((session.family ?? 'time') !== 'time') {
+      error(res, 403, 'insufficient_scope', 'Only a time token opens this API.');
+      return null;
+    }
     if (scope && !session.scopes.includes(scope)) {
       error(res, 403, 'insufficient_scope', `The token lacks the ${scope} scope.`);
       return null;
@@ -169,11 +176,11 @@ export function createMockServer(options = {}) {
     return session;
   }
 
-  function issue(userId, clientType, scopes = state.config.tokenScopes) {
+  function issue(userId, clientType, scopes = state.config.tokenScopes, family = 'time') {
     const value = token();
     const expiresAt = Date.now() + 30 * 24 * 3600 * 1000;
-    state.tokens.set(value, { userId, clientType, scopes: [...scopes], expiresAt });
-    return { token: value, expiresAt: new Date(expiresAt).toISOString(), scopes: [...scopes] };
+    state.tokens.set(value, { userId, clientType, scopes: [...scopes], expiresAt, family });
+    return { token: value, expiresAt: new Date(expiresAt).toISOString(), scopes: [...scopes], scopeFamily: family };
   }
 
   function allTasks() {
@@ -534,11 +541,21 @@ export function createMockServer(options = {}) {
         );
       }
       case 'POST device/code': {
-        const known = state.config.meetingsScope ? [...ALL_SCOPES, MEETINGS_SCOPE] : ALL_SCOPES;
+        // Contract v0.5: `family` (time by default; `chat` with chat scopes); a Bearer of a token the device holds
+        // chains the request (only that token's owner may approve it).
+        const family = body.family ?? 'time';
+        const known = family === 'chat' ? CHAT_SCOPES : state.config.meetingsScope ? [...ALL_SCOPES, MEETINGS_SCOPE] : ALL_SCOPES;
         const scopes = body.scopes ?? [...ALL_SCOPES];
-        if (!Array.isArray(scopes) || scopes.length === 0 || scopes.some((scope) => !known.includes(scope))) {
+        if (!['time', 'chat'].includes(family) || !Array.isArray(scopes) || scopes.length === 0 || scopes.some((scope) => !known.includes(scope))) {
           return error(res, 400, 'invalid_scope', 'Unknown or empty scope list.');
         }
+        let chainedTo = null;
+        if (req.headers.authorization !== undefined) {
+          const holder = state.tokens.get(req.headers.authorization.replace(/^Bearer\s+/, ''));
+          if (!holder) return error(res, 401, 'invalid_token', 'The access token is missing, expired or revoked.');
+          chainedTo = holder.userId;
+        }
+        state.chatDeviceRequests = (state.chatDeviceRequests ?? 0) + (family === 'chat' ? 1 : 0);
         const deviceCode = token();
         const code = userCode();
         const host = req.headers.host ?? '127.0.0.1';
@@ -548,6 +565,8 @@ export function createMockServer(options = {}) {
           clientType: body.clientType ?? 'desktop',
           approved: null,
           scopes,
+          family,
+          chainedTo,
           expiresAt: Date.now() + (state.config.deviceExpiresIn ?? 600) * 1000,
           used: false,
           lastPollAt: 0,
@@ -560,6 +579,7 @@ export function createMockServer(options = {}) {
           interval: state.config.deviceInterval,
           verificationUri: state.config.verificationUri ?? `http://${host}/device`,
           verificationUriComplete: `${state.config.verificationUri ?? `http://${host}/device`}?code=${shown}`,
+          scopeFamily: family,
         });
       }
       case 'POST device/token': {
@@ -580,7 +600,11 @@ export function createMockServer(options = {}) {
           return error(res, 400, 'access_denied', 'The user denied the request.');
         }
         device.used = true;
-        return send(res, 200, issue(device.userId ?? USERS[0].id, device.clientType, device.scopes));
+        const owner = device.userId ?? USERS[0].id;
+        if (device.chainedTo !== null && device.chainedTo !== undefined && device.chainedTo !== owner) {
+          return error(res, 400, 'access_denied', 'Another user approved a chained request.');
+        }
+        return send(res, 200, issue(owner, device.clientType, device.scopes, device.family ?? 'time'));
       }
       case 'POST heartbeat':
         return error(res, 410, 'deprecated', 'heartbeat is deprecated; clients must not send idle state.');
@@ -615,7 +639,12 @@ export function createMockServer(options = {}) {
     switch (`${req.method} ${route}`) {
       case 'POST reset':
         state = freshState();
+        chat.reset();
         return send(res, 204);
+      case 'POST chat/post':
+        return send(res, 200, chat.post(body));
+      case 'GET chat/state':
+        return send(res, 200, chat.state());
       case 'POST config':
         state.config = { ...state.config, ...body };
         return send(res, 200, state.config);
@@ -705,6 +734,12 @@ export function createMockServer(options = {}) {
 
     if (url.pathname.startsWith('/__mock/')) {
       return control(req, res, url.pathname.slice('/__mock/'.length), body);
+    }
+
+    if (url.pathname.startsWith(`${CHAT_PREFIX}/`)) {
+      state.requests.push({ method: req.method, path: url.pathname, query: url.search, body: raw, origin: req.headers.origin ?? null, context: req.headers['x-beacon-context'] ?? null });
+      if (state.config.latencyMs > 0) await new Promise((resolve) => setTimeout(resolve, state.config.latencyMs));
+      return chat.handle(req, res, url, body, state);
     }
 
     if (!url.pathname.startsWith(`${PREFIX}/`)) {

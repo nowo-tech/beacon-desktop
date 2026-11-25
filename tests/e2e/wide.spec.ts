@@ -30,7 +30,7 @@ const viewWidth = (page: Page) => page.locator('#view > *').first().evaluate((el
 
 /** Every tab fully inside the tablist, and the tablist does not scroll sideways. */
 const tabsFit = (page: Page) =>
-  page.locator('[role="tablist"]').evaluate((list) => {
+  page.locator('#app [role="tablist"]').evaluate((list) => {
     const box = list.getBoundingClientRect();
     const cut = [...list.querySelectorAll('[role="tab"]')].filter((tab) => {
       const r = tab.getBoundingClientRect();
@@ -81,7 +81,8 @@ for (const locale of ['en-US', 'es-ES'] as const) {
         widths.settings = await viewWidth(page);
         const tabs = await tabsFit(page);
         await expect(page.locator('#detail')).toBeVisible({ visible: full });
-        if (width >= 1100) {
+        // The shell's 64 px rail (BD-2) sits beside the Time module: the vertical list needs a 1280 px window now.
+        if (width >= 1280) {
           // Room for the vertical list beside the options: every tab visible, nothing scrolls sideways.
           expect(tabs, `${width} px`).toEqual({ cut: [], sideways: false, orientation: 'vertical' });
         } else {
@@ -99,7 +100,8 @@ for (const locale of ['en-US', 'es-ES'] as const) {
         expect(widths.settings, `${width} px`).toBe(widths.main);
         expect(widths.privacy, `${width} px`).toBe(widths.main);
         if (width < 900) expect(widths.main).toBeLessThanOrEqual(31 * 16);
-        if (width >= 1280) expect(widths.main).toBe(40 * 16);
+        // 40rem from 1440 px since the rail (BD-2) takes 64 px.
+        if (width >= 1440) expect(widths.main).toBe(40 * 16);
         await page.locator('#back').click();
         await page.locator('#back').click();
         await expect(page.locator('#main')).toBeVisible();

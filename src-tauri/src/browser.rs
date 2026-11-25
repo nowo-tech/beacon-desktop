@@ -176,6 +176,92 @@ pub fn check_url(raw: &str) -> Result<String, String> {
     Ok(text)
 }
 
+/// A link from a chat message (BD-2): `http(s)` (any host) or `mailto`, the same character checks as [`check_url`],
+/// no user info. The server already sends only these schemes; this is the app's own check.
+pub fn check_chat_url(raw: &str) -> Result<String, String> {
+    let url = url::Url::parse(raw).map_err(|_| "not a URL".to_string())?;
+    let allowed = match url.scheme() {
+        "https" | "http" => url.host_str().is_some_and(|host| !host.is_empty()),
+        "mailto" => !url.path().is_empty(),
+        _ => false,
+    };
+    if !allowed || !url.username().is_empty() || url.password().is_some() {
+        return Err("only http(s) and mailto links are opened".into());
+    }
+    let url = if url.scheme() == "mailto" {
+        mailto_without_extras(url)
+    } else {
+        url
+    };
+    let text = url.to_string();
+    if text.len() > 4096
+        || text.chars().any(|c| {
+            c.is_control() || c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '$' | '\\')
+        })
+    {
+        return Err("unexpected characters in the link".into());
+    }
+    Ok(text)
+}
+
+/// Mail handler parameters a chat link may keep (audit ZBZ-L3): `attach=` and the like are dropped, so a message cannot
+/// pre-attach a local file to a draft.
+const MAILTO_PARAMS: &[&str] = &["to", "cc", "bcc", "subject", "body"];
+
+/// The `mailto:` URL with only [`MAILTO_PARAMS`] (names compared without case), and no fragment.
+fn mailto_without_extras(mut url: url::Url) -> url::Url {
+    let kept: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(name, _)| MAILTO_PARAMS.contains(&name.to_ascii_lowercase().as_str()))
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect();
+    url.set_fragment(None);
+    if kept.is_empty() {
+        url.set_query(None);
+    } else {
+        url.query_pairs_mut().clear().extend_pairs(kept);
+    }
+    url
+}
+
+/// Opens a chat message link: `mailto` with the system's mail handler, `http(s)` like every other link (the
+/// "Open Beacon in" browser, falling back to the default).
+#[tauri::command]
+pub async fn open_chat_link(
+    app: AppHandle,
+    window: tauri::Window,
+    state: tauri::State<'_, BrowserState>,
+    url: String,
+) -> Result<String, String> {
+    crate::only_from(&window, "main")?;
+    let url = check_chat_url(&url)?;
+    if url.starts_with("mailto:") {
+        open_default(&app, &url)?;
+        return Ok("opened".into());
+    }
+    let choice = state.get();
+    let outcome = match plan(&choice, &url, detect, |path| {
+        custom_browser(path, Os::current(), &RealFs)
+    }) {
+        Plan::System => {
+            open_default(&app, &url)?;
+            "opened"
+        }
+        Plan::Launch(argv) => match spawn(&argv) {
+            Ok(()) => "opened",
+            Err(_) => {
+                open_default(&app, &url)?;
+                "fallback"
+            }
+        },
+        Plan::Fallback => {
+            open_default(&app, &url)?;
+            "fallback"
+        }
+    };
+    Ok(outcome.into())
+}
+
 // ---- custom browser --------------------------------------------------------------------------------------------------
 
 fn base_name(path: &str) -> &str {
@@ -1227,6 +1313,38 @@ mod tests {
 
     fn no_env(_: &str) -> Option<String> {
         None
+    }
+
+    #[test]
+    fn chat_links_are_http_https_or_mailto_only() {
+        for good in [
+            "https://example.com/a?b=c",
+            "http://intranet.example/page",
+            "mailto:ana@example.com",
+        ] {
+            assert!(check_chat_url(good).is_ok(), "{good}");
+        }
+        // ZBZ-L3: only to / cc / bcc / subject / body survive in a mailto link.
+        assert_eq!(
+            check_chat_url("mailto:x@example.com?subject=Hi&attach=~/.ssh/id_rsa&ATTACHMENT=/etc/passwd&Body=b").unwrap(),
+            "mailto:x@example.com?subject=Hi&Body=b"
+        );
+        assert_eq!(
+            check_chat_url("mailto:x@example.com?attach=a#frag").unwrap(),
+            "mailto:x@example.com"
+        );
+        for bad in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "data:text/html,x",
+            "ftp://example.com",
+            "https://user:pw@example.com",
+            "mailto:",
+            "https://example.com/$(rm)",
+            "not a url",
+        ] {
+            assert!(check_chat_url(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -100,6 +100,28 @@ Only the latest release receives fixes. The server can force an update with `min
   input", locally and only when the user enabled idle detection; it is never sent.
 - **Release secrets** live in GitHub Actions secrets only; the S3 key can only `PutObject` under `time-track-clients/`.
 
+### Chat (0.10.0)
+
+- **Second token, same rules.** Keychain user `chat-token` (service `tech.nowo.time-track-desktop`), `{"v":1,
+  "origin","token"}`, read and used by Rust only (`src-tauri/src/secret.rs`). Captured only from a 2xx
+  `device/token` answer with `scopeFamily: "chat"` after `chat_connect_begin` (main window, a person at the app, the
+  time token stored for the bound origin, no chat token yet, within 30 minutes). A `chat` answer is never stored as the
+  time token, a `time` answer never as the chat token, any other family is scrubbed.
+- **Routing.** A chat route (`<server base path>/api/chat/v1/…`, decoded path, anchored) gets the chat token or
+  nothing; a path that only looks like one gets no token; every other route the time token or nothing.
+  `X-Beacon-Context` is the only extra request header the window may set.
+- **Revocation.** "Disconnect chat" and sign-out call `POST …/api/chat/v1/logout` with the chat token first (best
+  effort, 3 s), then delete it from the keychain.
+- **Realtime** (`src-tauri/src/realtime.rs`): the ticket (`GET …/api/chat/v1/realtime`) and the SSE stream are made in
+  Rust through the pinned client, no redirects; the hub must be on the signed-in origin; the subscriber JWT goes in
+  `Authorization`, never in the URL, and never reaches the window; hub events are reduced to ids before the window
+  sees them (kind, conversation / message uuids, message id, thread root, deleted); one event's data and one line are
+  capped at 64 KiB.
+- **Rendering.** Message bodies are structured tokens rendered as text nodes; links open outside the app through
+  `open_chat_link` (`http(s)` / `mailto`, checked again in Rust; `mailto` keeps only `to`, `cc`, `bcc`, `subject`,
+  `body`); a reference type becomes a CSS class only when it is a
+  known one.
+
 ## Known limitations
 
 - **macOS single-instance socket in `/tmp` (upstream, Low).** The one-copy guard (`tauri-plugin-single-instance`
