@@ -1314,6 +1314,7 @@ pub fn run() {
             prompt::prompt_close,
             prompt::prompt_show_main,
             browser::open_external,
+            browser::open_chat_link,
             browser::list_browsers,
             browser::get_browser,
             browser::set_browser,

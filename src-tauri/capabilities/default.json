@@ -43,6 +43,7 @@
     "allow-prompt-focus",
     "allow-prompt-close",
     "allow-open-external",
+    "allow-open-chat-link",
     "allow-list-browsers",
     "allow-get-browser",
     "allow-set-browser",
