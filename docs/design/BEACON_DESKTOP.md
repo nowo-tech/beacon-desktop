@@ -11,6 +11,10 @@ Owner decisions of 2026-11-25 this design starts from:
   versioned, generic client APIs.
 - Priority: accelerate, after Beacon's own requests.
 
+Since the owner's decision of 2026-11-25 (later the same day) the app has **three modules**: time tracking, chat and
+**tasks** (TaskBoardBundle). The tasks module and the TaskBoard client API are designed in
+[BEACON_DESKTOP_TASKS.md](BEACON_DESKTOP_TASKS.md) (Q-BD-20 onwards).
+
 Beacon's existing constraints (sent 2026-11-25) are **fixed requirements** here and are listed in
 [§0](#0-fixed-requirements-from-beacon). Everything they do not settle is an open question in [§8](#8-open-questions).
 Questions marked **[Beacon]** need an answer from Beacon (forwarded by the coordinator).
@@ -30,6 +34,7 @@ release bucket.
 - [7. Phases and versions](#7-phases-and-versions)
 - [8. Open questions](#8-open-questions)
 - [9. Out of scope](#9-out-of-scope)
+- Addendum: [Tasks module and the TaskBoard client API](BEACON_DESKTOP_TASKS.md)
 
 ## 0. Fixed requirements from Beacon
 
@@ -450,9 +455,14 @@ waits for TimeTrackBundle 2.2.0 and ChatKit 2.4.0 plus their audits.
 
 Every touched bundle closes all its REQ gaps (100 % REQs) before its tag (owner rule 2026-11-24).
 
+The tasks module adds work to BD-2 (family registered, off), BD-3 (tasks core, TaskBoardBundle 3.4.0) and BD-4
+(realtime, comments, questions, create from chat, TaskBoardBundle 3.5.0): see
+[BEACON_DESKTOP_TASKS.md §11](BEACON_DESKTOP_TASKS.md#11-phases-and-versions).
+
 ## 8. Open questions
 
 Each question has options and a recommendation. **[Beacon]** = needs Beacon's answer; the rest are the owner's.
+Q-BD-20 onwards (tasks module) are in [BEACON_DESKTOP_TASKS.md §10](BEACON_DESKTOP_TASKS.md#10-open-questions).
 
 | Id | Question | Options | Recommendation |
 |---|---|---|---|
