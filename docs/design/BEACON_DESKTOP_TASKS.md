@@ -1,7 +1,12 @@
 # Beacon Desktop: Tasks module and the TaskBoard client API (BD-0 addendum)
 
-Status: **draft for owner review** (2026-11-25). Docs only: nothing here is built yet, and no app id, repository name,
-secret or release changes with it.
+Status: **draft for owner review** (2026-11-25), **reviewed by Beacon the same day**: Q-BD-20, 23, 24, 26, 27, 31 and
+35 agreed with the facts recorded below (Q-BD-23 org and instance switches, Q-BD-24 `app` channel, Q-BD-27 realtime
+wording, B-T8 erasure, the Beacon tasks row after BD-2). Docs only: nothing here is built yet, and no app id, repository
+name, secret or release changes with it.
+
+**Owner UX decision (2026-11-25): landing module.** On first launch the app opens on **Chat**; afterwards on the
+**last-used module**; when a timer is running at launch it opens on **Time**, whatever was used last (§9).
 
 This addendum extends [BEACON_DESKTOP.md](BEACON_DESKTOP.md) (Q-BD-1..19 accepted). The owner decided on 2026-11-25 that
 Beacon Desktop has **three modules**: chat (on ChatKitBundle), **tasks (on TaskBoardBundle)** and time tracking (on
@@ -131,8 +136,15 @@ families (`LogicException` at the first request). Renaming the time scope would 
 | `tasks` | Tasks | `task-board:read` | See your boards and tasks | every `GET` of `/api/task-board/v1`, `GET realtime`, `GET changes` |
 | `tasks` | Tasks | `task-board:write` | Create and change tasks, comment, answer questions | every write of `/api/task-board/v1` |
 
-Both match `DeviceScopeFamily::SCOPE_PATTERN`. The app asks for both; `task-board:write` is unchecked by default on the
-approval page only if the owner prefers read-only by default (Q-BD-23).
+Both match `DeviceScopeFamily::SCOPE_PATTERN` (Q-BD-20, agreed by Beacon). The app asks for both and both are checked on
+the approval page (Q-BD-23, agreed).
+
+**Switches (Beacon, Q-BD-23).** The `tasks` family respects the same two switches as today's `bt_` tokens: the instance
+switch `TASK_API_ENABLED` (`TaskApiSettings`) and the organisation switch `BillingAccount::$taskApiAllowed` (column
+`task_api_allowed`). Instance switch off → the client API answers as if off (`404`); an organisation with
+`task_api_allowed = false` is left out of the context list and of every `where` (a request naming it is
+`403 context_forbidden`). A future "allow desktop app" switch becomes a second boolean next to `task_api_allowed`; no new
+policy type is needed.
 
 ### 3.2 From scopes to a TaskBoard principal
 
@@ -388,19 +400,24 @@ exists, else "Open in Beacon".
 ### 7.1 Today
 
 TaskBoard has **no** realtime and no publisher. Live board refresh is on its roadmap ("Next") and the owner accepted it
-on 2026-11-18 (refresh yes, multi-user cursors no). Beacon already runs a Mercure hub (`ConfiguredMercure`, used by chat
-and wiki collaboration).
+on 2026-11-18 (refresh yes, multi-user cursors no). **Beacon's web has no live board refresh either** (Beacon,
+2026-11-25). What Beacon has: task **notifications** pushed by `TaskNotificationListener` through
+`MemberIssueRealtimeNotifierInterface` (Mercure, private per-user topic), on its hub (`ConfiguredMercure`, also used by
+chat and wiki collaboration).
 
-### 7.2 Design: one ids-only change port for web and desktop (Q-BD-27)
+### 7.2 Design: an ids-only change port, delivered like Beacon's task notifications (Q-BD-27)
 
 - TaskBoard 3.5.0 adds **`TaskBoardChangePublisherInterface`** (optional; default no-op): after commit (Beacon runs
   `events.after_host_commit: true`), the bundle sends one `TaskBoardChange {kind, boardId, taskId?, revision?, at}` per
   write it already turns into an event (`task.created`, `task.updated`, `task.moved`, `task.archived`, `task.erased`,
   `task.comment`, `task.question`, `task.members`, `board.columns`). **Ids only**: no title, text, name or column name.
-- **Beacon fans out** (Messenger, async, debounced per board for 2 s): the recipients are the people who may view the
-  board (for `task.*` also checked with `canViewTask()` when the host has task-level grants), each on **their own**
-  private topic `/nowo-task-board/users/<publicId>` (R1). The **web live board refresh** subscribes to the same topic
-  over SSE; the desktop too. One mechanism, two clients.
+- **Beacon fans out** (Messenger, async, batched and debounced per board for 2 s) the same way it already delivers task
+  notifications (`MemberIssueRealtimeNotifierInterface`: Mercure, private per-user topic): the recipients are the people
+  who may view the board (for `task.*` also checked with `canViewTask()` when the host has task-level grants), each on
+  **their own** private topic (R1); for the desktop token a tasks-only topic `/nowo-task-board/users/<publicId>`, so a
+  `tasks` token never subscribes to anything else (R3).
+- **Web live board refresh is new Beacon work, not reuse** (B-T11): once the port exists, Beacon's board page can
+  subscribe to the same hints over SSE. It is optional for the desktop and can land after it.
 - `GET realtime` (tasks API) returns `{enabled, hubUrl, token, topic, expiresAt, events}` from Beacon's transport
   (`BeaconTaskRealtime` over `ConfiguredMercure`): subscriber JWT for that topic only, subscribe-only, 15 minutes.
   `my_tasks` events (`{kind: "mine", taskId}`) go to a person whose assignment or reviewer role changed.
@@ -454,6 +471,9 @@ The clickable prototype (built in parallel) fixes the visuals; this section fixe
 
 - **Navigation.** The shell gets three top-level modules — **Time**, **Chat**, **Tasks** — (`Ctrl/Cmd+1..3`), each
   shown only when its token exists ("Connect tasks" card otherwise). One context for the whole app (main design §4.4).
+- **Landing module (owner decision 2026-11-25).** First launch: **Chat**. Later launches: the **last-used module**
+  (stored per device in settings). A timer running at launch wins: the app opens on **Time**. A module whose token is
+  missing falls back to its "Connect" card in place, never to another module silently.
 - **My tasks** (landing view): sections *Overdue*, *Today*, *Upcoming*, *No date*, *To review*, with counts; a card per
   task (§4.4); inline actions: complete (move to the done column), start timer, open.
 - **Boards**: picker grouped by project / team / personal; **kanban** with lazy columns (30 cards, "Load more"), column
@@ -479,22 +499,22 @@ The clickable prototype (built in parallel) fixes the visuals; this section fixe
 
 | Id | Question | Options | Recommendation |
 |---|---|---|---|
-| **Q-BD-20** **[Beacon]** | Scope names of the `tasks` family (`tasks:read` already belongs to the `time` family) | A: `task-board:read` / `task-board:write` · B: rename the time scope (breaks installed clients) · C: allow one scope in two families (TimeTrack change, weaker checks) | **A** (matches the API segment; no change to TimeTrack 2.2.0) |
+| **Q-BD-20** **[Beacon]** ✔ agreed | Scope names of the `tasks` family (`tasks:read` already belongs to the `time` family) | A: `task-board:read` / `task-board:write` · B: rename the time scope (breaks installed clients) · C: allow one scope in two families (TimeTrack change, weaker checks) | **A** (matches the API segment; no change to TimeTrack 2.2.0) |
 | **Q-BD-21** | Desktop on the existing `/api/tasks/v2` or a new `/api/task-board/v1`? | A: new v1 facade over the existing operations · B: extend `/api/tasks/v2` | **A** (ClickUp shape stays pinned; v1 adds context, cursors, tokens/1, per-reader links, realtime without copying rules) |
 | **Q-BD-22** | Principal port | A: TaskBoard port with ChatKit's shape + a bundle Symfony authenticator; Beacon's one generic adapter over `ClientFamilyTokenAuthenticator` serves both · B: shared `client-api-contract` package now · C: reuse `TaskApiRequestAuthenticatorInterface` | **A**; B recorded as a dedup candidate for when a third bundle needs it |
-| **Q-BD-23** **[Beacon]** | Level and defaults | A: `read` → Read, `read`+`write` → Tasks, both checked on the approval page · B: `write` unchecked by default · C: `write` → My tasks only | **A** (the person's own rights still bound every write; desktop is a person's tool). Organisations that forbid API tokens (`TaskApiOrganizations`) are also left out of desktop `where` until Beacon adds a separate "allow desktop app" switch |
-| **Q-BD-24** **[Beacon]** | Is the desktop channel `app` a person for *humans only* columns and Beacon's transition policies? | A: yes (not in `MACHINE_CHANNELS`) · B: no, like `api` | **A**: the person drags the card; the token is device-bound and approved with 2FA |
+| **Q-BD-23** **[Beacon]** ✔ agreed | Level, defaults and switches | A: `read` → Read, `read`+`write` → Tasks, both checked on the approval page · B: `write` unchecked by default · C: `write` → My tasks only | **A**, never Full (Beacon agreed). The family respects `TASK_API_ENABLED` (`TaskApiSettings`) and `BillingAccount::$taskApiAllowed` like `bt_` tokens; a future "allow desktop app" is a second boolean next to it, no new policy (§3.1) |
+| **Q-BD-24** **[Beacon]** ✔ agreed | Is the desktop channel `app` a person for *humans only* columns and Beacon's transition policies? | A: yes (not in `MACHINE_CHANNELS`) · B: no, like `api` | **A** (Beacon agreed): a device-code-authenticated person is behind it; `humans_only` columns already exist (MCP `BoardGetTool` exposes the flag); MCP and bots stay non-human; writes audited as channel `app` |
 | **Q-BD-25** | tokens/1 for tasks | A: TaskBoard's own converter, one shared spec + fixtures with ChatKit · B: extract a shared package first | **A**; dedup candidate |
-| **Q-BD-26** **[Beacon]** | Images in descriptions and comments | A: neutral card in BD-3, signed short-lived URL after the access check in BD-4 · B: never in the app | **A** |
-| **Q-BD-27** **[Beacon]** | Realtime for tasks | A: ids-only change port in TaskBoard 3.5.0, Beacon fan-out to per-user private topics, shared with the web live board refresh · B: polling only | **A** with polling as fallback (from 3.4.0) |
+| **Q-BD-26** **[Beacon]** ✔ agreed | Images in descriptions and comments | A: neutral card in BD-3, signed short-lived URL after the access check in BD-4 · B: never in the app | **A** |
+| **Q-BD-27** **[Beacon]** ✔ agreed | Realtime for tasks | A: ids-only change port in TaskBoard 3.5.0, batched async Beacon fan-out to per-user private topics (the channel of `MemberIssueRealtimeNotifierInterface`) · B: polling only | **A** with polling as fallback (from 3.4.0). Web live board refresh does not exist in Beacon today; using the port for it is new Beacon work (B-T11) |
 | **Q-BD-28** | One SSE stream for chat and tasks, or one per module? | A: one per family · B: one combined JWT | **A** (keeps family isolation, R3) |
 | **Q-BD-29** | `If-Match` on desktop writes | A: required (`428` without) · B: optional as the Task API | **A** for v1 (a first-party client always has the revision) |
 | **Q-BD-30** | Create task from a chat message | A: source link verified by Beacon, no automatic chat reply · B: plus an automatic reply · C: reply as a per-user setting, off by default | **C** (A from BD-4, the setting once chat send ships) |
-| **Q-BD-31** | TaskBoard version order (§11) | A: CU-2 3.2.0, CU-3 3.3.0, client API 3.4.0 and 3.5.0, ClickUp phase 2a → 3.6.0 · B: client API first (3.2.0), ClickUp shifted by two | **A** (Beacon's request first, the ClickUp design's numbers stay; the client API branch can be built in parallel and tagged after CU-3) |
+| **Q-BD-31** ✔ agreed by Beacon | TaskBoard version order (§11) | A: CU-2 3.2.0, CU-3 3.3.0, client API 3.4.0 and 3.5.0, ClickUp phase 2a → 3.6.0 · B: client API first (3.2.0), ClickUp shifted by two | **A** (Beacon's request first, the ClickUp design's numbers stay; the client API branch can be built in parallel and tagged after CU-3) |
 | **Q-BD-32** | Task notifications on the desktop (assigned to me, mentioned, a question waiting for me, due today) | A: from Beacon's own notifications (the bundle keeps no feed, decided 2026-11-18), opt-in, BD-4 · B: none, badge only | **A**, preview level *None* by default |
 | **Q-BD-33** | What is "My tasks"? | A: assignee, plus a *To review* bucket for reviewer · B: assignee only · C: also watcher | **A** |
 | **Q-BD-34** | Due buckets' "today" | A: the client's local date (`today=`), checked ±1 day · B: the person's Beacon timezone | **A** (works while travelling; no profile read) |
-| **Q-BD-35** **[Beacon]** | Connected apps page with a third family | A: one row per device, badges Time / Chat / Tasks, each revocable (Q-BD-19 extended) · B: one row per token | **A** |
+| **Q-BD-35** **[Beacon]** ✔ agreed | Connected apps page with a third family | A: one row per device, badges Time / Chat / Tasks, each revocable (Q-BD-19 extended) · B: one row per token | **A** |
 | **Q-BD-36** | Kanban paging | A: per column, 30 cards, cursor · B: whole board in one call (bounded) | **A** (large boards stay fast) |
 | **Q-BD-37** | Delete tasks from the desktop | A: archive only · B: delete as the Task API (needs the board's manage decision) | **A** |
 
@@ -511,28 +531,30 @@ batched otherwise (owner rules 2026-11-07 / 2026-11-13). Every touched bundle cl
 
 | Phase | App | TaskBoardBundle | TimeTrackBundle | ChatKitBundle | Beacon | Audit |
 |---|---|---|---|---|---|---|
-| **BD-2** (0.10.0, chat read-only) | Shell with a hidden Tasks module (`features.tasks` from Beacon) | — (CU-2 3.2.0 in progress) | 2.2.0 (families; nothing extra for tasks) | 2.4.0 | Register the `tasks` family **disabled** (provider returns it only behind a flag, so the approval page and connected-apps page can be built once) | as the main design |
-| **BD-3** (0.11.0, chat send + **tasks core**) | Connect tasks (device flow, `tasks-token`), My tasks, boards, kanban + list, task detail (read), quick create, edit fields, move with `If-Match`, checklists, start timer (time API), polling via `changes` | **3.4.0** (minor, after CU-3 3.3.0): `client_api` config (off by default), `/task-board/v1` read + core write routes (§4.2, §4.3 without questions-write, comments-write, parent, subtasks-create), ports (principal, context, reference, link visibility, file, source), bundle authenticator, tokens/1 converter, `ColumnTransitionVia::APP`, my-tasks query + indexes, `changes`, OpenAPI v1, `docs/CLIENT-API.md`, worker test | — | — (send etc. in 2.5.0 as planned) | Enable the `tasks` family; resolver + context policy adapter (`tasks`); firewall; provenance `app`; link visibility for issues; reference resolver; audit; idempotency `forget()` on revoke; connected-apps badges; rate limits | **Immediate**: TaskBoard 3.4.0 (new authenticated API, R2 filtering), Beacon adapter + approval page. App: immediate review of the third token and its storage |
-| **BD-4** (1.0.0) | Realtime (SSE, second stream), comments read/write with images, questions (answer, ask), subtasks tree editing, members, create task from chat message, task notifications (opt-in), keyboard drag and drop polish | **3.5.0**: `TaskBoardChangePublisherInterface` (ids only, after commit), `GET realtime`, comments write, questions, parent, subtasks, `files/{id}`, `source` for `chat_message`; **web live board refresh** on the same port (roadmap item) | — | — | `BeaconTaskRealtime` (topic, JWT), async debounced fan-out, web live refresh wiring, file resolver (signed URL), source link for chat messages, task notification previews | **Immediate** for 3.5.0's realtime fan-out and file URLs (data exposure); batched for the rest; full audit before app 1.0.0 |
+| **BD-2** (0.10.0, chat read-only) | Shell with a hidden Tasks module (`features.tasks` from Beacon) | — (CU-2 3.2.0 in progress) | 2.2.0 (families; nothing extra for tasks) | 2.4.0 | Nothing for tasks: Beacon builds the chat row first; the `tasks` row comes after BD-2 (Beacon, 2026-11-25) | as the main design |
+| **BD-3** (0.11.0, chat send + **tasks core**) | Landing module rule (§9); connect tasks (device flow, `tasks-token`), My tasks, boards, kanban + list, task detail (read), quick create, edit fields, move with `If-Match`, checklists, start timer (time API), polling via `changes` | **3.4.0** (minor, after CU-3 3.3.0): `client_api` config (off by default), `/task-board/v1` read + core write routes (§4.2, §4.3 without questions-write, comments-write, parent, subtasks-create), ports (principal, context, reference, link visibility, file, source), bundle authenticator, tokens/1 converter, `ColumnTransitionVia::APP`, my-tasks query + indexes, `changes`, OpenAPI v1, `docs/CLIENT-API.md`, worker test | — | — (send etc. in 2.5.0 as planned) | Register the `tasks` family (respecting `TASK_API_ENABLED` and `task_api_allowed`); resolver + context policy adapter (`tasks`); firewall; provenance `app`; link visibility for issues; reference resolver; audit; idempotency `forget()` on revoke and on erasure; connected-apps badges; rate limits | **Immediate**: TaskBoard 3.4.0 (new authenticated API, R2 filtering), Beacon adapter + approval page. App: immediate review of the third token and its storage |
+| **BD-4** (1.0.0) | Realtime (SSE, second stream), comments read/write with images, questions (answer, ask), subtasks tree editing, members, create task from chat message, task notifications (opt-in), keyboard drag and drop polish | **3.5.0**: `TaskBoardChangePublisherInterface` (ids only, after commit), `GET realtime`, comments write, questions, parent, subtasks, `files/{id}`, `source` for `chat_message`; the port also makes the roadmap's web live board refresh possible | — | — | `BeaconTaskRealtime` (topic, JWT), batched async fan-out (channel of `MemberIssueRealtimeNotifierInterface`), optional new web live board refresh, file resolver (signed URL), source link for chat messages, task notification previews | **Immediate** for 3.5.0's realtime fan-out and file URLs (data exposure); batched for the rest; full audit before app 1.0.0 |
 | after 1.0 | Offline cache (encrypted), saved views, activity tab | 3.6.0 = ClickUp phase 2a; later client API minors as the roadmap lands (saved views, WIP limits, labels) | — | — | — | batched |
 
 Ordering with Beacon: Beacon's own requests first (owner priority, ClickUp CU-2/CU-3 included), then the client API.
+Beacon agreed (2026-11-25): TaskBoard CU-2 (3.2.0) → CU-3 (3.3.0) → client API 3.4.0 → 3.5.0; in Beacon the `tasks` row
+comes after BD-2 (chat).
 
 ## 12. Beacon work, item by item
 
 | # | Item | Phase |
 |---|---|---|
-| B-T1 | **`tasks` scope family**: a `DeviceScopeFamilyProviderInterface` service returning `DeviceScopeFamily('tasks', 'Tasks', ['task-board:read' => …, 'task-board:write' => …])` (en / es labels), behind a feature flag until BD-3 | BD-2 (off), BD-3 (on) |
+| B-T1 | **`tasks` scope family**: a `DeviceScopeFamilyProviderInterface` service returning `DeviceScopeFamily('tasks', 'Tasks', ['task-board:read' => …, 'task-board:write' => …])` (en / es labels), respecting the instance switch `TASK_API_ENABLED` (`TaskApiSettings`) and the organisation switch `BillingAccount::$taskApiAllowed` (Q-BD-23); built after BD-2 (chat) | BD-3 |
 | B-T2 | **Resolver row for `tasks`**: the generic family adapter (the one written for chat) gets a `tasks` entry: `ClientFamilyTokenAuthenticator::authenticate('tasks', …)` → `TaskClientPrincipal {user, scopes, tokenId (session id), tokenName ("Beacon Desktop · <device>"), contextKey}`; configured as `nowo_task_board.client_api.principal_resolver` | BD-3 |
-| B-T3 | **Context policy**: TimeTrack's `ClientContextPolicyInterface` answers for family `tasks` as for `chat` (Personal + organisations the person belongs to); TaskBoard's `whereFor()` maps `personal` → the personal tenant key, `org:<uuid>` → the organisation's tenant keys and its projects' keys (as `TaskApiOrganizations` does today), minus organisations that forbid tokens (Q-BD-23) | BD-3 |
+| B-T3 | **Context policy**: TimeTrack's `ClientContextPolicyInterface` answers for family `tasks` as for `chat` (Personal + organisations the person belongs to); TaskBoard's `whereFor()` maps `personal` → the personal tenant key, `org:<uuid>` → the organisation's tenant keys and its projects' keys (as `TaskApiOrganizations` does today), minus organisations with `task_api_allowed = false` (also left out of `contextsFor()`; Q-BD-23) | BD-3 |
 | B-T4 | **Firewall** `task_board_client_api` on `^%nowo_task_board.client_api.v1_path_prefix%/`, stateless, `custom_authenticators: [nowo_task_board.client_api.authenticator]`, no `access_control` on the path; route import `nowo_task_board_client_api` | BD-3 |
 | B-T5 | **Provenance**: `write_provenance_provider` maps the v1 path to channel `app` and the device label; transition policies (`WIP_LIMIT` and others) treat `app` as a person (Q-BD-24) | BD-3 |
 | B-T6 | **Audit**: `ClientApiAuditSubscriber` logs `family: tasks`; the existing `API_WRITE` listener records `channel: app`; refusals from `TaskClientApiDeniedEvent` | BD-3 |
 | B-T7 | **R2 ports**: `TaskObjectLinkVisibilityInterface` for issues, chat messages, wiki pages, monitors; `TaskClientReferenceResolverInterface` reusing the chat reference rules | BD-3 |
-| B-T8 | **Revocation and erasure**: revoking a `tasks` token (account page, sign-out, erasure) calls TaskBoard's `TaskApiIdempotencyStoreInterface::forget(sha256('nowo-task-board-api|' . $tokenId))` | BD-3 |
+| B-T8 | **Revocation and erasure**: revoking a `tasks` token (account page, sign-out) **and erasing the user** (Beacon's GDPR eraser, for every `tasks` token the user had) call TaskBoard's `TaskApiIdempotencyStoreInterface::forget(sha256('nowo-task-board-api|' . $tokenId))` | BD-3 |
 | B-T9 | **Connected apps page** (Account → Security, today "Time tracking apps"): one row per device with **Time / Chat / Tasks** badges, each revocable on its own; approval page shows the family "Tasks" with its two scopes, deny focused; sign-in notification names the family | BD-3 |
 | B-T10 | **Rate limits**: per-token budget 120/min for `tasks`; `TaskApiRateLimiterInterface` budgets for writes, creates, comments, search, shared with personal tokens; cache pool in Redis | BD-3 |
-| B-T11 | **Realtime**: `BeaconTaskRealtime` over `ConfiguredMercure` (topic `/nowo-task-board/users/<publicId>`, 15-minute subscribe-only JWT), `TaskBoardChangePublisherInterface` implementation with async, debounced, per-reader fan-out (ids only, after commit); the web board subscribes for live refresh | BD-4 |
+| B-T11 | **Realtime**: `BeaconTaskRealtime` over `ConfiguredMercure` (topic `/nowo-task-board/users/<publicId>`, 15-minute subscribe-only JWT); `TaskBoardChangePublisherInterface` implementation with batched, async, per-reader fan-out (ids only, after commit) through the channel `TaskNotificationListener` already uses (`MemberIssueRealtimeNotifierInterface`). **New** (optional, can follow the desktop): web live board refresh subscribing to the same hints — Beacon has none today | BD-4 |
 | B-T12 | **Files**: `TaskClientFileResolverInterface` → access check, then a short-lived signed GET URL from the storage profile (R6 style: the client never sees credentials) | BD-4 |
 | B-T13 | **Create from chat**: `TaskClientSourceLinkInterface` checks that the person can read the message now and returns the `chat_message:<uuid>` host-object link | BD-4 |
 | B-T14 | **Task notifications** for the desktop from Beacon's notification stream (assigned, mentioned, question waiting, due today), preview endpoint with the organisation cap (Q-BD-9, Q-BD-32) | BD-4 |

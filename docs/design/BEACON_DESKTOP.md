@@ -407,6 +407,9 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
 - **Navigation**: the existing compact window gets a two-item top-level switch, **Time** and **Chat** (roving tab
   index, `role="tablist"`, `Ctrl/Cmd+1` / `Ctrl/Cmd+2`). Settings stays in its own view with a new *Chat* tab (connect /
   disconnect, notifications, preview level, pause). The tray menu gains *Open chat* and the unread count.
+- **Landing module** (owner decision 2026-11-25, three modules: Time, Chat, Tasks): Chat on first launch, then the
+  last-used module; Time when a timer is running at launch (details in
+  [BEACON_DESKTOP_TASKS.md §9](BEACON_DESKTOP_TASKS.md#9-the-tasks-module-in-the-app)).
 - **Chat view** at the current window size (≥ 380 px): list ↔ conversation (one pane, back button); in the wider
   "full view" (0.8.0) list and conversation side by side. Composer: plain text, Enter to send, Shift+Enter new line,
   character counter near 4000; Markdown rendered by the server (text-only DOM in the client: the server's HTML is never
