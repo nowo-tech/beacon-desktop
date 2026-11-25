@@ -11,6 +11,10 @@ Owner decisions of 2026-11-25 this design starts from:
   versioned, generic client APIs.
 - Priority: accelerate, after Beacon's own requests.
 
+Since the owner's decision of 2026-11-25 (later the same day) the app has **three modules**: time tracking, chat and
+**tasks** (TaskBoardBundle). The tasks module and the TaskBoard client API are designed in
+[BEACON_DESKTOP_TASKS.md](BEACON_DESKTOP_TASKS.md) (Q-BD-20 onwards).
+
 Beacon's existing constraints (sent 2026-11-25) are **fixed requirements** here and are listed in
 [§0](#0-fixed-requirements-from-beacon). Everything they do not settle is an open question in [§8](#8-open-questions).
 Questions marked **[Beacon]** need an answer from Beacon (forwarded by the coordinator).
@@ -30,6 +34,7 @@ release bucket.
 - [7. Phases and versions](#7-phases-and-versions)
 - [8. Open questions](#8-open-questions)
 - [9. Out of scope](#9-out-of-scope)
+- Addendum: [Tasks module and the TaskBoard client API](BEACON_DESKTOP_TASKS.md)
 
 ## 0. Fixed requirements from Beacon
 
@@ -248,16 +253,21 @@ Minimum surface (BD-2 / BD-3):
 | `GET conversations/{uuid}` | `chat:read` | Header data, members count, permissions of the caller (`canSend`, …) |
 | `GET conversations/{uuid}/messages?before=&after=&limit=` | `chat:read` | Same cursors as today, `limit` 1–100; references rendered **for the reader** (inaccessible → neutral placeholder, R2) |
 | `GET conversations/{uuid}/messages/{messageUuid}` | `chat:read` | Single message (used after a realtime hint) |
+| `GET conversations/{uuid}/messages/{messageUuid}/thread?before=&after=&limit=` | `chat:read` | **BD-2** (owner 2026-11-25): a thread's replies, same cursors and per-reader rendering as messages; every message carries `thread {replyCount, lastReplyAt}` and `reactions [{emoji, count, mine}]` |
 | `POST conversations/{uuid}/read {messageId}` | `chat:read` | Read cursor; never beyond the newest message (as today). Q-BD-8 on whether read marks need `chat:write` |
 | `POST conversations/{uuid}/messages {body}` + `Idempotency-Key` (required) | `chat:write` | 4000 characters, send limiter; replay answers `200 {replayed: true}` |
-| `PATCH` / `DELETE conversations/{uuid}/messages/{messageUuid}` | `chat:write` | BD-3 or later; edit / delete window as today |
-| `POST conversations/{uuid}/messages/{messageUuid}/reactions` | `chat:write` | BD-3 or later |
+| `POST conversations/{uuid}/messages {body, threadOf?}` + `Idempotency-Key` | `chat:write` | **BD-3**: `threadOf` (a message uuid) replies in that thread |
+| `PATCH` / `DELETE conversations/{uuid}/messages/{messageUuid}` | `chat:write` | BD-4; edit / delete window as today |
+| `PUT` / `DELETE conversations/{uuid}/messages/{messageUuid}/reactions/{emoji}` | `chat:write` | **BD-3** (owner 2026-11-25): react / remove own reaction, action limiter |
 | `PUT` / `DELETE conversations/{uuid}/mute` | `chat:write` | Mute from the desktop |
 | `GET realtime` | `chat:read` | `{enabled, hubUrl, token, topic, expiresAt}` exactly as today, issued by Beacon's `BeaconChatRealtime` (R1) |
 | `GET search?q=&conversation=&cursor=` | `chat:read` | Optional (`features.search`); same limiter and per-row filter as `/api/search` (Q-BD-10) |
 | `GET notifications/preview/{messageUuid}` | `chat:read` | What a desktop notification may show for this reader (§3.4); answers `{title, body\|null}` after mute, preferences and policy checks |
 
-Out of the first version: threads, pins, saved, forward, support inbox, presence / status writes, typing, buzz, link
+**Threads and reactions are in the first chat version** (owner 2026-11-25): BD-2 shows them read-only (thread panel,
+reply counts, reaction chips); BD-3 adds replying in threads and reacting, alongside send.
+
+Out of the first version: pins (later), saved, forward, support inbox, presence / status writes, typing, buzz, link
 management, quick replies (they stay in the web UI; "Open in Beacon" deep link to `/dashboard?chat={uuid}`).
 
 **Attachments policy (until ChatKit ships attachments):** the desktop shows an attachment as a neutral card "File —
@@ -300,7 +310,9 @@ Client behaviour (in Rust, not the web view, so the hub URL and JWT never touch 
   - *Text*: sender plus the first 100 characters.
 - The server decides the **maximum** level: the notification content comes from `GET notifications/preview/{uuid}`,
   which applies mute, the person's chat preferences, R2 (references reduced to "not visible") and the organization
-  policy (Q-BD-9 **[Beacon]**: strict organizations force *None*). The client can only lower it.
+  policy. **Owner decision 2026-11-25 (refines Q-BD-9):** an organization with a strict policy sets its maximum preview
+  level to **Sender only** or **None** (organization setting, enforced server-side in Web Push and in the hub /
+  preview endpoint); a user can choose a stricter level, never a looser one. The client can only lower it.
 - **Lock screen**: no message text on the lock screen by default. Windows toasts: the app sets the toast as private
   when the level is *Text* (`ShowOnLockScreen` off where supported) and the Settings text explains that Windows' own
   "show notifications on the lock screen" applies. macOS: the system "Show previews: when unlocked" setting is
@@ -387,6 +399,10 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
   user's own); events for other contexts are hints that only refetch the current context's lists.
 - Time and chat may use different contexts at the same time only if Beacon allows it; recommendation: one context for
   the whole app at a time, simpler to explain.
+- **Owner decisions 2026-11-25:** the switcher is a setting (rail tiles or a title-bar dropdown). A timer never keeps
+  running in another organisation: switching while a timer runs asks "Stop the timer in <org> and switch?" (stop
+  through the stop dialog when required fields are missing, then switch) or Cancel (details in
+  [BEACON_DESKTOP_TASKS.md §9](BEACON_DESKTOP_TASKS.md#9-the-tasks-module-in-the-app)).
 
 ### 4.5 Token storage
 
@@ -402,6 +418,19 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
 - **Navigation**: the existing compact window gets a two-item top-level switch, **Time** and **Chat** (roving tab
   index, `role="tablist"`, `Ctrl/Cmd+1` / `Ctrl/Cmd+2`). Settings stays in its own view with a new *Chat* tab (connect /
   disconnect, notifications, preview level, pause). The tray menu gains *Open chat* and the unread count.
+- **Landing module** (owner decision 2026-11-25, three modules: Time, Chat, Tasks): Chat on first launch, then the
+  last-used module; Time when a timer is running at launch (details in
+  [BEACON_DESKTOP_TASKS.md §9](BEACON_DESKTOP_TASKS.md#9-the-tasks-module-in-the-app)).
+- **Timer placement** (owner decision 2026-11-25): a setting, title bar only or title bar + sidebar; the mini timer
+  stays a separate, always-available window.
+- **Sidebar** (owner decision 2026-11-25): density is a setting, comfortable or compact. In Chat, **project channels
+  get their own section**, separate from the organisation's channels (direct messages keep theirs).
+- **Timer prompts** (owner decision 2026-11-25): when an activity type or client is required, a per-user setting asks
+  for it **on start**, **on stop** or **both**; default **on stop**, because TimeTrack 2.1 enforces `require_*` at stop
+  (`409 allocation_required` / `activity_type_required`). Inheriting the task's last activity type on start is a
+  setting too.
+- **Column markers** (owner decision 2026-11-25): a per-user setting, TaskBoard's column emojis as they are or colour
+  dots.
 - **Chat view** at the current window size (≥ 380 px): list ↔ conversation (one pane, back button); in the wider
   "full view" (0.8.0) list and conversation side by side. Composer: plain text, Enter to send, Shift+Enter new line,
   character counter near 4000; Markdown rendered by the server (text-only DOM in the client: the server's HTML is never
@@ -441,18 +470,23 @@ otherwise (owner rules 2026-11-07 / 2026-11-13).
 |---|---|---|---|---|---|---|
 | **BD-0** design | — | This document; owner answers Q-BD-n | — | — | Answers to [Beacon] questions | — |
 | **BD-1** rename (Option A) | **0.9.0** | Visible name "Beacon Desktop" (titles, shortcuts, `.desktop` `Name=`, `CFBundleDisplayName`, MSIX `DisplayName`, installer branding, About, i18n); shell with Time / Chat switch (Chat shows "coming soon" or is hidden behind `features.chat`); `installer-upgrade-test.yml` run from 0.8.0 → 0.9.0 on Windows, manual check on macOS / Linux | — | — | Download page and Apps page text "Beacon Desktop"; optional canonical updater twin (Q-BD-2) | Batched (no auth change) |
-| **BD-2** chat read-only | **0.10.0** | "Connect chat" device flow (chat family), second keychain entry, context header, conversations list, messages page, read marks, realtime (SSE + polling fallback), unread badge; no notifications yet; no send | **2.2.0** (minor): scope families port, family-bound tokens, `invalid_scope` for mixed families, contract v0.5 | **2.4.0** (minor): client API `/chat/v1` read routes (`me`, `conversations`, `messages`, `read`, `realtime`), `ChatClientPrincipalResolverInterface`, OpenAPI v1, worker test, per-reader reference filtering in the client API | Register `chat` family; implement the principal resolver over client tokens; audit subscriber for chat; context header; approval page with family; firewall pattern for `^/api/chat/v1/`; account page shows two rows per device | **Immediate**: TimeTrackBundle 2.2.0 (auth), ChatKit 2.4.0 (new authenticated API, R2 filtering), Beacon resolver + approval page. App: immediate review of token storage and realtime client |
-| **BD-3** chat send + notifications | **0.11.0** | Send with idempotency, mute, notifications with preview levels and pause, Web Push dedupe, tray *Open chat*, deep links | — (or patch) | **2.5.0**: send / mute routes, `notifications/preview`, optional ids-only realtime events (Q-BD-13), search route if Q-BD-10 says yes | Notification policy per organization (Q-BD-9), Web Push suppression while desktop is active (Q-BD-14) | **Immediate** for the preview endpoint (data exposure) and send path; batched for UI |
-| **BD-4** polish / 1.0 | **1.0.0** | Edit / delete / reactions, search, offline send queue (optional), attachments as "open in Beacon" cards; signing and notarization if Q-BD-4 says yes; repository rename if Q-BD-3 says yes | — | Attachments when ChatKit ships them (StorageKit + scan) | Signing accounts / secrets | Batched + full audit before 1.0.0 |
+| **BD-2** chat read-only | **0.10.0** | "Connect chat" device flow (chat family), second keychain entry, context header, conversations list, messages page, **threads (thread panel, reply counts) and reactions shown read-only**, read marks, realtime (SSE + polling fallback), unread badge; no notifications yet; no send | **2.2.0** (minor): scope families port, family-bound tokens, `invalid_scope` for mixed families, contract v0.5 | **2.4.0** (minor): client API `/chat/v1` read routes (`me`, `conversations`, `messages`, `thread`, `read`, `realtime`; messages carry `thread` and `reactions`), `ChatClientPrincipalResolverInterface`, OpenAPI v1, worker test, per-reader reference filtering in the client API | Register `chat` family; implement the principal resolver over client tokens; audit subscriber for chat; context header; approval page with family; firewall pattern for `^/api/chat/v1/`; account page shows two rows per device | **Immediate**: TimeTrackBundle 2.2.0 (auth), ChatKit 2.4.0 (new authenticated API, R2 filtering), Beacon resolver + approval page. App: immediate review of token storage and realtime client |
+| **BD-3** chat send + notifications | **0.11.0** | Send with idempotency, **reply in threads, react**, mute, notifications with preview levels and pause, Web Push dedupe, tray *Open chat*, deep links | — (or patch) | **2.5.0**: send (with `threadOf`) / reaction / mute routes, `notifications/preview`, optional ids-only realtime events (Q-BD-13), search route if Q-BD-10 says yes | Notification policy per organization (Q-BD-9: max level *Sender only* or *None*, Web Push and hub), Web Push suppression while desktop is active (Q-BD-14) | **Immediate** for the preview endpoint (data exposure) and send path; batched for UI |
+| **BD-4** polish / 1.0 | **1.0.0** | Edit / delete, search, offline send queue (optional), attachments as "open in Beacon" cards; signing and notarization if Q-BD-4 says yes; repository rename if Q-BD-3 says yes | — | Attachments when ChatKit ships them (StorageKit + scan) | Signing accounts / secrets | Batched + full audit before 1.0.0 |
 
 Ordering with Beacon: Beacon's own requests first (owner priority), then BD-1 can ship at once (no server work); BD-2
 waits for TimeTrackBundle 2.2.0 and ChatKit 2.4.0 plus their audits.
 
 Every touched bundle closes all its REQ gaps (100 % REQs) before its tag (owner rule 2026-11-24).
 
+The tasks module adds work to BD-2 (family registered, off), BD-3 (tasks core, TaskBoardBundle 3.4.0) and BD-4
+(realtime, comments, questions, create from chat, TaskBoardBundle 3.5.0): see
+[BEACON_DESKTOP_TASKS.md §11](BEACON_DESKTOP_TASKS.md#11-phases-and-versions).
+
 ## 8. Open questions
 
 Each question has options and a recommendation. **[Beacon]** = needs Beacon's answer; the rest are the owner's.
+Q-BD-20 onwards (tasks module) are in [BEACON_DESKTOP_TASKS.md §10](BEACON_DESKTOP_TASKS.md#10-open-questions).
 
 | Id | Question | Options | Recommendation |
 |---|---|---|---|
@@ -464,7 +498,7 @@ Each question has options and a recommendation. **[Beacon]** = needs Beacon's an
 | **Q-BD-6** **[Beacon]** | One approval or two for time + chat? | A: two device flows, chained by the app · B: one approval page issuing two family-bound tokens | **A**: simpler contract, clean separate revocation |
 | **Q-BD-7** **[Beacon]** | How does the desktop pass the tenant? | A: `X-Beacon-Context` header per request, checked every time · B: context bound into the token at approval (one token per context) | **A**: switching needs no new sign-in; never touches `User::organizationContext` |
 | **Q-BD-8** **[Beacon]** | Do read marks need `chat:write`? | A: `chat:read` covers read marks (they only affect the reader) · B: `chat:write` | **A**: a read-only client must clear its own unread state; read receipts visibility follows existing preferences |
-| **Q-BD-9** **[Beacon]** | Hide message text in notifications for strict organizations? | A: no policy, user choice only · B: organization setting "no message text in notifications" enforced server-side by the preview endpoint (also for Web Push) · C: always hide text | **B**: default per user is *None* anyway; organizations can cap it |
+| **Q-BD-9** **[Beacon]** | Hide message text in notifications for strict organizations? | A: no policy, user choice only · B: organization setting "no message text in notifications" enforced server-side by the preview endpoint (also for Web Push) · C: always hide text | **B**, refined by the owner 2026-11-25: the organization setting is a maximum level, **Sender only** or **None**, enforced server-side in Web Push and the hub; users may only choose stricter |
 | **Q-BD-10** | Chat search in the desktop? | A: BD-3 · B: BD-4 · C: never, "Search in Beacon" link | **B** |
 | **Q-BD-11** | Attachments in the desktop before ChatKit has them? | A: neutral "Open in Beacon" card · B: wait and hide | **A** now; real download via signed URL after ChatKit's StorageKit + scan release |
 | **Q-BD-12** **[Beacon]** | Does the hub accept the subscriber JWT in the `Authorization` header from a native client (no cookie, no query string)? | A: header · B: `authorization` query parameter (Mercure supports it, leaks into logs) | **A**; B only if the hub cannot, and then with log redaction |
@@ -480,6 +514,6 @@ Each question has options and a recommendation. **[Beacon]** = needs Beacon's an
 
 - Renaming the repository, changing app ids or touching releases as part of this document.
 - The browser extension (parked).
-- Voice / video, typing indicators, presence writes, threads, pins, support inbox in the desktop.
+- Voice / video, typing indicators, presence writes, pins (later), support inbox in the desktop.
 - Any change to activity monitoring beyond what TimeTrackBundle already defines.
 - Generic-host support for the app itself (the bundles' APIs stay generic).
