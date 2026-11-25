@@ -100,6 +100,21 @@ a ghost Windows removes when the mouse passes over it.
    never sees it. A system notification confirms every sign-in. If the app ever signs you out because the saved
    server no longer matches the session, revoke the old device there too.
 
+## Chat (0.10.0, read-only)
+
+Beacon chat sits next to the timer: **Chat** and **Time** on the left rail (`Ctrl/Cmd+1`, `Ctrl/Cmd+2`).
+
+1. Open Chat and press **Connect chat**. Beacon asks you to approve a second, separate device request (it only works
+   for the person signed in to time tracking). Approve it in the browser page that opens.
+2. Pick the organization on the rail (or in the title-bar dropdown, Settings → Organization switcher). The app sends
+   it with every request; your web context in Beacon does not change.
+3. Read conversations, threads and reactions. Replying, reacting and notifications come in 0.11.0: use "Open in
+   Beacon" meanwhile.
+
+Messages stay in memory only. "Disconnect chat" (Settings) removes the chat approval from this computer and keeps time
+tracking signed in; revoke the device in Beacon (Account → Security) to end it on the server too. Needs Beacon with
+TimeTrackBundle 2.2 and ChatKitBundle 2.4. Shortcuts: `?` in Chat.
+
 ## Features
 
 - Tray timer (`H:MM` and task, tooltip with today's total, running / stopped icon) in the Windows notification area
@@ -355,6 +370,9 @@ required" screen send you to the Store listing instead.
   in Rust with the server that issued it, so even script running in the window cannot read it or send it elsewhere;
   script itself is prevented by the CSP and the text-only DOM (SECURITY.md, *Credentials*). Plain `http://` to `localhost`,
   `127.0.0.1` or `[::1]` works in development (debug) builds only; release builds require `https://`.
+- **Chat token apart** (0.10.0). The chat approval has its own token in the OS keychain (`chat-token`), attached by
+  Rust to chat routes only; the time token never goes there and the chat token never goes anywhere else. The realtime
+  stream runs in Rust and hands the window ids only.
 - Reporting and design notes: [SECURITY.md](SECURITY.md).
 
 ## Tauri capabilities

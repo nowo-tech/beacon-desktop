@@ -5,6 +5,56 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+Planned as **0.10.0** (BD-2, design `docs/design/BEACON_DESKTOP.md` §3–§5 and §7): Beacon chat, read-only. Needs
+TimeTrackBundle **2.2.0** (scope families, contract v0.5) and ChatKitBundle **2.4.0** (client API `/api/chat/v1`) on
+the server.
+
+### Added
+
+- **App shell** (approved prototype): a dark title bar (organization, quick switcher, running timer, theme, shortcuts)
+  and a left rail with the organization switcher, the **Chat** and **Time** modules (`Ctrl/Cmd+1`, `Ctrl/Cmd+2`) and
+  Settings. Time is the tracker as before, unchanged inside its module. Tasks is registered but off (BD-3).
+  - Landing (owner Q1): Chat on the first launch, then the last module used; Time when a timer runs at launch. A
+    sign-in made in the running app stays on Time.
+  - Settings (owner Q2–Q4): sidebar density *comfortable* / *compact*; organization switcher as *rail tiles* or a
+    *dropdown*; running timer in the *title bar* or *title bar + sidebar*; theme.
+  - A timer never keeps running in another organization (owner Q4): switching with a running timer asks "Stop the
+    timer in <org> and switch?"; *Cancel* keeps both.
+  - Narrow windows (the 400 px compact window): the rail moves to the bottom, one pane at a time.
+- **Connect chat**: a second device flow for the `chat` scope family, chained to this device with the time token
+  (only the same person can approve it; a separate approval and a separate token, revocable on its own). The chat
+  token lives in the OS keychain next to the time token (same service `tech.nowo.time-track-desktop`, user
+  `chat-token`); only Rust reads it, attaches it to chat routes only (`…/api/chat/…`) and never sends the time token
+  there. "Disconnect chat" (Settings) deletes it and keeps time tracking signed in; sign-out deletes both. A `401` on
+  chat disconnects chat only.
+- **Chat, read-only**: conversations of the chosen organization (`X-Beacon-Context: personal` / `org:<uuid>` on every
+  request; the web context is never changed) in sections Channels, Projects (project channels apart, owner Q3), Direct
+  messages, Support, collapsible and remembered; unread counts (muted ones dimmed and not counted); the messages pane
+  with infinite scroll upwards, grouping, day dividers, the "New" divider, mentions of you highlighted; message bodies
+  `tokens/1` rendered as text only (links open outside the app, `http(s)` and `mailto` only; references you may not
+  open show "Content not visible"); **reactions** and **threads** shown read-only (a resizable thread panel with the
+  root pinned, the reply count and "Following"); read marks for the open conversation; "Open in Beacon".
+- **Realtime** in Rust (`src-tauri/src/realtime.rs`): Mercure over SSE with the 15-minute subscriber token in the
+  `Authorization` header (never the query string, never the webview), the hub only on the signed-in Beacon origin,
+  refreshed two minutes before it expires with `Last-Event-ID`; events are ids-only hints (any body or name in a hub
+  payload is dropped in Rust) and the UI fetches through the API. Polling fallback: every 30 s while the chat is
+  shown, 120 s in the background, backoff with jitter up to 10 minutes, `Retry-After` honoured, at most 50 requests
+  a minute (ChatKit's budget is 60).
+- **Unread badge**: a red dot on the tray icon, the Dock badge (macOS), the launcher count (Linux, where supported) or
+  a taskbar overlay (Windows). Count = the server's `unreadTotal` (muted excluded).
+- **Keyboard first**: `Ctrl/Cmd+K` quick switcher (fuzzy, recent first, unread marked), `Alt+↑/↓` previous / next
+  conversation, `Alt+Shift+↑/↓` previous / next unread, `Ctrl/Cmd+J` jump to unread, `Ctrl/Cmd+[` / `]` back /
+  forward, `↑/↓/Home/End` between messages, `Enter` opens a thread, `Esc` closes the thread or marks the conversation
+  read and leaves it, `?` the shortcut sheet; right-click on a message: Copy text, Copy link, Open thread.
+- English and Spanish for every new string; light and dark themes; WCAG 2.1 AA checked with axe in the e2e tests.
+
+### Security
+
+- New Rust commands, main window only and ACL-scoped: `chat_status`, `chat_connect_begin`, `chat_disconnect`,
+  `chat_realtime_start`, `chat_realtime_stop`, `set_unread_badge`, `open_chat_link`. The webview never sees the chat
+  token, the subscriber JWT or the hub URL. Messages are kept in memory only (Q-BD-15), cleared on an organization
+  switch, "Disconnect chat" and sign-out.
+
 ## [0.9.0] - 2026-11-25
 
 TimeTrack is now **Beacon Desktop**. Same app, same sign-in, same settings: only the name changes. Beacon chat comes

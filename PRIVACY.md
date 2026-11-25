@@ -18,6 +18,9 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
   updates. The Microsoft Store build never checks with Beacon: the Store updates it.
 - With meeting reminders (TimeTrack 1.14), the request for your own meetings of today and tomorrow (`GET
   me/meetings`: the time window and time zone only). Nothing about your meetings is sent back.
+- With chat connected (0.10.0): the organization you show (`personal` or the organization's id) with every chat
+  request, the conversations and threads you open, and a read mark for the newest message you have seen. Chat is
+  read-only in this version: nothing you type is sent.
 - Nothing else: no screenshots, keystrokes, applications, window titles, URLs, activity or idle state. With meeting
   detection on, which meeting app holds the microphone is checked on this computer and never sent (below).
 
@@ -30,7 +33,11 @@ mismatch is logged locally with the server name only, never a token.
 
 ## Stored on this computer
 
-- The session token, in the OS keychain.
+- The session token, in the OS keychain; with chat connected, the chat token too (a second entry).
+- Chat messages are **never written to disk**: they stay in memory while the app runs and are forgotten on an
+  organization switch, "Disconnect chat" and sign-out. On disk only view settings: the organization last shown, the
+  last conversation per organization (its id), collapsed sidebar sections, the thread panel width, density and the
+  switcher style.
 - Server URL, your e-mail, the running timer, queued offline actions (with the time each happened), the tasks you pin
   and the last task you tracked (id and title, to resume it), an unsent "meeting" note, the "Still there?" state (the
   question being asked, if any), the server's feature switches, your settings and the date of each consent decision,
