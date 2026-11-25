@@ -97,3 +97,28 @@ for (const scheme of ['light', 'dark'] as const) {
     await shot(page, '10-compact-window-conversation', scheme);
   });
 }
+
+test('chat screens (es, light)', async ({ browser }) => {
+  const context = await browser.newContext({ locale: 'es-ES', viewport: { width: 1280, height: 800 }, colorScheme: 'light', reducedMotion: 'reduce', timezoneId: 'Europe/Madrid' });
+  const page = await context.newPage();
+  await control('reset', {});
+  await control('config', { deviceInterval: 1 });
+  await signIn(page);
+  await page.locator('#tab-chat').click();
+  await page.locator('#chat-connect').click();
+  const code = await page.locator('#chat-user-code').textContent();
+  await control('device/approve', { userCode: code });
+  await page.locator('.ctx-tile[aria-label="Lumen Works"]').click();
+  await expect(page.locator('.side .conv', { hasText: 'envelope-v2' })).toBeVisible();
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: `${OUT}/02-chat-list-light-es.png` });
+  await page.locator('.side .conv', { hasText: 'envelope-v2' }).click();
+  await expect(page.locator('#msg-list li.msg').first()).toBeVisible();
+  await page.locator('#msg-scroll').evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: `${OUT}/03-conversation-light-es.png` });
+  await page.locator('#rail-settings').click();
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: `${OUT}/08-settings-light-es.png` });
+  await context.close();
+});

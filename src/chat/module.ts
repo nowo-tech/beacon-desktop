@@ -326,7 +326,7 @@ export class ChatModule {
               : error.reason === 'invalid_scope'
                 ? this.t('connectRefused')
                 : null
-          : error instanceof ApiError && (error.status === 400 || error.status === 403)
+          : error instanceof ApiError && (error.status === 400 || error.status === 403 || error.status === 404)
             ? this.t('connectRefused')
             : this.t('connectFailed');
       this.connect = { kind: 'idle', message };
@@ -648,7 +648,7 @@ export class ChatModule {
 
   private convIcon(row: Conversation, size: '' | 'sm' = 'sm'): Element {
     if (row.kind === 'direct') {
-      return h('span', { class: `av s20 ${avatarHue(row.uuid)}`, attrs: { 'aria-hidden': 'true' } }, row.initials, presence(row.peerStatus));
+      return h('span', { class: `av s22 ${avatarHue(row.uuid)}`, attrs: { 'aria-hidden': 'true' } }, row.initials, presence(row.peerStatus));
     }
     const name: ChatIconName = row.kind === 'support' ? 'headset' : sectionOf(row) === 'projects' ? 'folder' : 'hash';
     return chatIcon(name, size);
@@ -878,7 +878,7 @@ export class ChatModule {
 
   private time(iso: string): string {
     const date = new Date(iso);
-    return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(this.deps.locale, { hour: '2-digit', minute: '2-digit' }).format(date);
+    return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(this.deps.locale, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(date);
   }
 
   private messageItem(message: Message, continued: boolean, inThread: boolean): HTMLElement {
