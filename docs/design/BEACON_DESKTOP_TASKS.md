@@ -8,6 +8,9 @@ name, secret or release changes with it.
 **Owner UX decision (2026-11-25): landing module.** On first launch the app opens on **Chat**; afterwards on the
 **last-used module**; when a timer is running at launch it opens on **Time**, whatever was used last (§9).
 
+**Owner UX decision (2026-11-25): timer placement.** Where the running timer shows is a setting: **title bar only**, or
+**title bar + sidebar**. The **mini timer** also stays as a separate, always-available window (§9).
+
 This addendum extends [BEACON_DESKTOP.md](BEACON_DESKTOP.md) (Q-BD-1..19 accepted). The owner decided on 2026-11-25 that
 Beacon Desktop has **three modules**: chat (on ChatKitBundle), **tasks (on TaskBoardBundle)** and time tracking (on
 TimeTrackBundle), with a first-class, professional UX. Beacon's fixed requirements R1–R7
@@ -474,6 +477,10 @@ The clickable prototype (built in parallel) fixes the visuals; this section fixe
 - **Landing module (owner decision 2026-11-25).** First launch: **Chat**. Later launches: the **last-used module**
   (stored per device in settings). A timer running at launch wins: the app opens on **Time**. A module whose token is
   missing falls back to its "Connect" card in place, never to another module silently.
+- **Timer placement (owner decision 2026-11-25).** A setting per device: the running timer shows in the **title bar
+  only**, or in the **title bar and the sidebar**. Either way the **mini timer** stays available as its own window
+  (always available, independent of the main window and of the module shown). The task card's ticking badge (§6.1) is
+  shown in both modes.
 - **My tasks** (landing view): sections *Overdue*, *Today*, *Upcoming*, *No date*, *To review*, with counts; a card per
   task (§4.4); inline actions: complete (move to the done column), start timer, open.
 - **Boards**: picker grouped by project / team / personal; **kanban** with lazy columns (30 cards, "Load more"), column

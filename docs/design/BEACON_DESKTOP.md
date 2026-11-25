@@ -410,6 +410,8 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
 - **Landing module** (owner decision 2026-11-25, three modules: Time, Chat, Tasks): Chat on first launch, then the
   last-used module; Time when a timer is running at launch (details in
   [BEACON_DESKTOP_TASKS.md §9](BEACON_DESKTOP_TASKS.md#9-the-tasks-module-in-the-app)).
+- **Timer placement** (owner decision 2026-11-25): a setting, title bar only or title bar + sidebar; the mini timer
+  stays a separate, always-available window.
 - **Chat view** at the current window size (≥ 380 px): list ↔ conversation (one pane, back button); in the wider
   "full view" (0.8.0) list and conversation side by side. Composer: plain text, Enter to send, Shift+Enter new line,
   character counter near 4000; Markdown rendered by the server (text-only DOM in the client: the server's HTML is never
