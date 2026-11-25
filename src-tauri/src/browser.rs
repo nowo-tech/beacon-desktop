@@ -190,9 +190,9 @@ pub fn check_chat_url(raw: &str) -> Result<String, String> {
     }
     let text = url.to_string();
     if text.len() > 4096
-        || text
-            .chars()
-            .any(|c| c.is_control() || c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '$' | '\\'))
+        || text.chars().any(|c| {
+            c.is_control() || c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '$' | '\\')
+        })
     {
         return Err("unexpected characters in the link".into());
     }
