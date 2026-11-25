@@ -1,6 +1,6 @@
 # Privacy
 
-TimeTrack records only the time you choose to track. It is built to comply with the GDPR / RGPD and the Spanish
+Beacon Desktop (formerly TimeTrack desktop) records only the time you choose to track. It is built to comply with the GDPR / RGPD and the Spanish
 LOPDGDD (arts. 87–91, digital rights at work, including the right to disconnect) and art. 34.9 of the Estatuto de los
 Trabajadores (working time record). Your employer, who runs Beacon, is the data controller for the data on the server.
 

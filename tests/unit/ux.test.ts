@@ -202,7 +202,7 @@ describe('0.2.0 UX', () => {
     await tick();
     expect(ui.platform.hooks.copied[0]).toContain('stage: deviceCode');
     expect(ui.platform.hooks.copied[0]).toContain('status: 404');
-    expect(ui.platform.hooks.copied[0]).toContain('TimeTrack desktop 0.2.0');
+    expect(ui.platform.hooks.copied[0]).toContain('Beacon Desktop 0.2.0');
     expect(ui.$('#notice').textContent).toBe('Copied to the clipboard.');
     await env.control('config', { notFound: [] });
     const retried = ui.app.retry();
@@ -295,7 +295,7 @@ describe('0.2.0 UX', () => {
     ui.click('#shortcut-default');
     await tick();
     expect(ui.app.state.settings.shortcut).toBe(DEFAULT_SHORTCUT);
-    expect(ui.$('#about').textContent).toContain('TimeTrack 0.2.0');
+    expect(ui.$('#about').textContent).toContain('Beacon Desktop 0.2.0');
   });
 
   it('info notices are dismissed automatically (D9)', async () => {

@@ -64,7 +64,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.locator('#update-progress-label')).toContainText('Downloading version 99.0.0…');
     await expect(page.locator('#update-progress')).toBeVisible();
     await axe(page, 'update progress');
-    await expect(page.locator('#update-progress-label')).toHaveText('Installing version 99.0.0. TimeTrack will restart.', { timeout: 5_000 });
+    await expect(page.locator('#update-progress-label')).toHaveText('Installing version 99.0.0. Beacon Desktop will restart.', { timeout: 5_000 });
     await expect.poll(() => app(page).installed()).toBe(1);
   });
 }
@@ -80,7 +80,7 @@ test('a running timer is never interrupted without asking: "After I stop"', asyn
   await expect(page.locator('#update-after-stop')).toBeFocused();
   await axe(page, 'update while running');
   await page.keyboard.press('Enter');
-  await expect(page.locator('#update-waiting')).toHaveText('TimeTrack will update when you stop the timer.');
+  await expect(page.locator('#update-waiting')).toHaveText('Beacon Desktop will update when you stop the timer.');
   expect(await app(page).installed()).toBe(0);
   await page.locator('#stop').click();
   await expect(page.locator('#timer')).toContainText('Not tracking');

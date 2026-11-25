@@ -357,7 +357,7 @@ describe('notes', () => {
 
   it('grouped, start prompt and automatic pause', async () => {
     const list = await keyed(raw('a', 30), raw('b', 30), raw('c', 30), raw('d', 30));
-    expect(groupNote(list, ctx())).toMatchObject({ kind: 'group', key: null, title: '4 meetings at 10:30', body: 'Open TimeTrack to see them and join.', native: [] });
+    expect(groupNote(list, ctx())).toMatchObject({ kind: 'group', key: null, title: '4 meetings at 10:30', body: 'Open Beacon Desktop to see them and join.', native: [] });
     expect(groupNote(list, ctx({ stale: true })).body).toContain('(may be outdated)');
     const start = startNote(list[0] as KeyedMeeting, 'Docs', ctx());
     expect(start.body).toBe('Sprint review has started. Keep timing "Docs", pause, or track the meeting?');

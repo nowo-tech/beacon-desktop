@@ -13,7 +13,7 @@ export async function startPromptWindow(root: HTMLElement, client: PromptClient)
   region.id = 'prompt-region';
   root.replaceChildren(region);
   const mount = new PromptMount(region, {
-    // "Open TimeTrack" brings the main window forward; every other answer goes to the main window.
+    // "Open Beacon Desktop" brings the main window forward; every other answer goes to the main window.
     onAnswer: (answer) => void (answer.action === 'open-app' ? client.openMain() : client.answer(answer)),
   });
   const show = (view: PromptView | null) => {

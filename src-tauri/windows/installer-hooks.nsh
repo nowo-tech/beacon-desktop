@@ -1,4 +1,10 @@
-; TimeTrack NSIS installer hooks (tauri.conf.json → bundle.windows.nsis.installerHooks).
+; NSIS installer hooks of Beacon Desktop, formerly TimeTrack (tauri.conf.json → bundle.windows.nsis.installerHooks).
+;
+; Visible name (0.9.0, design Q-BD-1 option A): `productName` stays "TimeTrack", so the install folder
+; (%LOCALAPPDATA%\TimeTrack), the Uninstall key, HKCU\Software\nowo.tech\TimeTrack and the start-at-login value keep
+; their names and the in-app updater keeps upgrading in place. Only what people see is renamed after Tauri's own
+; steps: the Start-menu and desktop shortcuts (TT_BRAND_SHORTCUT; same target, same AppUserModelID, so toasts and
+; their notification setting carry over) and the name in Settings > Apps (the Uninstall entry's DisplayName).
 ;
 ; Upgrades from 0.1.0. That release was built without `bundle.publisher`, so Tauri used the identifier's second part
 ; ("nowo") as the Windows manufacturer; since 0.4.0 it is "nowo.tech". Tauri keys two things on the manufacturer:
@@ -15,6 +21,7 @@
 ; overwrites a 0.1.0 NSIS install in place (same folder, same Uninstall entry) and leaves a 0.1.0 MSI alone.
 
 !define TT_PRODUCT "TimeTrack"
+!define TT_DISPLAY_NAME "Beacon Desktop"
 !define TT_KEY "Software\nowo.tech\TimeTrack"
 !define TT_LEGACY_VENDOR_KEY "Software\nowo"
 !define TT_LEGACY_KEY "Software\nowo\TimeTrack"
@@ -165,7 +172,50 @@ FunctionEnd
   Pop $R7
 !macroend
 
+;; Renames this install's "TimeTrack.lnk" in DIR to "Beacon Desktop.lnk". Only a shortcut that starts this install's
+;; executable is touched; an older "Beacon Desktop.lnk" of this install is replaced, another product's never. Tauri
+;; creates "TimeTrack.lnk" on a fresh install and skips it on an update, so after the first 0.9.0+ install there is
+;; one shortcut, with the new name. A desktop shortcut ticked on the finish page is created after this hook: it keeps
+;; the old name until the next update. Uses $0-$3 (Tauri's IsShortcutTarget).
+!macro TT_BRAND_SHORTCUT DIR
+  ${If} ${FileExists} "${DIR}\${TT_PRODUCT}.lnk"
+    !insertmacro IsShortcutTarget "${DIR}\${TT_PRODUCT}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    Pop $0
+    ${If} $0 = 1
+      ${If} ${FileExists} "${DIR}\${TT_DISPLAY_NAME}.lnk"
+        !insertmacro IsShortcutTarget "${DIR}\${TT_DISPLAY_NAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+        Pop $0
+        ${If} $0 = 1
+          Delete "${DIR}\${TT_DISPLAY_NAME}.lnk"
+        ${EndIf}
+      ${EndIf}
+      ClearErrors
+      Rename "${DIR}\${TT_PRODUCT}.lnk" "${DIR}\${TT_DISPLAY_NAME}.lnk"
+      ${If} ${Errors}
+        DetailPrint "Kept the shortcut ${DIR}\${TT_PRODUCT}.lnk"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+;; Removes this install's "Beacon Desktop.lnk" from DIR (Tauri's uninstaller only knows "TimeTrack.lnk").
+!macro TT_REMOVE_BRANDED_SHORTCUT DIR
+  ${If} ${FileExists} "${DIR}\${TT_DISPLAY_NAME}.lnk"
+    !insertmacro IsShortcutTarget "${DIR}\${TT_DISPLAY_NAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    Pop $0
+    ${If} $0 = 1
+      !insertmacro UnpinShortcut "${DIR}\${TT_DISPLAY_NAME}.lnk"
+      Delete "${DIR}\${TT_DISPLAY_NAME}.lnk"
+    ${EndIf}
+  ${EndIf}
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
+  ; Visible name: Settings > Apps lists "Beacon Desktop"; the key stays Uninstall\TimeTrack (Tauri finds the install
+  ; there on the next update).
+  WriteRegStr SHCTX "${UNINSTKEY}" "DisplayName" "${TT_DISPLAY_NAME}"
+  !insertmacro TT_BRAND_SHORTCUT "$SMPROGRAMS"
+  !insertmacro TT_BRAND_SHORTCUT "$DESKTOP"
   ; The 0.1.0 NSIS key is stale once this version is installed (its Uninstall entry was rewritten above). A 0.1.0 MSI
   ; that is still installed uses the same key for its shortcut: keep it then, or Windows would "repair" that copy.
   Call TTFindLegacyMsi
@@ -201,4 +251,12 @@ FunctionEnd
   ${EndIf}
   ; Other start-at-login values for this install or the 0.1.0 MSI copy ("time-track-desktop") are removed by the app
   ; itself on its next start (autostart.rs).
+!macroend
+
+!macro NSIS_HOOK_PREUNINSTALL
+  ; An update (/UPDATE) keeps the shortcuts, like Tauri's own uninstall step.
+  ${If} $UpdateMode <> 1
+    !insertmacro TT_REMOVE_BRANDED_SHORTCUT "$SMPROGRAMS"
+    !insertmacro TT_REMOVE_BRANDED_SHORTCUT "$DESKTOP"
+  ${EndIf}
 !macroend

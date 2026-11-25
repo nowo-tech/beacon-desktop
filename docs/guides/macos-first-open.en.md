@@ -1,5 +1,9 @@
 # Opening TimeTrack on a Mac for the first time
 
+> **Beacon Desktop** is the new name of TimeTrack (0.9.0). On disk the app keeps its old name, so the download is
+> still `TimeTrack_<version>_universal.dmg`, the app is `TimeTrack.app` in Applications and macOS dialogs say
+> "TimeTrack": the steps below are unchanged.
+
 TimeTrack for macOS is **not notarized by Apple**. Notarization needs a paid Apple Developer Program membership, and
 TimeTrack is distributed at zero cost. macOS therefore asks you to confirm **once** that you trust the app. After that,
 TimeTrack opens like any other app.

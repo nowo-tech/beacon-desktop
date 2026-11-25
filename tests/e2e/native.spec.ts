@@ -102,7 +102,7 @@ test('denied by the OS: the toast stays and Settings says so', async ({ page }) 
   await expect(page.getByRole('region', { name: 'Desktop notifications are off' })).toBeVisible();
   await page.locator('#open-settings').click();
   await page.locator('#settings-tab-notifications').click();
-  await expect(page.locator('#native-status')).toContainText('turned off for TimeTrack');
+  await expect(page.locator('#native-status')).toContainText('turned off for Beacon Desktop');
   await expect(page.getByLabel('Show them as desktop notifications')).toBeChecked();
 });
 
@@ -177,7 +177,7 @@ const VIEW = {
   lang: 'en',
   theme: null,
   escapeHint: 'This question needs an answer: choose one of the options.',
-  openApp: 'Open TimeTrack',
+  openApp: 'Open Beacon Desktop',
   focus: null,
   focusSeq: 0,
   blocks: [

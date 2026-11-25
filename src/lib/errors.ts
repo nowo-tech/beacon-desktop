@@ -42,7 +42,7 @@ export interface ErrorContext {
 export function errorDetails(error: unknown, context: ErrorContext): string {
   const api = error instanceof ApiError ? error : null;
   return [
-    `TimeTrack desktop ${context.version}`,
+    `Beacon Desktop ${context.version}`,
     `server: ${context.server ?? '-'}`,
     `stage: ${context.stage}`,
     `code: ${api?.code ?? 'client_error'}`,

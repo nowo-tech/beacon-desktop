@@ -259,7 +259,7 @@ describe('meeting reminders in the app', () => {
     const opened = ui.hooks.opened.length;
     await ui.app.joinMeeting({ ...ui.app.meetings[1]!, joinUrl: 'https://evil.example/j' });
     expect(ui.hooks.opened).toHaveLength(opened);
-    expect(ui.$('#status').textContent).toContain('This link cannot be opened from TimeTrack.');
+    expect(ui.$('#status').textContent).toContain('This link cannot be opened from Beacon Desktop.');
     ui.app.destroy();
   });
 

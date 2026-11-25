@@ -1,4 +1,4 @@
-//! TimeTrack desktop shell: tray, global shortcut, OS keychain, local idle time, the Beacon updater, the wall-clock
+//! Beacon Desktop shell: tray, global shortcut, OS keychain, local idle time, the Beacon updater, the wall-clock
 //! heartbeat (`heartbeat.rs`), native friendly-message notifications (`notify.rs`) and the "Still there?" window
 //! (`prompt.rs`). Closing the window keeps the app (and the timer, the idle check and the messages) running in the tray.
 //!
@@ -31,6 +31,12 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent, Wry};
 use tauri_plugin_updater::UpdaterExt;
+
+/// The name people see (window and tray titles, notifications, dialogs). Only the visible name changed in 0.9.0
+/// (design Q-BD-1, option A): `productName` stays "TimeTrack" because it names the install folder, the Windows
+/// Uninstall key and start-at-login value, the `.app` file and the Debian package, and the identifier stays
+/// `tech.nowo.timetrack` (app data, AUMID). `tests/unit/identifiers.test.ts` keeps both from drifting.
+pub(crate) const APP_DISPLAY_NAME: &str = "Beacon Desktop";
 
 const TRAY_ID: &str = "main";
 /// Argument of the start-at-login entry: start hidden in the tray.
@@ -276,7 +282,7 @@ fn set_tray_status(
 }
 
 /// Rebuilds the tray menu with the UI's translated labels and quick tasks:
-/// status · Stop / Resume · Switch to ▸ · Search task… · — · Open TimeTrack · Full / Compact view · Open Beacon · My time · — · Pause friendly
+/// status · Stop / Resume · Switch to ▸ · Search task… · — · Open Beacon Desktop · Full / Compact view · Open Beacon · My time · — · Pause friendly
 /// messages 1 h · Check for updates… · Settings… · Quit.
 #[tauri::command]
 fn set_tray_menu(app: AppHandle, window: tauri::Window, menu: TrayMenuSpec) -> Result<(), String> {
@@ -286,7 +292,7 @@ fn set_tray_menu(app: AppHandle, window: tauri::Window, menu: TrayMenuSpec) -> R
     let mut status_slot = state.status.lock().map_err(|e| e.to_string())?;
     let status_text = match status_slot.as_ref() {
         Some(item) => item.text().map_err(err)?,
-        None => "TimeTrack".to_string(),
+        None => APP_DISPLAY_NAME.to_string(),
     };
     let status =
         MenuItem::with_id(&app, "status", &status_text, false, None::<&str>).map_err(err)?;
@@ -969,13 +975,13 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         return Ok(());
     }
     // Minimal untranslated menu until the UI sends the translated one (`set_tray_menu`).
-    let status = MenuItem::with_id(app, "status", "TimeTrack", false, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "Open TimeTrack", true, None::<&str>)?;
+    let status = MenuItem::with_id(app, "status", APP_DISPLAY_NAME, false, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Beacon Desktop", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&status, &open, &quit])?;
     let base = Some(tray_mark());
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip("TimeTrack")
+        .tooltip(APP_DISPLAY_NAME)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
@@ -1225,7 +1231,7 @@ pub fn run() {
             get_autostart
         ])
         .run(tauri::generate_context!())
-        .expect("error while running TimeTrack");
+        .expect("error while running Beacon Desktop");
 }
 
 #[cfg(test)]
@@ -1450,7 +1456,7 @@ mod tests {
     #[test]
     fn tray_menu_spec_deserialises_from_the_ui() {
         let spec: TrayMenuSpec = serde_json::from_str(
-            r#"{"primary":{"id":"stop","label":"Stop timer"},"switchLabel":"Switch to","switchTo":[{"id":"switch:T-1","label":"A"}],"search":"Search task…","open":"Open TimeTrack","openBeacon":null,"myTime":"My time","checkUpdates":"Check for updates…","settings":"Settings…","quit":"Quit"}"#,
+            r#"{"primary":{"id":"stop","label":"Stop timer"},"switchLabel":"Switch to","switchTo":[{"id":"switch:T-1","label":"A"}],"search":"Search task…","open":"Open Beacon Desktop","openBeacon":null,"myTime":"My time","checkUpdates":"Check for updates…","settings":"Settings…","quit":"Quit"}"#,
         )
         .expect("spec");
         assert_eq!(spec.switch_to.len(), 1);

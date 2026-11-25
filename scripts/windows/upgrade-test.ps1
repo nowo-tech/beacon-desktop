@@ -26,11 +26,13 @@
     -InstallDir              install the new version into this folder (NSIS /D=, silent mode only)
 
   Then checks: installer exit code, a single "TimeTrack" entry under the Uninstall keys (HKCU and HKLM, both views)
-  carrying the new version, no MSI left behind, the installed executable's version and that the app starts. From
+  carrying the new version (its DisplayName is "Beacon Desktop" from 0.9.0 on), no MSI left behind, the installed executable's version and that the app starts. From
   0.5.1 on also: start-at-login entries seeded before the upgrade like older versions left them (the app's value
   pointing at the old copy, a second value under another name, a per-machine value) end up as ONE HKCU "TimeTrack"
   value for the new executable once the new app has started, and a second launch exits at once, leaving one process
-  (one tray icon). Writes
+  (one tray icon). From 0.9.0 on (visible name only, design Q-BD-1 option A): the Uninstall key is still "TimeTrack"
+  with DisplayName "Beacon Desktop", the install folder is still %LOCALAPPDATA%\TimeTrack, and the per-user Start-menu
+  shortcut is "Beacon Desktop.lnk" pointing at the new executable, with no "TimeTrack.lnk" left. Writes
   result.json and a Markdown summary to -OutDir (and to $env:GITHUB_STEP_SUMMARY when set). Exit code 1 when a check
   failed. Needs Windows PowerShell 5.1 (UI Automation assemblies).
 #>
@@ -45,6 +47,7 @@ param(
   [string] $InstallDir = '',
   [string] $OutDir = (Join-Path $PWD 'upgrade-test-out'),
   [string] $Product = 'TimeTrack',
+  [string] $DisplayName = 'Beacon Desktop',
   [int] $TimeoutSeconds = 300
 )
 
@@ -78,7 +81,7 @@ function Get-UninstallEntries {
     foreach ($name in $root.GetSubKeyNames()) {
       $k = $root.OpenSubKey($name)
       $display = [string] $k.GetValue('DisplayName')
-      if ($display -like "$Product*") {
+      if ($display -like "$Product*" -or $display -eq $DisplayName) {
         $found += [pscustomobject] @{
           Hive            = $s.Name
           Key             = $name
@@ -439,6 +442,25 @@ if (-not $newExe) {
   $fileVersion = (Get-Item $newExe).VersionInfo.ProductVersion
   Log "installed executable: $newExe ($fileVersion)"
   if ($fileVersion -notlike "$newVersion*") { Fail "installed executable is $fileVersion, expected $newVersion" }
+  if ($newBase -ge [version] '0.9.0') {
+    # Visible name only: same Uninstall key and folder, new DisplayName and Start-menu shortcut name.
+    $entry = @($current | Where-Object { $_.UninstallString -notmatch 'msiexec' })
+    if ($entry.Count -eq 1) {
+      if ($entry[0].Key -ne $Product) { Fail "Uninstall key is '$($entry[0].Key)', expected '$Product' (in-place updates depend on it)" }
+      if ($entry[0].DisplayName -ne $DisplayName) { Fail "Settings > Apps shows '$($entry[0].DisplayName)', expected '$DisplayName'" }
+    }
+    $programs = [Environment]::GetFolderPath('Programs')
+    $branded = Join-Path $programs "$DisplayName.lnk"
+    $oldLnk = Join-Path $programs "$Product.lnk"
+    if (-not (Test-Path -LiteralPath $branded)) {
+      Fail "no Start-menu shortcut '$branded'"
+    } else {
+      $target = (New-Object -ComObject WScript.Shell).CreateShortcut($branded).TargetPath
+      Log "Start-menu shortcut: $branded -> $target"
+      if ($target -ne $newExe) { Fail "Start-menu shortcut points at '$target', expected '$newExe'" }
+    }
+    if (Test-Path -LiteralPath $oldLnk) { Fail "the old Start-menu shortcut '$oldLnk' is still there" }
+  }
   Get-AppProcesses | ForEach-Object { Log "stopping $($_.Id) before the start check"; Stop-Process -Id $_.Id -Force }
   $appErr = Join-Path $OutDir 'app-stderr.log'
   if (-not (Start-App $newExe $appErr)) { Fail 'the upgraded app does not start' }

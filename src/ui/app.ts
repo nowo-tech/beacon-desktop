@@ -675,7 +675,7 @@ export class DesktopApp {
           await preflight(this.platform.fetch, server);
           stage = 'deviceCode';
           const login = await runDeviceFlow(api, {
-            clientName: `TimeTrack desktop (${await this.platform.hostName()})`,
+            clientName: `Beacon Desktop (${await this.platform.hostName()})`,
             // `meetings:read` (TimeTrack 1.14) is never granted implicitly; an older server refuses the unknown scope,
             // and the sign-in goes on without it.
             scopes: [...ALL_SCOPES, MEETINGS_SCOPE],
@@ -4448,7 +4448,7 @@ export class DesktopApp {
         return this.closeMeetingReminder();
       case 'escape':
       case 'open-app':
-        // Never a dismissal: the prompt stays until it is answered ("Open TimeTrack" is handled by its window).
+        // Never a dismissal: the prompt stays until it is answered ("Open Beacon Desktop" is handled by its window).
         return;
     }
   }

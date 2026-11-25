@@ -1,6 +1,6 @@
 # Third-party notices
 
-TimeTrack desktop is MIT-licensed ([LICENSE](LICENSE)). It is built on open-source crates and npm packages under
+Beacon Desktop (formerly TimeTrack desktop) is MIT-licensed ([LICENSE](LICENSE)). It is built on open-source crates and npm packages under
 permissive licences (MIT, Apache-2.0, BSD, ISC and similar); `Cargo.lock` and `pnpm-lock.yaml` list every version.
 The components below need a specific notice.
 

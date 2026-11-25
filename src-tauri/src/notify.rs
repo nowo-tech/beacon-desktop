@@ -314,7 +314,7 @@ mod platform {
         notification
             .summary(title)
             .body(body)
-            .appname(app.config().product_name.as_deref().unwrap_or("TimeTrack"))
+            .appname(crate::APP_DISPLAY_NAME)
             .auto_icon();
         if let Some(path) = image {
             notification.image_path(&path.to_string_lossy());

@@ -291,7 +291,7 @@ describe('app: pin mismatch and the Settings line', () => {
     platform.hooks.connectionSecurity = { status: 'expired', pinSetVersion: 1 };
     const ui = await signedIn(platform);
     await tick();
-    expect(ui.$('#pin-expired-title')?.textContent).toBe('Actualiza TimeTrack: la fijación de certificados ha caducado');
+    expect(ui.$('#pin-expired-title')?.textContent).toBe('Actualiza Beacon Desktop: la fijación de certificados ha caducado');
     expect(ui.$('#pin-expired-text')?.textContent).toContain('actualiza la app');
     expect(platform.hooks.notifications).toHaveLength(1);
     expect(platform.hooks.notifications[0]).toContain('la fijación de certificados ha caducado');

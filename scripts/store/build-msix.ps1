@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Builds the Microsoft Store package (MSIX) of TimeTrack on Windows. Zero cost: the Store re-signs MSIX packages.
+  Builds the Microsoft Store package (MSIX) of Beacon Desktop (formerly TimeTrack) on Windows. Zero cost: the Store re-signs MSIX packages.
 
 .DESCRIPTION
   1. Builds the Store variant: TIMETRACK_CHANNEL=store (no in-app updater, no autostart switch), tauri.store.conf.json
