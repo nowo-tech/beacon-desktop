@@ -278,8 +278,8 @@ fn set_unread_badge(app: AppHandle, window: tauri::Window, count: u32) -> Result
     if let Some(main) = app.get_webview_window("main") {
         #[cfg(windows)]
         {
-            let overlay = (count > 0)
-                .then(|| unread_variant(&Image::new_owned(vec![0; 16 * 16 * 4], 16, 16)));
+            let overlay = badge_count(count)
+                .map(|_| unread_variant(&Image::new_owned(vec![0; 16 * 16 * 4], 16, 16)));
             let _ = main.set_overlay_icon(overlay);
         }
         #[cfg(not(windows))]
