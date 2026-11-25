@@ -21,6 +21,10 @@
                              entry left must be disabled too
                 foreign      the app's value plus another vendor's "TimeTrack" entries (HKCU "TimeTrack Vendor",
                              HKLM "TimeTrack" for C:\Vendor\TimeTrack): those must stay untouched
+                single       only the app's HKCU value, as most users have it: the one entry must survive an
+                             interactive upgrade, whose "Uninstall before installing" runs the old uninstaller
+                             without /UPDATE (Tauri's uninstall step deletes that value then)
+                off          no start-at-login entry (switched off in Settings): none may appear after the upgrade
                 custom       with -InstallDir: unquoted HKCU and HKLM values for the custom folder (as the
                              autostart plugin wrote them): one quoted HKCU value must be left
     -InstallDir              install the new version into this folder (NSIS /D=, silent mode only)
@@ -43,7 +47,7 @@ param(
   [Parameter(Mandatory)] [ValidateSet('silent', 'update', 'interactive')] [string] $Mode,
   [switch] $AppRunning,
   [switch] $OldMsiStays,
-  [ValidateSet('dupes', 'disabled', 'foreign', 'custom')] [string] $Autostart = 'dupes',
+  [ValidateSet('dupes', 'single', 'disabled', 'foreign', 'custom', 'off')] [string] $Autostart = 'dupes',
   [string] $InstallDir = '',
   [string] $OutDir = (Join-Path $PWD 'upgrade-test-out'),
   [string] $Product = 'TimeTrack',
@@ -386,7 +390,7 @@ if ($checkInstances) {
   foreach ($dir in (Get-InstallDirs)) { if (-not $seedExe) { $seedExe = Get-AppExe $dir } }
   if (-not $seedExe) { throw 'no old executable to seed start-at-login entries' }
   Log "start-at-login scenario: $Autostart"
-  Set-RunEntry 'HKCU' $Product "$seedExe --hidden"
+  if ($Autostart -ne 'off') { Set-RunEntry 'HKCU' $Product "$seedExe --hidden" }
   switch ($Autostart) {
     'dupes' {
       Set-RunEntry 'HKCU' 'time-track-desktop' "`"$seedExe`" --hidden"
@@ -479,18 +483,23 @@ if (-not $newExe) {
     Log "processes after the second launch: $($alive.Count)"
     if ($alive.Count -ne 1) { Fail "$($alive.Count) TimeTrack processes after a second launch (expected 1)" }
     # Start-at-login: one HKCU "TimeTrack" value for the new executable, path quoted (the app cleaned up at start).
+    # Start at login switched off: no entry, ever.
     $ours = { param($list) @($list | Where-Object { -not $_.Command.TrimStart('"').StartsWith($Vendor, [StringComparison]::OrdinalIgnoreCase) }) }
+    $expected = if ($Autostart -eq 'off') { 0 } else { 1 }
     for ($i = 0; $i -lt 30; $i++) {
       $runs = @(& $ours (Get-RunEntries))
-      if ($runs.Count -eq 1 -and $runs[0].Command.StartsWith('"')) { break }
+      if ($expected -eq 1 -and $runs.Count -eq 1 -and $runs[0].Command.StartsWith('"')) { break }
+      if ($expected -eq 0 -and $i -ge 10) { break }
       Start-Sleep -Seconds 1
     }
     if (Test-Path $appErr) { Get-Content $appErr | ForEach-Object { Log "  app stderr: $_" } }
     $all = Get-RunEntries
     foreach ($r in $all) { Log ("  start-at-login {0}\{1} = {2}" -f $r.Hive, $r.Name, $r.Command) }
     $runs = @(& $ours $all)
-    if ($runs.Count -ne 1) {
-      Fail "$($runs.Count) start-at-login entries for $Product (expected exactly 1)"
+    if ($runs.Count -ne $expected) {
+      Fail "$($runs.Count) start-at-login entries for $Product (expected exactly $expected)"
+    } elseif ($expected -eq 0) {
+      Log '  start at login stays off'
     } elseif ($runs[0].Hive -ne 'HKCU' -or $runs[0].Name -ne $Product -or -not $runs[0].Command.StartsWith("`"$newExe`"", [StringComparison]::OrdinalIgnoreCase)) {
       Fail "start-at-login entry is $($runs[0].Hive)\$($runs[0].Name) = $($runs[0].Command) (expected HKCU\$Product = `"$newExe`" --hidden)"
     }
@@ -501,6 +510,7 @@ if (-not $newExe) {
         if (-not (Test-Disabled $state)) { Fail 'the entry disabled in Task Manager is enabled again after the clean-up' }
         if ($null -ne (Get-Approved 'HKCU' 'time-track-desktop')) { Fail 'the removed entry left its Task Manager state behind' }
       }
+      'off' { }
       'foreign' {
         if ((Get-RunValue 'HKCU' 'TimeTrack Vendor') -ne "$Vendor\TimeTrack.exe") { Fail "another vendor's HKCU entry 'TimeTrack Vendor' was changed or removed" }
         if ((Get-RunValue 'HKLM' $Product) -ne "`"$Vendor\TimeTrackAgent.exe`" --tray") { Fail "another vendor's HKLM entry '$Product' was changed or removed" }

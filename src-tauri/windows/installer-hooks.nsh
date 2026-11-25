@@ -32,12 +32,15 @@
 Var TTLegacyMsiCode
 Var TTLegacyMsiVersion
 Var TTLegacyMsiDir
+Var TTRunSnapshot
+Var TTRunSnapshotTaken
 
 ; A page without UI: its function runs before the welcome and reinstall pages (interactive and /P) and never shows.
 Page custom TTMigrateLegacy
 
 Function TTMigrateLegacy
   Call TTAdoptLegacyNsis
+  Call TTSnapshotAutostart
   Call TTFindLegacyMsi
   ${If} $TTLegacyMsiCode != ""
     Call TTRemoveLegacyMsi
@@ -210,6 +213,28 @@ FunctionEnd
   ${EndIf}
 !macroend
 
+; Start at login before the old copy is uninstalled. Interactive and /P (without /UPDATE) upgrades run the old
+; uninstaller from the reinstall page ("Uninstall before installing") without /UPDATE, and Tauri's uninstall step then
+; deletes HKCU\...\Run\TimeTrack (it keeps the value only for updates). The old uninstaller is the old version's
+; code, so the new installer remembers the value here, before that page, and NSIS_HOOK_POSTINSTALL writes it back for
+; this install. Only a value that starts one of the app's executables in one of its install folders counts ($INSTDIR
+; is the previous install's folder here); its Task Manager state (StartupApproved) is not touched by the uninstaller
+; and carries over. Once per run: going back to the pages after the old copy is gone must not forget it.
+Function TTSnapshotAutostart
+  ${If} $TTRunSnapshotTaken == "1"
+    Return
+  ${EndIf}
+  StrCpy $TTRunSnapshotTaken "1"
+  StrCpy $TTRunSnapshot ""
+  ReadRegStr $0 HKCU "${TT_RUN_KEY}" "${TT_PRODUCT}"
+  ${If} $0 != ""
+    !insertmacro TT_OUR_COMMAND $0 $1
+    ${If} $1 != ""
+      StrCpy $TTRunSnapshot $0
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+
 !macro NSIS_HOOK_POSTINSTALL
   ; Visible name: Settings > Apps lists "Beacon Desktop"; the key stays Uninstall\TimeTrack (Tauri finds the install
   ; there on the next update).
@@ -222,6 +247,16 @@ FunctionEnd
   ${If} $TTLegacyMsiCode == ""
     DeleteRegKey HKCU "${TT_LEGACY_KEY}"
     DeleteRegKey /ifempty HKCU "${TT_LEGACY_VENDOR_KEY}"
+  ${EndIf}
+  ; Start at login removed by the old uninstaller (TTSnapshotAutostart): written back for this install, quoted, hidden in
+  ; the tray. Only when the value is gone: a value still there (silent install, /UPDATE, nothing was uninstalled) is
+  ; handled below. Start at login that was off stays off (no snapshot).
+  ${If} $TTRunSnapshot != ""
+    ReadRegStr $R8 HKCU "${TT_RUN_KEY}" "${TT_PRODUCT}"
+    ${If} $R8 == ""
+      WriteRegStr HKCU "${TT_RUN_KEY}" "${TT_PRODUCT}" '"$INSTDIR\${MAINBINARYNAME}.exe" --hidden'
+      DetailPrint "Kept start at login of ${TT_PRODUCT} (removed by the old uninstaller)"
+    ${EndIf}
   ${EndIf}
   ; Start at login set up by the 0.1.0 MSI copy points at Program Files: follow the app to this install, also when that
   ; copy is kept (0.5.0 left it then, and both copies could start at login: two tray icons). Only this install starts

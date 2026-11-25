@@ -58,6 +58,29 @@ describe('one TimeTrack, one tray icon (0.5.1)', () => {
     expect(postinstall).toContain(`StrCpy $R9 '"$INSTDIR\\\${MAINBINARYNAME}.exe" --hidden'`);
   });
 
+  it('an interactive upgrade keeps start at login although the old uninstaller deletes it (0.9.0)', () => {
+    const hooks = readFileSync('src-tauri/windows/installer-hooks.nsh', 'utf8');
+    // Remembered before the reinstall page runs the old uninstaller (without /UPDATE), once per run.
+    const start = hooks.indexOf('Function TTMigrateLegacy');
+    const migrate = hooks.slice(start, hooks.indexOf('FunctionEnd', start));
+    expect(migrate.indexOf('Call TTSnapshotAutostart')).toBeGreaterThan(migrate.indexOf('Call TTAdoptLegacyNsis'));
+    expect(migrate.indexOf('Call TTSnapshotAutostart')).toBeLessThan(migrate.indexOf('Call TTFindLegacyMsi'));
+    const snapshot = hooks.slice(hooks.indexOf('Function TTSnapshotAutostart'), hooks.indexOf('!macro NSIS_HOOK_POSTINSTALL'));
+    expect(snapshot).toContain('${If} $TTRunSnapshotTaken == "1"');
+    expect(snapshot).toContain('ReadRegStr $0 HKCU "${TT_RUN_KEY}" "${TT_PRODUCT}"');
+    // Only the app's own value (never another product's "TimeTrack").
+    expect(snapshot).toContain('!insertmacro TT_OUR_COMMAND $0 $1');
+    // The macro is defined before the function that inserts it.
+    expect(hooks.indexOf('!macro TT_OUR_COMMAND')).toBeLessThan(hooks.indexOf('Function TTSnapshotAutostart'));
+    // Written back only when it is gone, quoted, for this install; never switched on without a snapshot.
+    const postinstall = hooks.slice(hooks.indexOf('!macro NSIS_HOOK_POSTINSTALL'));
+    const restore = postinstall.slice(postinstall.indexOf('${If} $TTRunSnapshot != ""'));
+    expect(restore).toMatch(/^\$\{If\} \$TTRunSnapshot != ""\n\s+ReadRegStr \$R8 HKCU "\$\{TT_RUN_KEY\}" "\$\{TT_PRODUCT\}"\n\s+\$\{If\} \$R8 == ""\n/);
+    expect(restore).toContain(`WriteRegStr HKCU "\${TT_RUN_KEY}" "\${TT_PRODUCT}" '"$INSTDIR\\\${MAINBINARYNAME}.exe" --hidden'`);
+    // Before the rule that moves the value to this install.
+    expect(postinstall.indexOf('${If} $TTRunSnapshot != ""')).toBeLessThan(postinstall.indexOf('!insertmacro TT_OUR_COMMAND $R8 $R9'));
+  });
+
   it('Settings switches start at login through the app command, never the plugin enable / disable', () => {
     const main: unknown[] = JSON.parse(readFileSync('src-tauri/capabilities/default.json', 'utf8')).permissions;
     expect(main).toContain('allow-set-autostart');

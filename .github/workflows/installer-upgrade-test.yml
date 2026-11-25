@@ -10,7 +10,12 @@ name: Installer upgrade test
 #   old_run_id   Release run whose "desktop-windows" artifact holds the oldest installers (default: v0.1.0, MSI + NSIS,
 #                published without `bundle.publisher`, so the Windows "manufacturer" was "nowo").
 #   prev_run_id  Release run of the previous direct-download version (default: v0.4.0, NSIS per user, publisher
-#                "nowo.tech"), the starting point of the in-app updater route.
+#                "nowo.tech"), the starting point of the in-app updater route and of every "v04-*" scenario (the id
+#                names the default; the scenarios start from whatever prev_run_id holds). Known release runs:
+#                  41895956986  v0.4.0 (default; no start-at-login clean-up in the app)
+#                  45436332264  v0.8.0 (the app keeps one start-at-login entry, so "dupes" is already one value
+#                               when the new installer runs: the case of the interactive-upgrade autostart loss)
+#                Before a release, run all scenarios from both: -f prev_run_id=45436332264.
 #   new_run_id   Run whose "desktop-windows" (release) or "new-installer" (this workflow) artifact is the new version.
 #                Empty: build this ref's NSIS installer here, signed with a throwaway updater key (never the release one).
 #   version      Version stamped on the build of this ref (empty: DEFAULT_VERSION). Ignored with new_run_id.
@@ -34,7 +39,7 @@ on:
         description: Release run with the oldest installers (v0.1.0)
         default: '41621683190'
       prev_run_id:
-        description: Release run with the previous version's installer (v0.4.0)
+        description: Release run with the previous version's installer (41895956986 = v0.4.0, 45436332264 = v0.8.0)
         default: '41895956986'
       new_run_id:
         description: Run with the new installer (empty = build this ref)
@@ -87,7 +92,10 @@ jobs:
             echo "version=$VERSION"
           } | tee -a "$GITHUB_OUTPUT"
           # id: old installers (v01 = old_run_id, v04 = prev_run_id) and which of them, how the new one runs, app running.
-          # autostart (0.5.1+, default dupes): which start-at-login entries are seeded before the upgrade (upgrade-test.ps1);
+          # autostart (0.5.1+, default dupes): which start-at-login entries are seeded before the upgrade (upgrade-test.ps1:
+          # dupes, single, disabled, foreign, custom, off). Interactive upgrades run the old uninstaller without /UPDATE,
+          # which deletes the app's HKCU value: single / disabled / off check it is kept as it was (one entry, still
+          # disabled, none).
           # install_dir: a custom install folder (/D=), fresh install (old none).
           # msi_stays: /S shows no page and cannot ask for administrator approval, so a 0.1.0 MSI is left installed
           # (expected; the check reports it instead of failing).
@@ -101,6 +109,9 @@ jobs:
             {"id":"v04-update-running","from":"v04","old":"nsis","mode":"update","running":true},
             {"id":"v04-interactive-running","from":"v04","old":"nsis","mode":"interactive","running":true},
             {"id":"v04-update-autostart-disabled","from":"v04","old":"nsis","mode":"update","running":true,"autostart":"disabled"},
+            {"id":"v04-interactive-autostart-single","from":"v04","old":"nsis","mode":"interactive","running":true,"autostart":"single"},
+            {"id":"v04-interactive-autostart-disabled","from":"v04","old":"nsis","mode":"interactive","running":true,"autostart":"disabled"},
+            {"id":"v04-interactive-autostart-off","from":"v04","old":"nsis","mode":"interactive","running":true,"autostart":"off"},
             {"id":"msi01-interactive-autostart-foreign","from":"v01","old":"msi","mode":"interactive","running":false,"autostart":"foreign"},
             {"id":"custom-dir-silent-autostart","from":"v04","old":"none","mode":"silent","running":false,"autostart":"custom","install_dir":"C:\\My Tools\\TimeTrack"}
           ]'
