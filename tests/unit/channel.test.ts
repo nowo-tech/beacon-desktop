@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { buildStable, channelKey, compareVersions, describeFile, notesFromChangelog, objectKey, parseFragments } from '../../scripts/release/channel.mjs';
+import { afterEach, describe, expect, it } from 'vitest';
+import { buildStable, channelKey, clientsPrefix, compareVersions, describeFile, notesFromChangelog, objectKey, parseFragments } from '../../scripts/release/channel.mjs';
 
 describe('release channel', () => {
   it('builds keys and file entries', () => {
@@ -40,5 +40,33 @@ describe('release channel', () => {
     expect(() => buildStable({ version: '0.2.0', files: [file] })).toThrow(/does not belong/);
     expect(() => buildStable({ version: '0.1.0', files: [file, file] })).toThrow(/Duplicate/);
     expect(parseFragments(`${JSON.stringify(file)}\n\n`)).toEqual([file]);
+  });
+});
+
+describe('S3 clients prefix', () => {
+  const saved = process.env.S3_CLIENTS_PREFIX;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.S3_CLIENTS_PREFIX;
+    else process.env.S3_CLIENTS_PREFIX = saved;
+  });
+
+  it('defaults to time-track-clients, also for an empty variable', () => {
+    delete process.env.S3_CLIENTS_PREFIX;
+    expect(clientsPrefix()).toBe('time-track-clients');
+    process.env.S3_CLIENTS_PREFIX = '';
+    expect(objectKey('desktop', '0.1.0', 'a.msi')).toBe('time-track-clients/desktop/0.1.0/a.msi');
+  });
+
+  it('follows beacon-clients', () => {
+    process.env.S3_CLIENTS_PREFIX = 'beacon-clients';
+    expect(objectKey('desktop', '0.1.0', 'TimeTrack 0.1.0.msi')).toBe('beacon-clients/desktop/0.1.0/TimeTrack_0.1.0.msi');
+    expect(channelKey('desktop')).toBe('beacon-clients/desktop/channel/stable.json');
+  });
+
+  it('rejects a value off the allowlist', () => {
+    process.env.S3_CLIENTS_PREFIX = 'evil/';
+    expect(() => clientsPrefix()).toThrow(/Invalid S3_CLIENTS_PREFIX/);
+    expect(() => objectKey('desktop', '0.1.0', 'a.msi')).toThrow(/Invalid S3_CLIENTS_PREFIX/);
+    expect(() => channelKey('desktop')).toThrow(/Invalid S3_CLIENTS_PREFIX/);
   });
 });

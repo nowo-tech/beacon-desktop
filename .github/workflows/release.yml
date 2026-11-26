@@ -35,6 +35,8 @@ concurrency:
 
 env:
   BEACON_URL: ${{ vars.BEACON_URL }}
+  # Read by scripts/release/channel.mjs and s3-put.sh in every job (allowlist: time-track-clients | beacon-clients).
+  S3_CLIENTS_PREFIX: ${{ vars.S3_CLIENTS_PREFIX || 'time-track-clients' }}
 
 jobs:
   prepare:
@@ -254,7 +256,6 @@ jobs:
       TIME_TRACK_S3_SECRET_ACCESS_KEY: ${{ secrets.TIME_TRACK_S3_SECRET_ACCESS_KEY }}
       TIME_TRACK_S3_REGION: ${{ secrets.TIME_TRACK_S3_REGION }}
       MIN_SUPPORTED_VERSION: ${{ vars.TIME_TRACK_MIN_SUPPORTED_VERSION }}
-      S3_CLIENTS_PREFIX: ${{ vars.S3_CLIENTS_PREFIX || 'time-track-clients' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
