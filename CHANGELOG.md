@@ -5,6 +5,45 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+### Planned for 0.11.0 (BD-3a: time context, mini timer, required fields)
+
+Targets **0.11.0** together with BD-3 (chat send). Works with TimeTrackBundle **2.1** (subjects and activity types)
+and **2.2** (context policy); an older server behaves as before (no fields asked, the context header ignored).
+
+#### Added
+
+- **Time API context**: every time API request carries `X-Beacon-Context` (`personal` / `org:<uuid>`), the
+  organization chosen in the app, as the chat does. Needed before Beacon turns on TimeTrackBundle's context policy
+  (`400 context_required` without it). A `403 context_forbidden` makes the app use Personal for the rest of the run:
+  a read is retried once in Personal, a write is never retried in another organization. Switching organization
+  reloads the Time module's tasks; without chat, the organizations come from the time API (`GET me.contexts`).
+- **Switching organization with a running timer** (owner Q4): when required fields are missing, one dialog asks for
+  them and confirms the switch ("Stop the timer in <org> and switch?"), *Cancel* keeps both; time recorded offline
+  is sent before a switch (offline, the switch waits). The timer never keeps running in another organization.
+- **Required fields** (owner Q5): when an organization requires an activity type (TimeTrackBundle 2.1
+  `requireActivityType`), the app asks for it on stop (default), on start, or both (Settings → Time tracking), with
+  an optional client or subject search. A stop the server refuses (`409 activity_type_required`) opens the same
+  dialog and is sent again at the time of the first click. "Use the task's last activity type" (on by default) starts
+  a task with the type last used with it on this computer (ids only, per organization, at most 200 tasks).
+- **Mini timer** (owner Q2): a small always-on-top window (title bar button, `Ctrl/⌘+Shift+M`, Settings) with the
+  running task, its organization, the elapsed time, Stop / Resume and "Open Beacon Desktop"; `Esc` closes it,
+  `Ctrl/⌘+Shift+S` starts or stops. The running timer still shows in the title bar or title bar + sidebar (Settings).
+- English and Spanish for every new string; light and dark; axe WCAG 2.1 AA on every new dialog and the mini timer.
+
+#### Security
+
+- The mini timer window may call `mini_view` and `mini_action` only (`capabilities/mini.json`, checked by a Rust
+  test); `mini_open` / `mini_update` / `mini_close` are main-window only. The main window may bring itself forward
+  (`core:window:allow-show`, `allow-unminimize`, `allow-set-focus`) for a dialog it must answer.
+- Review ZBZ-v Infos:
+  - **ZBZ-v-I1**: the chat token keeps the base path of the server it was stored under (keychain entry); a rebind to
+    another path of the same server is refused while it is stored, so the webview cannot move the chat-route anchor.
+  - **ZBZ-v-I2**: `mailto:` links keep spaces as `%20` (RFC 6068), not `+`, in the window and in Rust.
+  - **ZBZ-v-I3**: an organization shown after a failed switch (network, 5xx) is no longer remembered for the next
+    launch; only one the server served is.
+
+### Planned for 0.10.0 (BD-2)
+
 Planned as **0.10.0** (BD-2, design `docs/design/BEACON_DESKTOP.md` §3–§5 and §7): Beacon chat, read-only. Needs
 TimeTrackBundle **2.2.0** (scope families, contract v0.5) and ChatKitBundle **2.4.0** (client API `/api/chat/v1`) on
 the server.
