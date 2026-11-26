@@ -5,7 +5,8 @@ name: Release
 # artifacts ARE signed (minisign, Tauri updater) and required since 0.4.0: the build fails without
 # TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) or while tauri.conf.json still carries the updater public key placeholder
 # (scripts/release/check-updater-key.mjs). Uploads to Beacon's bucket (contract §7.1):
-#   time-track-clients/desktop/<version>/<file>, then time-track-clients/desktop/channel/stable.json LAST.
+#   <S3_CLIENTS_PREFIX>/desktop/<version>/<file>, then <S3_CLIENTS_PREFIX>/desktop/channel/stable.json LAST
+#   (S3_CLIENTS_PREFIX is a repository variable, default time-track-clients).
 # The S3 upload is skipped with a notice when its secrets are missing. The Microsoft Store MSIX job runs only when the
 # MSIX_* variables are set (Partner Center → Product identity).
 #
@@ -253,6 +254,7 @@ jobs:
       TIME_TRACK_S3_SECRET_ACCESS_KEY: ${{ secrets.TIME_TRACK_S3_SECRET_ACCESS_KEY }}
       TIME_TRACK_S3_REGION: ${{ secrets.TIME_TRACK_S3_REGION }}
       MIN_SUPPORTED_VERSION: ${{ vars.TIME_TRACK_MIN_SUPPORTED_VERSION }}
+      S3_CLIENTS_PREFIX: ${{ vars.S3_CLIENTS_PREFIX || 'time-track-clients' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -280,7 +282,7 @@ jobs:
           for key in $(node -e 'for (const f of require("./stable.json").files) console.log(f.key)' | sort -u); do
             scripts/release/s3-put.sh "out/$(basename "$key")" "$key"
           done
-          scripts/release/s3-put.sh stable.json time-track-clients/desktop/channel/stable.json application/json
+          scripts/release/s3-put.sh stable.json "${S3_CLIENTS_PREFIX}/desktop/channel/stable.json" application/json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-stable-json
