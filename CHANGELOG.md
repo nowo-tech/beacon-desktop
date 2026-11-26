@@ -62,6 +62,11 @@ and **2.2** (context policy); an older server behaves as before (no fields asked
     is sent. **L2**: a refused context reloads the task list. **L3**: sign-out forgets the context, the task
     organizations and the remembered activity types; the next sign-in starts in Personal. **L4**: Retry honours
     `Retry-After`. **L5**: the mini timer keeps keyboard focus. **I4**: a time-only switch is remembered once served.
+  - **ZCD-v-M1**: a queued stop / switch is replayed only while the server still runs the timer it was made for (same
+    start); otherwise it is skipped with a notice, so a newer timer is never stopped by it, and a live stop of that
+    timer removes it from the queue. **ZCD-v-L1**: tasks are filed under an organization from its task lists only,
+    never from the running timer (which is per person). **ZCD-v-I1/I2**: the list's served context is recorded;
+    a switch held by queued time says so instead of "offline".
 
 ### Planned for 0.10.0 (BD-2)
 

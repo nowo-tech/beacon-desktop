@@ -217,6 +217,7 @@ const en = {
   keyMini: 'Mini timer',
   keyToggleTimer: 'Start / stop the timer',
   contextOffline: 'You are offline: reconnect to switch organization (the time recorded offline is saved first).',
+  contextQueued: 'Time saved offline still waits to be sent (it may need an activity type): switch organization once it is.',
   contextRefusedTime: 'You can no longer track time in {name}. Switched to Personal.',
 } as const;
 
@@ -439,6 +440,7 @@ const es: Record<ChatKey, string> = {
   keyMini: 'Mini temporizador',
   keyToggleTimer: 'Iniciar / parar el temporizador',
   contextOffline: 'Estás sin conexión: vuelve a conectarte para cambiar de organización (antes se guarda el tiempo registrado sin conexión).',
+  contextQueued: 'Aún hay tiempo guardado sin conexión por enviar (quizá necesita un tipo de actividad): cambia de organización cuando se haya enviado.',
   contextRefusedTime: 'Ya no puedes registrar tiempo en {name}. Se ha cambiado a Personal.',
 };
 

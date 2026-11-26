@@ -82,6 +82,24 @@ export function withAllocation(action: QueuedAction, allocation: Allocation): Qu
 
 const ALLOCATION_REQUIRED = new Set(['activity_type_required', 'allocation_required']);
 
+/** `dropped` code of a queued stop / switch whose timer was no longer running (audit ZCD-v-M1). */
+export const STALE = 'already_stopped';
+
+/** Whether the server's running timer is the one that started at `startedAt` (to the second). */
+async function stillRunning(api: TimeTrackApi, startedAt: string): Promise<boolean> {
+  const timer = await api.timer();
+  if (timer === null) return false;
+  const a = Date.parse(timer.startedAt);
+  const b = Date.parse(startedAt);
+  return !Number.isNaN(a) && !Number.isNaN(b) && Math.abs(a - b) < 1000;
+}
+
+/** Whether a queued stop / switch is about the timer that started at `startedAt` (to the second). */
+export function closesTimer(action: QueuedAction, startedAt: string): boolean {
+  if ((action.kind !== 'stop' && action.kind !== 'switch') || action.startedAt === undefined) return false;
+  return Math.abs(Date.parse(action.startedAt) - Date.parse(startedAt)) < 1000;
+}
+
 /** Name of the Web Lock that serialises replays (the extension's popup and background share it). */
 export const QUEUE_LOCK = 'time-track-queue';
 let chain: Promise<unknown> = Promise.resolve();
@@ -106,7 +124,16 @@ async function drain(store: QueueStore, apiFor: ApiFor, now: () => Date, knownFe
   for (let action = (await store.read())[0]; action !== undefined; action = (await store.read())[0]) {
     try {
       // A fresh client per action, bound to the context it was recorded in.
-      const outcome = await replay(apiFor(action.context ?? null), action, features, now());
+      const api = apiFor(action.context ?? null);
+      // Audit ZCD-v-M1: a queued stop / switch closes only the timer it was made for. Unless an earlier action of
+      // this replay started it, the running timer must be that one (same start); otherwise it was already stopped
+      // (live, or on another device) and a newer timer must never be stopped by it.
+      if ((action.kind === 'stop' || action.kind === 'switch') && action.startedAt !== undefined && result.timer === undefined && !(await stillRunning(api, action.startedAt))) {
+        result.dropped.push({ action, code: STALE });
+        await store.write((await store.read()).slice(1));
+        continue;
+      }
+      const outcome = await replay(api, action, features, now());
       result.timer = outcome.timer;
       result.clamps.push(...outcome.clamps);
       result.synced++;

@@ -14,7 +14,7 @@ import { composeNudge, EMPTY_NUDGE, NUDGE_MINUTES_CHOICES, type NudgeAction, nud
 import { preflight } from '../lib/preflight';
 import { isSignInDeclined, isSignInWait } from '../lib/nativeFetch';
 import { OfflineQueue } from '../lib/queue';
-import { type ClampNote, type QueuedAction, type SyncResult, applyLocally, withAllocation } from '../lib/replay';
+import { type ClampNote, type QueuedAction, type SyncResult, applyLocally, closesTimer, STALE, withAllocation } from '../lib/replay';
 import { type ServerFeatures, effectiveThreshold, serverFeatures, thresholdChoices } from '../lib/serverFeatures';
 import { hostOf, prepareServerUrl, type ServerUrlProblem } from '../lib/serverUrl';
 import { type Feature, type LocalState, DEFAULT_SETTINGS, LOCAL_KEYS, MAX_PINNED, SETTINGS_TAB_KEY, emptyState, hasConsent, loadLocal, recordConsent, saveLocal } from '../lib/settings';
@@ -658,6 +658,12 @@ export class DesktopApp {
     return false;
   }
 
+  /** A live stop ended `timer`: a queued stop about it (blocked by a 409) has nothing left to do (ZCD-v-M1). */
+  private dropQueuedStopOf(timer: Timer): void {
+    const head = this.queue.list()[0];
+    if (head !== undefined && closesTimer(head, timer.startedAt)) this.queue.dropFirst();
+  }
+
   /** A stop / switch queued offline that the server refused for a missing field: when it was last asked about. */
   private queueAskedAt = 0;
 
@@ -1089,12 +1095,12 @@ export class DesktopApp {
       this.report(result, true);
       blocked = result.blocked;
     }
-    const context = api.currentContext ?? 'personal';
     const [timer, tasks, me, entries] = await Promise.all([api.timer(), api.tasks({ search: this.query }), api.me(), this.loadEntries(api)]);
     this.offline = false;
     this.tasks = tasks;
-    this.rememberTaskContexts(tasks, context);
-    if (timer !== null) this.rememberTaskContexts([{ id: timer.taskId, title: timer.taskTitle }], context);
+    // From task lists only (`GET timer` is per person, not per organization, audit ZCD-v-L1), in the context the list
+    // was actually served in (a refused read falls back to Personal, ZCD-v-I1).
+    this.rememberTaskContexts(tasks, api.currentContext ?? 'personal');
     if (blocked !== undefined) void this.answerQueued(blocked);
     this.setMe(me);
     this.entries = entries;
@@ -1123,7 +1129,9 @@ export class DesktopApp {
   /** Tells the person what the replay did: count, dropped actions and every time the server moved (clamp). */
   private report(result: SyncResult, announceSynced: boolean): void {
     if (announceSynced && result.synced > 0) this.setNotice(this.t('synced', { count: result.synced }));
-    if (result.dropped.length > 0) this.setNotice(this.t('dropped', { count: result.dropped.length }));
+    const stale = result.dropped.filter((item) => item.code === STALE).length;
+    if (result.dropped.length > stale) this.setNotice(this.t('dropped', { count: result.dropped.length - stale }));
+    if (stale > 0) this.setNotice(this.t('queuedStale', { count: stale }));
     if (result.clamps.length > 0) this.clampNotes = [...this.clampNotes, ...result.clamps].slice(-5);
   }
 
@@ -1272,6 +1280,7 @@ export class DesktopApp {
         try {
           await api.stopAt({ note, allocation, ...(asked ? { endedAt } : {}) });
           if (allocation.activityTypeKey !== undefined) this.rememberActivity(timer.taskId, allocation.activityTypeKey);
+          this.dropQueuedStopOf(timer);
         } catch (error) {
           const ask = this.deps.askAllocation;
           if (!(error instanceof ApiError && isAllocationRequired(error.code) && ask !== undefined)) throw error;
@@ -1293,6 +1302,7 @@ export class DesktopApp {
           }
           await api.stopAt({ note, allocation: queuedAllocation, endedAt });
           if (answer.activityTypeKey !== undefined) this.rememberActivity(timer.taskId, answer.activityTypeKey);
+          this.dropQueuedStopOf(timer);
         }
         this.takeNote();
         await this.setTimer(null);

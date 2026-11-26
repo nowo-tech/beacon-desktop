@@ -457,5 +457,6 @@
   "taskOtherOrg": "«{task}» es de otra organización. Cambia a ella primero; la lista de tareas se recarga.",
   "contextChangedDuringDialog": "La organización cambió mientras la pregunta estaba abierta, así que no se ha iniciado ni parado nada.",
   "timerChanged": "El temporizador cambió entretanto en otro dispositivo, así que no se ha parado aquí.",
-  "queuedNeedsFields": "Una parada guardada sin conexión aún necesita un tipo de actividad: Beacon mantiene el temporizador en marcha hasta que elijas uno."
+  "queuedNeedsFields": "Una parada guardada sin conexión aún necesita un tipo de actividad: Beacon mantiene el temporizador en marcha hasta que elijas uno.",
+  "queuedStale": "Se han omitido {count} parada(s) guardada(s) sin conexión: ese temporizador ya estaba parado (aquí o en otro dispositivo), así que el más reciente sigue igual."
 }

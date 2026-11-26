@@ -678,6 +678,102 @@ describe('audit ZCD fixes', () => {
     expect(ui.app.pendingSync).toBe(1);
   });
 
+  it('ZCD-v-M1: a blocked queued stop never stops a newer timer', async () => {
+    await env.control('config', { allocation: { requireActivityType: true } });
+    const { net, platform } = droppable();
+    const ui = await signedIn(platform);
+    ui.app.setAllocationSetting({ askOn: 'start', inheritActivity: false });
+    const api = ui.app.timeApi();
+    // 1. T1 runs without a type; it is stopped offline (queued).
+    await api?.start('T-103');
+    await ui.app.refresh();
+    const first = ui.app.state.activeTimer;
+    net.down = true;
+    expect(await ui.app.stop()).toBe('queued');
+    // 2. Back online the replay is refused (409); the person cancels; the server still runs T1.
+    net.down = false;
+    ui.app.offline = false;
+    void ui.app.refresh();
+    await until(dialogOpen, 'the dialog for the queued stop');
+    ui.$<HTMLButtonElement>('#alloc-cancel').click();
+    await until(() => ui.app.state.activeTimer?.id === first?.id && !ui.app.busy, 'the server timer shown again');
+    expect(ui.app.pendingSync).toBe(1);
+    // 3. Another device ends T1 and starts T2.
+    await api?.allocate({ activityTypeKey: 'dev' });
+    await api?.stop();
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await api?.start('T-104');
+    const second = await api?.timer();
+    // 4. The queued stop comes up again: it is skipped, T2 keeps running and keeps its time.
+    (ui.app as unknown as { queueAskedAt: number }).queueAskedAt = 0;
+    const stopsBefore = (await requests()).filter((item) => item.path.endsWith('timer/stop')).length;
+    await ui.app.refresh();
+    expect(dialogOpen()).toBe(false);
+    expect(ui.app.pendingSync).toBe(0);
+    expect(ui.app.notice).toContain('had already been stopped');
+    expect((await requests()).filter((item) => item.path.endsWith('timer/stop')).length).toBe(stopsBefore);
+    expect((await api?.timer())?.id).toBe(second?.id);
+    expect(ui.app.state.activeTimer?.taskId).toBe('T-104');
+  });
+
+  it('ZCD-v-M1: a live stop of the same timer removes the blocked queued stop', async () => {
+    await env.control('config', { allocation: { requireActivityType: true } });
+    const { net, platform } = droppable();
+    const ui = await signedIn(platform);
+    ui.app.setAllocationSetting({ askOn: 'start', inheritActivity: false });
+    const api = ui.app.timeApi();
+    await api?.start('T-103');
+    await ui.app.refresh();
+    net.down = true;
+    expect(await ui.app.stop()).toBe('queued');
+    net.down = false;
+    ui.app.offline = false;
+    void ui.app.refresh();
+    await until(dialogOpen, 'the dialog for the queued stop');
+    ui.$<HTMLButtonElement>('#alloc-cancel').click();
+    await until(() => ui.app.state.activeTimer !== null && !ui.app.busy, 'the server timer shown again');
+    // The person stops it live (the 409 asks), then starts another task: the queued stop is gone.
+    const stopping = ui.app.stop();
+    await until(dialogOpen, 'the live dialog');
+    await chooseActivity(ui, 'dev');
+    submit(ui);
+    expect(await stopping).toBe('stopped');
+    expect(ui.app.pendingSync).toBe(0);
+    const starting = startTask(ui, 'T-104');
+    await until(dialogOpen, 'the start dialog');
+    await chooseActivity(ui, 'review');
+    submit(ui);
+    await starting;
+    (ui.app as unknown as { queueAskedAt: number }).queueAskedAt = 0;
+    await ui.app.refresh();
+    expect(ui.app.state.activeTimer?.taskId).toBe('T-104');
+    expect((await api?.timer())?.taskId).toBe('T-104');
+  });
+
+  it('ZCD-v-L1: the running timer\'s task is not filed under the organization shown', async () => {
+    await env.control('config', { contextPolicy: { required: true, refuse: [] }, contextTasks: { personal: ['T-101'], [ORG]: ['T-104'], [ORG2]: ['T-106'] } });
+    const ui = await signedIn();
+    await until(() => ui.shell.contexts.length === 3, 'the time contexts');
+    await ui.shell.switchContext(ORG2);
+    await until(() => ui.app.tasks.some((task) => task.id === 'T-106'), 'the Harbor Studio tasks');
+    // A timer started on the web in Lumen Works while the desktop shows Harbor Studio.
+    const web = new TimeTrackApi({ baseUrl: env.url, source: 'web', token: await token(), fetchImpl: nodeFetch, context: ORG });
+    await web.start('T-104');
+    await ui.app.refresh();
+    expect(ui.app.state.activeTimer?.taskId).toBe('T-104');
+    expect(ui.app.state.taskContexts['T-104']).toBeUndefined();
+    await web.stop();
+    await ui.app.refresh();
+    ui.app.state.lastTask = { id: 'T-104', title: 'Fix invoice rounding bug' };
+    // Unlisted here: not offered by Resume once Lumen Works listed it.
+    await ui.shell.switchContext(ORG);
+    await until(() => ui.app.tasks.some((task) => task.id === 'T-104'), 'the Lumen Works tasks');
+    expect(ui.app.state.taskContexts['T-104']).toBe(ORG);
+    await ui.shell.switchContext(ORG2);
+    await until(() => ui.app.tasks.some((task) => task.id === 'T-106'), 'the Harbor Studio tasks again');
+    expect(ui.app.lastTask()?.id).not.toBe('T-104');
+  });
+
   it('M3: Resume and pinned tasks never start another organization\'s task', async () => {
     await env.control('config', { contextPolicy: { required: true, refuse: [] }, contextTasks: { personal: ['T-101', 'T-102'], [ORG]: ['T-104', 'T-105'], [ORG2]: ['T-106', 'T-107'] } });
     const ui = await signedIn();

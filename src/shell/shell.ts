@@ -538,7 +538,8 @@ export class Shell {
     if (app !== null && (app.pendingSync > 0 || app.offline)) {
       if (app.pendingSync > 0 && !app.offline) await app.refresh();
       if (app.pendingSync > 0 || app.offline) {
-        this.announce(this.t('contextOffline'));
+        // ZCD-v-I2: online with a blocked queue (a 409 waiting for a field) is not "offline".
+        this.announce(this.t(app.offline ? 'contextOffline' : 'contextQueued'));
         return;
       }
     }
@@ -556,7 +557,7 @@ export class Shell {
       if (outcome === 'cancelled') return;
       // Audit ZCD-M1: a stop only queued (the network dropped) is sent from here first; no switch before it is.
       if (outcome === 'queued' || app.pendingSync > 0) {
-        this.announce(this.t('contextOffline'));
+        this.announce(this.t(app.offline ? 'contextOffline' : 'contextQueued'));
         return;
       }
       if (app.state.activeTimer !== null) {

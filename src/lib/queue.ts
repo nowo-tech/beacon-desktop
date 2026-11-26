@@ -39,6 +39,11 @@ export class OfflineQueue {
     else this.storage.setItem(KEY, JSON.stringify(actions));
   }
 
+  /** Removes the first action (a live stop already ended the timer it was about, audit ZCD-v-M1). */
+  dropFirst(): void {
+    this.write(this.list().slice(1));
+  }
+
   /** Replaces the first action (the person answered the fields a replay was refused for, audit ZCD-M2). */
   replaceFirst(action: QueuedAction): void {
     const [, ...rest] = this.list();

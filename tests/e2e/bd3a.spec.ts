@@ -76,6 +76,45 @@ test('two organizations: a stop queued offline replays in its own organization b
   await expect(page.locator('[data-task="T-104"]')).toHaveCount(0);
 });
 
+test('a queued stop refused for a missing field never stops the newer timer (ZCD-v-M1)', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await signIn(page);
+  await page.evaluate(() => (window as unknown as { __timeTrack: { app: { setAllocationSetting(p: object): void } } }).__timeTrack.app.setAllocationSetting({ askOn: 'start', inheritActivity: false }));
+  // "Another device": the same account with its own token.
+  const login = (await (await fetch(`${MOCK}/api/time-track/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'ada@example.com', password: 'app-password-123', clientType: 'web' }) })).json()) as { token: string };
+  const other = (path: string, body: unknown = {}) =>
+    fetch(`${MOCK}/api/time-track/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${login.token}`, 'X-Beacon-Context': 'personal' }, body: JSON.stringify(body) });
+  // 1. T1 runs without a type; the desktop stops it offline (queued).
+  await other('timer/start', { taskId: 'T-103', source: 'web' });
+  await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
+  await expect(page.locator('#timer-pill.running')).toBeVisible();
+  await context.setOffline(true);
+  await page.locator('#timer-pill .tp-act.stop').click();
+  await expect(page.locator('#timer-pill.running')).toHaveCount(0);
+  // 2. Back online: the replay is refused (409), the dialog asks, the person cancels.
+  await context.setOffline(false);
+  void page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
+  await expect(page.locator('#alloc-dialog')).toBeVisible();
+  await page.locator('#alloc-cancel').click();
+  await expect(page.locator('#timer-pill.running')).toBeVisible();
+  // 3. Another device ends T1 and starts T2.
+  await other('timer/allocate', { activityTypeKey: 'dev' });
+  await other('timer/stop');
+  await page.waitForTimeout(1100);
+  await other('timer/start', { taskId: 'T-104', source: 'web' });
+  // 4. The queued stop comes up again: skipped, T2 keeps running.
+  await page.evaluate(() => {
+    const app = (window as unknown as { __timeTrack: { app: { queueAskedAt: number; refresh(): Promise<void> } } }).__timeTrack.app;
+    app.queueAskedAt = 0;
+    return app.refresh();
+  });
+  await expect(page.locator('#notice')).toContainText('had already been stopped');
+  expect(await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.pendingSync)).toBe(0);
+  const state = (await control('state')) as { timers: Record<string, { taskId: string }> };
+  expect(Object.values(state.timers).map((timer) => timer.taskId)).toEqual(['T-104']);
+  await expect(page.locator('#timer-pill .tp-task')).toHaveText('Fix invoice rounding bug');
+});
+
 test('mini timer keeps keyboard focus across Stop and Resume', async ({ page }) => {
   await page.setViewportSize({ width: 312, height: 132 });
   const view = {
