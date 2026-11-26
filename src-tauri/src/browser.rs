@@ -219,7 +219,12 @@ fn mailto_without_extras(mut url: url::Url) -> url::Url {
     if kept.is_empty() {
         url.set_query(None);
     } else {
-        url.query_pairs_mut().clear().extend_pairs(kept);
+        // RFC 6068: a space is `%20`, not form encoding's `+` (a literal `+` is already `%2B`), ZBZ-v-I2.
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(kept)
+            .finish()
+            .replace('+', "%20");
+        url.set_query(Some(&query));
     }
     url
 }
@@ -1332,6 +1337,11 @@ mod tests {
         assert_eq!(
             check_chat_url("mailto:x@example.com?attach=a#frag").unwrap(),
             "mailto:x@example.com"
+        );
+        // ZBZ-v-I2: a space stays `%20` (RFC 6068), a literal plus stays `%2B`.
+        assert_eq!(
+            check_chat_url("mailto:x@example.com?subject=Hello%20world&body=1+1%2B1").unwrap(),
+            "mailto:x@example.com?subject=Hello%20world&body=1%201%2B1"
         );
         for bad in [
             "javascript:alert(1)",

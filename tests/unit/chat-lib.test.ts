@@ -70,6 +70,8 @@ describe('chat API parsers', () => {
     // ZBZ-L3: to / cc / bcc / subject / body only.
     expect(safeUrl('mailto:x@example.com?subject=Hi&attach=~/.ssh/id_rsa&ATTACHMENT=/etc/passwd&Body=b', ORIGIN)).toBe('mailto:x@example.com?subject=Hi&Body=b');
     expect(safeUrl('mailto:x@example.com?attach=a', ORIGIN)).toBe('mailto:x@example.com');
+    // ZBZ-v-I2: spaces are `%20` (RFC 6068), a literal plus stays `%2B`.
+    expect(safeUrl('mailto:x@example.com?subject=Hello%20world&body=a%2Bb', ORIGIN)).toBe('mailto:x@example.com?subject=Hello%20world&body=a%2Bb');
     expect(safeUrl('/dashboard/task/1', ORIGIN)).toBe('https://beacon.example/dashboard/task/1');
     for (const bad of ['javascript:alert(1)', 'data:text/html,x', 'file:///etc/passwd', 'https://u:p@example.com', '', '   ', 42, null, 'http://[bad']) expect(safeUrl(bad, ORIGIN)).toBeNull();
   });

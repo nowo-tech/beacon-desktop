@@ -225,7 +225,8 @@ const MAILTO_PARAMS = new Set(['to', 'cc', 'bcc', 'subject', 'body']);
 
 function mailtoWithoutExtras(url: URL): string {
   const kept = [...url.searchParams].filter(([name]) => MAILTO_PARAMS.has(name.toLowerCase()));
-  const query = new URLSearchParams(kept).toString();
+  // RFC 6068: a space is `%20` (form encoding's `+` would reach the mail handler as a literal plus, ZBZ-v-I2).
+  const query = new URLSearchParams(kept).toString().replace(/\+/g, '%20');
   return `mailto:${url.pathname}${query === '' ? '' : `?${query}`}`;
 }
 
