@@ -291,6 +291,9 @@ describe('shell and chat module', () => {
     ui.$<HTMLButtonElement>(`[data-conv="${ENVELOPE}"]`).click();
     // Start a timer in Time, come back, switch: the prompt asks first. Cancel keeps both.
     ui.shell.show('time');
+    // The time API follows the organization (X-Beacon-Context, BD-3a): its tasks reload first.
+    expect(ui.app.context).toBe(ORG);
+    await until(() => !ui.app.busy, 'the time module to reload');
     (ui.root.querySelector('[data-task="T-104"] .row-action') as HTMLButtonElement).click();
     await until(() => ui.app.state.activeTimer !== null, 'the timer');
     expect(ui.$('#timer-pill').classList.contains('running')).toBe(true);
@@ -428,8 +431,10 @@ describe('shell and chat module', () => {
     const ui = await connected();
     expect(ui.shell.context).toBe('personal');
     expect(JSON.parse(localStorage.getItem(SHELL_KEY) ?? '{}').context).toBe('personal');
-    const before = ((await env.control('state')) as { requests: { path: string; context?: string | null }[] }).requests.filter((item) => item.context === 'org:gone');
+    const before = ((await env.control('state')) as { requests: { path: string; context?: string | null }[] }).requests.filter((item) => item.context === 'org:gone' && item.path.startsWith('/api/chat/'));
     expect(before.map((item) => item.path)).toEqual(['/api/chat/v1/me']);
+    // The time API started in the remembered context and follows the chat's fallback (BD-3a).
+    expect(ui.app.context).toBe('personal');
     // A list refused for an organization: Personal once, no loop, not remembered.
     await inOrg(ui);
     await ui.shell.chat.switchContext('org:revoked');

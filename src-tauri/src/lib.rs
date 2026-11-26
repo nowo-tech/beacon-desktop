@@ -13,6 +13,7 @@ mod autostart;
 mod browser;
 mod heartbeat;
 mod meeting;
+mod mini;
 mod net;
 mod notify;
 mod pinning;
@@ -1231,6 +1232,7 @@ pub fn run() {
             app.manage(HeartbeatState(Mutex::new(heartbeat::Heartbeat::new())));
             app.manage(MainFocus::default());
             app.manage(prompt::PromptState::default());
+            app.manage(mini::MiniState::default());
             // The pause after a declined sign-in survives a restart (audit GO-I2).
             // Time token (`session-token`) and chat token (`chat-token`, BD-2): two entries of the same service.
             let session = secret::Session::new(Box::new(secret::Keychain::time()))
@@ -1277,6 +1279,10 @@ pub fn run() {
                 api.prevent_close();
                 let _ = window.set_focus();
             }
+            // The mini timer was closed with its own button: the main window updates its toggle (BD-3a).
+            WindowEvent::Destroyed if window.label() == mini::LABEL => {
+                mini::closed(window.app_handle());
+            }
             WindowEvent::Focused(focused) if window.label() == "main" => {
                 if let Some(state) = window.app_handle().try_state::<MainFocus>() {
                     if let Ok(mut at) = state.blurred_at.lock() {
@@ -1313,6 +1319,11 @@ pub fn run() {
             prompt::prompt_focus,
             prompt::prompt_close,
             prompt::prompt_show_main,
+            mini::mini_open,
+            mini::mini_update,
+            mini::mini_close,
+            mini::mini_view,
+            mini::mini_action,
             browser::open_external,
             browser::open_chat_link,
             browser::list_browsers,
@@ -1333,7 +1344,7 @@ mod tests {
     mod app_commands {
         include!("../app-commands.rs");
     }
-    use app_commands::{APP_COMMANDS, MAIN_COMMANDS, PROMPT_COMMANDS};
+    use app_commands::{APP_COMMANDS, MAIN_COMMANDS, MINI_COMMANDS, PROMPT_COMMANDS};
 
     fn granted(capability: &str) -> Vec<String> {
         let json: serde_json::Value = serde_json::from_str(capability).unwrap();
@@ -1349,6 +1360,7 @@ mod tests {
     fn every_app_command_is_declared_and_granted_to_exactly_one_window() {
         let main = granted(include_str!("../capabilities/default.json"));
         let prompt = granted(include_str!("../capabilities/prompt.json"));
+        let mini = granted(include_str!("../capabilities/mini.json"));
         let allow = |command: &str| format!("allow-{}", command.replace('_', "-"));
         for command in MAIN_COMMANDS {
             assert!(main.contains(&allow(command)), "{command} for main");
@@ -1356,16 +1368,31 @@ mod tests {
                 !prompt.contains(&allow(command)),
                 "{command} not for prompt"
             );
+            assert!(!mini.contains(&allow(command)), "{command} not for mini");
         }
         for command in PROMPT_COMMANDS {
             assert!(prompt.contains(&allow(command)), "{command} for prompt");
             assert!(!main.contains(&allow(command)), "{command} not for main");
+            assert!(!mini.contains(&allow(command)), "{command} not for mini");
         }
-        // The prompt window gets nothing else but listening to its content.
+        for command in MINI_COMMANDS {
+            assert!(mini.contains(&allow(command)), "{command} for mini");
+            assert!(!main.contains(&allow(command)), "{command} not for main");
+            assert!(
+                !prompt.contains(&allow(command)),
+                "{command} not for prompt"
+            );
+        }
+        // The prompt and mini windows get nothing else but listening to their content.
         assert_eq!(prompt.len(), PROMPT_COMMANDS.len() + 2);
+        assert_eq!(mini.len(), MINI_COMMANDS.len() + 2);
+        assert!(mini
+            .iter()
+            .all(|p| p.starts_with("allow-mini-") || p.starts_with("core:event:allow-")));
         let mut both: Vec<&str> = MAIN_COMMANDS
             .iter()
             .chain(PROMPT_COMMANDS)
+            .chain(MINI_COMMANDS)
             .copied()
             .collect();
         both.sort();

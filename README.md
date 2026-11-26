@@ -116,6 +116,20 @@ servers: revoke the device in Beacon, Account → Security) and removes it from 
 signed in. Needs Beacon with
 TimeTrackBundle 2.2 and ChatKitBundle 2.4. Shortcuts: `?` in Chat.
 
+## Organizations, required fields and the mini timer (0.11.0)
+
+- **Organization**: time tracking follows the organization chosen on the rail (or the title-bar dropdown): every
+  time request names it, as the chat does. Switching with a running timer stops it first (a timer never keeps running
+  in another organization); *Cancel* keeps both. Offline, the switch waits until the time recorded offline (that stop
+  too) has been sent; it is always sent in the organization it was recorded in. Resume and pinned tasks only offer
+  tasks of the organization shown.
+- **Required fields**: when your organization requires an activity type, the app asks for it on stop (default), on
+  start, or both (Settings → Time tracking), with an optional client or subject. A stop saved offline keeps your
+  answer and the time you clicked; if Beacon still asks for a field when it is sent, the app asks you again.
+  "Use the task's last activity type" starts a task with the type you used last with it on this computer.
+- **Mini timer**: a small window that stays on top (title-bar button or `Ctrl/Cmd+Shift+M`): the running task, its
+  organization and time, Stop / Resume and "Open Beacon Desktop". `Esc` closes it.
+
 ## Features
 
 - Tray timer (`H:MM` and task, tooltip with today's total, running / stopped icon) in the Windows notification area
@@ -414,6 +428,10 @@ required" screen send you to the Store listing instead.
 - `src-tauri/capabilities/prompt.json`, window `prompt` (the "Still there?" window): `core:event:allow-listen` /
   `allow-unlisten` (its content) and `prompt_view`, `prompt_answer`, `prompt_show_main` ("Open Beacon Desktop"). No
   keychain, updater, tray, network, opener, notification, window or autostart permission.
+- `src-tauri/capabilities/mini.json`, window `mini` (the mini timer, 0.11.0): `core:event:allow-listen` /
+  `allow-unlisten` (its view) and `mini_view`, `mini_action` (`start`, `stop`, `expand`, `close`; anything else is
+  refused). The main window opens, updates and closes it (`mini_open`, `mini_update`, `mini_close`) and may bring
+  itself forward (`core:window:allow-show`, `allow-unminimize`, `allow-set-focus`) for a dialog it must answer.
 - Defence in depth: every command also checks the calling window's label (`main` for the keychain, updater, tray,
   shortcut, heartbeat, notifications and opening / focusing / closing the prompt; `prompt` for reading its view,
   answering and "Open Beacon Desktop"). Answers are allow-listed (`{ action, note?, taskId? }`), pose ids are looked up in

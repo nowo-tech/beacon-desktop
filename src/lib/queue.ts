@@ -1,5 +1,5 @@
 import type { TimeTrackApi } from '../api/client';
-import { type QueuedAction, type SyncResult, syncQueue } from './replay';
+import { type ApiFor, type QueuedAction, type SyncResult, syncQueue } from './replay';
 import type { ServerFeatures } from './serverFeatures';
 
 export type { QueuedAction, SyncResult } from './replay';
@@ -39,7 +39,19 @@ export class OfflineQueue {
     else this.storage.setItem(KEY, JSON.stringify(actions));
   }
 
-  sync(api: TimeTrackApi, now: () => Date = () => new Date(), features?: ServerFeatures): Promise<SyncResult> {
+  /** Removes the first action (a live stop already ended the timer it was about, audit ZCD-v-M1). */
+  dropFirst(): void {
+    this.write(this.list().slice(1));
+  }
+
+  /** Replaces the first action (the person answered the fields a replay was refused for, audit ZCD-M2). */
+  replaceFirst(action: QueuedAction): void {
+    const [, ...rest] = this.list();
+    this.write([action, ...rest]);
+  }
+
+  /** Replays in order, each action in the context it was recorded in (`apiFor`). */
+  sync(api: TimeTrackApi | ApiFor, now: () => Date = () => new Date(), features?: ServerFeatures): Promise<SyncResult> {
     return syncQueue({ read: () => this.list(), write: (actions) => this.write(actions) }, api, now, features);
   }
 }

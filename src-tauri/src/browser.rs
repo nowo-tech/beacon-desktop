@@ -210,16 +210,26 @@ const MAILTO_PARAMS: &[&str] = &["to", "cc", "bcc", "subject", "body"];
 
 /// The `mailto:` URL with only [`MAILTO_PARAMS`] (names compared without case), and no fragment.
 fn mailto_without_extras(mut url: url::Url) -> url::Url {
-    let kept: Vec<(String, String)> = url
-        .query_pairs()
-        .filter(|(name, _)| MAILTO_PARAMS.contains(&name.to_ascii_lowercase().as_str()))
-        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+    // The raw pairs are kept as written: RFC 6068 has no form encoding, so `+` stays a plus (audit ZCD-I1) and a
+    // space is already `%20` (the URL parser encodes it). Only the name is decoded, to compare it.
+    let kept: Vec<String> = url
+        .query()
+        .unwrap_or_default()
+        .split('&')
+        .filter(|pair| {
+            let name = pair.split('=').next().unwrap_or_default();
+            let decoded: String = url::form_urlencoded::parse(name.as_bytes())
+                .map(|(key, _)| key.into_owned())
+                .collect();
+            MAILTO_PARAMS.contains(&decoded.to_ascii_lowercase().as_str())
+        })
+        .map(str::to_string)
         .collect();
     url.set_fragment(None);
     if kept.is_empty() {
         url.set_query(None);
     } else {
-        url.query_pairs_mut().clear().extend_pairs(kept);
+        url.set_query(Some(&kept.join("&")));
     }
     url
 }
@@ -1332,6 +1342,15 @@ mod tests {
         assert_eq!(
             check_chat_url("mailto:x@example.com?attach=a#frag").unwrap(),
             "mailto:x@example.com"
+        );
+        // ZBZ-v-I2 / ZCD-I1: a space stays `%20` (RFC 6068), a raw `+` stays a plus, `%2B` stays `%2B`.
+        assert_eq!(
+            check_chat_url("mailto:x@example.com?subject=Hello%20world&body=1+1%2B1").unwrap(),
+            "mailto:x@example.com?subject=Hello%20world&body=1+1%2B1"
+        );
+        assert_eq!(
+            check_chat_url("mailto:x@example.com?subject=C++&%61ttach=x&body=hi there").unwrap(),
+            "mailto:x@example.com?subject=C++&body=hi%20there"
         );
         for bad in [
             "javascript:alert(1)",

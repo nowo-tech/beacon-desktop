@@ -70,6 +70,12 @@ export interface Me {
   meetings?: MeMeetings | null;
   /** Host pages (1.14): `calendars` = Beacon's *Account → Integrations → Calendars* (https), or null. */
   links?: MeLinks | null;
+  /**
+   * Tenant contexts (TimeTrackBundle 2.2, only with a host context policy): `[{key, label}]`, the default first, and the
+   * key this request named. Absent without a policy. Read defensively (`lib/allocation.ts` `meContexts`).
+   */
+  contexts?: unknown;
+  context?: unknown;
 }
 
 /** `GET me.meetings` (1.14). */
@@ -144,6 +150,36 @@ export interface Metadata {
   [key: string]: unknown;
 }
 
+/** A subject reference sent on writes (TimeTrackBundle 2.1, contract v0.4): `{type, id}`. */
+export interface SubjectRef {
+  type: string;
+  id: string;
+}
+
+/** A subject as the API returns it: readable (`id`, `label`, `url`) or `hidden` (no `id`). Labels are plain text. */
+export interface Subject {
+  type: string;
+  id?: string;
+  label: string;
+  url?: string | null;
+  hidden?: boolean;
+  /** `subjects/search` only: a second line (e.g. the customer's city). */
+  hint?: string | null;
+}
+
+/** An activity type (`GET activity-types`, and `activityType` on timers / entries). */
+export interface ActivityType {
+  key: string;
+  label: string;
+  group?: string | null;
+}
+
+/** What a start, stop, switch or `timer/allocate` may set (contract v0.4). `subject: null` clears it. */
+export interface Allocation {
+  subject?: SubjectRef | null;
+  activityTypeKey?: string;
+}
+
 export interface Timer {
   id: string;
   taskId: string;
@@ -159,6 +195,9 @@ export interface Timer {
   metadata?: Metadata | null;
   /** Absolute URL of the task page (optional, same rules as `Task.url`). */
   url?: string | null;
+  /** TimeTrackBundle 2.1: the subject and activity type of the running time (absent before). */
+  subject?: Subject | null;
+  activityType?: ActivityType | null;
 }
 
 export interface Entry {
@@ -171,6 +210,9 @@ export interface Entry {
   durationSeconds: number;
   source?: string | null;
   metadata?: Metadata | null;
+  /** TimeTrackBundle 2.1 (absent before). */
+  subject?: Subject | null;
+  activityType?: ActivityType | null;
 }
 
 /** `timer/switch` (201) and `timer/discard-idle` (200): the closed entry (if any) and the running timer (if any). */

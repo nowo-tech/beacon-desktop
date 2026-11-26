@@ -30,6 +30,25 @@ const IDLE_THEN = new Set(['continue', 'stop', 'switch']);
 const CLOCK_SKEW_SECONDS = 120;
 const USER_CODE_ALPHABET = 'BCDFGHJKLMNPQRSTVWXZ';
 
+/** Tenant contexts (the same keys as the chat mock): TimeTrackBundle 2.2 `client_api.context` (BD-3a). */
+const TIME_CONTEXTS = [
+  { key: 'personal', label: 'Personal' },
+  { key: 'org:6a0e1f8e-1b2c-4d3e-8f90-a1b2c3d4e5f6', label: 'Lumen Works' },
+  { key: 'org:7b1f2a9f-2c3d-4e4f-9a01-b2c3d4e5f6a7', label: 'Harbor Studio' },
+];
+/** TimeTrackBundle 2.1 activity types and subjects of the demo (spec 256), used when `config.allocation` is set. */
+const ACTIVITY_TYPES = [
+  { key: 'dev', label: 'Development', group: 'Delivery' },
+  { key: 'review', label: 'Code review', group: 'Delivery' },
+  { key: 'meeting', label: 'Meeting', group: 'Coordination' },
+  { key: 'support', label: 'Customer support', group: 'Coordination' },
+];
+const SUBJECTS = [
+  { type: 'customer', id: '42', label: 'Fernhill Retail', hint: 'Bristol' },
+  { type: 'customer', id: '43', label: 'Orbita Logistics', hint: 'Valencia' },
+  { type: 'customer', id: '44', label: 'Acme Corporation', hint: 'Austin' },
+];
+
 const USERS = [
   { id: 1, email: 'ada@example.com', password: 'app-password-123', displayName: 'Ada Lovelace' },
   // A second account for "another person signs in on this computer" (device/approve {"userId": 2}).
@@ -100,6 +119,13 @@ function freshState() {
       meetingsScope: true,
       // Extra generated tasks after the eight above (T-201 "Sample task 1", …): a long list for the scrolling tests.
       extraTasks: 0,
+      // TimeTrackBundle 2.2 context policy (BD-3a): null = none (the header is ignored); else {required, refuse: [keys]}
+      // (`403 context_forbidden` for a refused key, `400 context_required` without a header when required).
+      contextPolicy: null,
+      // TimeTrackBundle 2.1 subjects and activity types: null = a 2.0 server; else {requireActivityType, subjects: bool}.
+      allocation: null,
+      // Tasks listed per context ({context: [task ids]}); null = every task in every context.
+      contextTasks: null,
     },
   };
 }
@@ -230,6 +256,7 @@ export function createMockServer(options = {}) {
       durationSeconds: Math.max(0, Math.round((at.getTime() - startedAt.getTime()) / 1000)),
       source: timer.clientType,
       metadata: note ? { note } : timer.metadata,
+      ...(state.config.allocation !== null ? { subject: timer.subject ?? null, activityType: timer.activityType ?? null } : {}),
     };
     const list = state.entries.get(userId) ?? [];
     list.push(entry);
@@ -304,7 +331,36 @@ export function createMockServer(options = {}) {
     return true;
   }
 
+  /** Applies `{subject?, activityTypeKey?}` of a write to `timer` (2.1); returns an error answer or null. */
+  function allocateOn(res, timer, body) {
+    if (state.config.allocation === null) return null;
+    if (body.activityTypeKey !== undefined) {
+      const type = ACTIVITY_TYPES.find((item) => item.key === body.activityTypeKey);
+      if (!type) return error(res, 422, 'activity_type_unknown', 'Unknown activity type.');
+      timer.activityType = { key: type.key, label: type.label };
+    }
+    if (body.subject === null) timer.subject = null;
+    else if (body.subject !== undefined) {
+      const subject = SUBJECTS.find((item) => item.type === body.subject?.type && item.id === body.subject?.id);
+      if (!subject) return error(res, 403, 'subject_forbidden', 'Subject not found.');
+      timer.subject = { type: subject.type, id: subject.id, label: subject.label, url: null };
+    }
+    return null;
+  }
+
+  /** TimeTrackBundle 2.2 context policy: the header check of every request (null = go on). */
+  function contextRefused(req, res) {
+    const policy = state.config.contextPolicy;
+    // Authentication comes first (an unauthenticated request answers 401, the connect preflight relies on it).
+    if (policy === null || !(req.headers.authorization ?? '').startsWith('Bearer ')) return null;
+    const header = req.headers['x-beacon-context'];
+    if (header === undefined) return policy.required ? error(res, 400, 'context_required', 'X-Beacon-Context is required.') : null;
+    if (!TIME_CONTEXTS.some((item) => item.key === header) || (policy.refuse ?? []).includes(header)) return error(res, 403, 'context_forbidden', 'You may not use this context.');
+    return null;
+  }
+
   async function api(req, res, route, url, body) {
+    if (!['POST login', 'POST logout', 'POST device/code', 'POST device/token'].includes(`${req.method} ${route}`) && contextRefused(req, res) !== null) return;
     switch (`${req.method} ${route}`) {
       case 'POST login': {
         const user = USERS.find((u) => u.email === body.username && u.password === body.password);
@@ -337,6 +393,9 @@ export function createMockServer(options = {}) {
           ...(state.config.locale !== null ? { locale: state.config.locale } : {}),
           ...(state.config.minSupportedVersion ? { minSupportedVersion: state.config.minSupportedVersion } : {}),
           ...meetingsOfMe(),
+          ...(state.config.contextPolicy !== null
+            ? { contexts: TIME_CONTEXTS.filter((item) => !(state.config.contextPolicy.refuse ?? []).includes(item.key)), context: req.headers['x-beacon-context'] ?? null }
+            : {}),
           ...(v110()
             ? {
                 features: {
@@ -349,6 +408,14 @@ export function createMockServer(options = {}) {
                   workday: false,
                   monitoring: false,
                   ...(meetingsOn() ? { meetings: true } : state.config.meetings !== null ? { meetings: false } : {}),
+                  ...(state.config.allocation !== null
+                    ? {
+                        subjects: state.config.allocation.subjects === false ? [] : [{ type: 'customer', label: 'Customer', allowsTask: true }],
+                        activityTypes: true,
+                        requireAllocation: false,
+                        requireActivityType: state.config.allocation.requireActivityType === true,
+                      }
+                    : {}),
                 },
                 limits: {
                   backdate: { max_seconds: state.config.backdateMaxSeconds, clock_skew_seconds: CLOCK_SKEW_SECONDS },
@@ -367,8 +434,10 @@ export function createMockServer(options = {}) {
         const search = (url.searchParams.get('search') ?? '').toLowerCase();
         const limit = Math.min(Number(url.searchParams.get('limit') ?? 50) || 50, 50);
         const offset = Number(url.searchParams.get('offset') ?? 0) || 0;
+        // BD-3a: `contextTasks` ({context: [task ids]}) lists only those tasks in that context, as Beacon's filter does.
+        const only = state.config.contextTasks?.[req.headers['x-beacon-context'] ?? 'personal'] ?? null;
         const tasks = allTasks().filter(
-          (t) => search === '' || t.title.toLowerCase().includes(search) || t.id.toLowerCase() === search,
+          (t) => (only === null || only.includes(t.id)) && (search === '' || t.title.toLowerCase().includes(search) || t.id.toLowerCase() === search),
         );
         return send(res, 200, { tasks: tasks.slice(offset, offset + limit).map((t) => withUrl(t, t.id)) });
       }
@@ -392,7 +461,10 @@ export function createMockServer(options = {}) {
           return error(res, 409, 'timer_running', 'A timer is already running.');
         }
         const clamp = startedAt !== undefined ? clampStart(session.userId, startedAt) : null;
+        const probe = {};
+        if (allocateOn(res, probe, body) !== null) return;
         const timer = startTimer(session.userId, body.taskId, body.note, body.source ?? session.clientType);
+        if (state.config.allocation !== null) Object.assign(timer, { subject: probe.subject ?? null, activityType: probe.activityType ?? null });
         if (clamp !== null) timer.startedAt = clamp.applied;
         return send(res, 201, clamp !== null ? { timer, startedAtResult: clamp } : { timer });
       }
@@ -404,6 +476,13 @@ export function createMockServer(options = {}) {
           return error(res, 400, 'invalid_request', 'endedAt must be an RFC 3339 date-time.');
         }
         const timer = state.timers.get(session.userId);
+        if (timer && state.config.allocation !== null) {
+          const draft = { ...timer };
+          if (allocateOn(res, draft, body) !== null) return;
+          // 2.1: a refused stop writes nothing and the timer keeps running.
+          if (state.config.allocation.requireActivityType && !draft.activityType) return send(res, 409, { error: 'activity_type_required', message: 'Choose an activity type before you stop the timer.', timer });
+          Object.assign(timer, { subject: draft.subject ?? null, activityType: draft.activityType ?? null });
+        }
         const clamp = timer && endedAt !== undefined ? clampStop(timer, endedAt) : null;
         const entry = stopTimer(session.userId, body.note, clamp !== null ? new Date(clamp.applied) : undefined);
         if (!entry) return error(res, 404, 'no_active_timer', 'No active timer.');
@@ -417,9 +496,34 @@ export function createMockServer(options = {}) {
         if (!validTask(body)) {
           return error(res, 403, 'task_forbidden', 'You may not track time on this task.');
         }
+        const probe = {};
+        if (allocateOn(res, probe, body) !== null) return;
         const entry = stopTimer(session.userId, body.note) ?? null;
         const timer = startTimer(session.userId, body.taskId, undefined, body.source ?? session.clientType, meeting ? 'meeting' : null);
+        if (state.config.allocation !== null) Object.assign(timer, { subject: probe.subject ?? null, activityType: probe.activityType ?? null });
         return send(res, 201, { entry, timer });
+      }
+      case 'POST timer/allocate': {
+        const session = auth(req, res, 'timer:write');
+        if (!session) return;
+        if (state.config.allocation === null) return error(res, 404, 'not_found', 'Unknown endpoint.');
+        const timer = state.timers.get(session.userId);
+        if (!timer) return error(res, 404, 'no_active_timer', 'No active timer.');
+        if (allocateOn(res, timer, body) !== null) return;
+        return send(res, 200, { timer });
+      }
+      case 'GET activity-types': {
+        if (!auth(req, res, 'tasks:read')) return;
+        if (state.config.allocation === null) return error(res, 404, 'not_found', 'Unknown endpoint.');
+        return send(res, 200, { scopeKey: null, activityTypes: state.config.allocation.noActivityTypes ? [] : ACTIVITY_TYPES });
+      }
+      case 'GET subjects/search': {
+        if (!auth(req, res, 'tasks:read')) return;
+        if (state.config.allocation === null) return error(res, 404, 'not_found', 'Unknown endpoint.');
+        const type = url.searchParams.get('type') ?? '';
+        const q = (url.searchParams.get('q') ?? '').toLowerCase();
+        if (!/^[a-z][a-z0-9_]{0,31}$/.test(type) || q.length > 100) return error(res, 400, 'invalid_request', 'Invalid search.');
+        return send(res, 200, { subjects: SUBJECTS.filter((item) => item.type === type && (q === '' || item.label.toLowerCase().includes(q))).map((item) => ({ ...item, url: null })) });
       }
       case 'POST timer/discard-idle': {
         const session = auth(req, res, 'timer:write');
@@ -747,7 +851,7 @@ export function createMockServer(options = {}) {
     }
 
     const route = url.pathname.slice(PREFIX.length + 1);
-    state.requests.push({ method: req.method, path: url.pathname, query: url.search, body: raw, origin: req.headers.origin ?? null });
+    state.requests.push({ method: req.method, path: url.pathname, query: url.search, body: raw, origin: req.headers.origin ?? null, context: req.headers['x-beacon-context'] ?? null });
 
     if (state.config.latencyMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, state.config.latencyMs));

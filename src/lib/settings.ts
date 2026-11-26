@@ -1,3 +1,4 @@
+import { type AskOn, DEFAULT_ASK_ON, sanitizeAskOn, sanitizeTaskActivities, sanitizeTaskContexts } from './allocation';
 import type { Scope, Task, Timer } from '../api/types';
 import { defaultResumeShortcut, DEFAULT_SHORTCUT, type HostOs, hostOs, OLD_DEFAULT_RESUME_SHORTCUT } from '../platform';
 import { EMPTY_MESSAGES, type MessageState, sanitizeMessages } from './friendly';
@@ -67,6 +68,10 @@ export interface Settings extends ReminderSettings {
   meetingMuted: MeetingApp[];
   /** Pin set version whose expiry was already announced with a desktop notification (once per version). */
   pinExpiryNotified: number | null;
+  /** When the required time fields are asked (owner Q5, BD-3a): on start, on stop (default) or both. */
+  askOn: AskOn;
+  /** A start takes the activity type last used with that task on this computer (owner Q5, on by default). */
+  inheritActivity: boolean;
 }
 
 /**
@@ -114,6 +119,10 @@ export interface LocalState {
   nudge: NudgeState;
   /** Meeting detection: the call going on and the question about it (app id and times only). Local only. */
   meeting: MeetingState;
+  /** Last activity type per `context|taskId` (keys only, at most 200; `lib/allocation.ts`). Local only. */
+  taskActivities: Record<string, string>;
+  /** Organization each known task id was listed in (BD-3a, audit ZCD-M3): Resume never starts another org's task. */
+  taskContexts: Record<string, string>;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -139,6 +148,8 @@ export const DEFAULT_SETTINGS: Settings = {
   meetingGeneric: null,
   meetingMuted: [],
   pinExpiryNotified: null,
+  askOn: DEFAULT_ASK_ON,
+  inheritActivity: true,
   ...DEFAULT_REMINDER_SETTINGS,
 };
 
@@ -160,6 +171,8 @@ export function emptyState(): LocalState {
     schedule: { ...EMPTY_SCHEDULE },
     nudge: { ...EMPTY_NUDGE },
     meeting: { ...NO_MEETING },
+    taskActivities: {},
+    taskContexts: {},
   };
 }
 
@@ -206,9 +219,13 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
         meetingGeneric: sanitizeTaskRef(raw.settings?.meetingGeneric),
         meetingMuted: sanitizeMuted(raw.settings?.meetingMuted),
         pinExpiryNotified: typeof raw.settings?.pinExpiryNotified === 'number' ? raw.settings.pinExpiryNotified : null,
+        askOn: sanitizeAskOn(raw.settings?.askOn),
+        inheritActivity: typeof raw.settings?.inheritActivity === 'boolean' ? raw.settings.inheritActivity : DEFAULT_SETTINGS.inheritActivity,
         ...sanitizeReminderSettings(raw.settings),
       },
       meeting: sanitizeMeeting(raw.meeting),
+      taskActivities: sanitizeTaskActivities(raw.taskActivities),
+      taskContexts: sanitizeTaskContexts(raw.taskContexts),
       messages: sanitizeMessages(raw.messages),
       schedule: sanitizeSchedule(raw.schedule),
       nudge: sanitizeNudge(raw.nudge),

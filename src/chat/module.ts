@@ -34,7 +34,11 @@ export interface ChatModuleDeps {
   copy(text: string): Promise<void>;
   announce(text: string): void;
   /** The context changed (the shell redraws its switcher and title). */
-  onContexts(contexts: Context[], current: string | null): void;
+  /**
+   * `remember`: the server served `current`, so it may be kept as the last context. A switch that failed for another
+   * reason (network, 5xx) shows it but does not remember it (audit ZBZ-v-I3).
+   */
+  onContexts(contexts: Context[], current: string | null, remember: boolean): void;
   /** Unread counts per conversation changed (rail badge, tray / Dock badge). */
   onUnread(total: number, capped: boolean): void;
   /** Chat connected / disconnected. */
@@ -239,6 +243,7 @@ export class ChatModule {
   async switchContext(context: string | null, fallback = true): Promise<void> {
     if (this.api === null || this.sync === null) return;
     const previous = this.context;
+    let served = true;
     this.context = context;
     this.api.setContext(context);
     this.history.clear();
@@ -251,19 +256,33 @@ export class ChatModule {
         this.refused.add(context);
         this.context = previous;
         if (fallback) return this.switchContext('personal', false);
+        // Not reached today (`personal` never takes this branch); the refused context is never left on the client.
+        this.api.setContext(previous);
         this.error = this.t('errorGeneric');
         this.render();
         return;
       }
       if (!(error instanceof ApiError && error.status === 401)) this.error = this.t('errorGeneric');
+      served = false;
     }
-    // Only a context the server served is shown as current and remembered.
-    this.deps.onContexts((this.me?.contexts ?? []).filter((item) => !this.refused.has(item.key)), context);
+    // Only a context the server served is shown as current and remembered (ZBZ-v-I3: not after a network error).
+    this.deps.onContexts((this.me?.contexts ?? []).filter((item) => !this.refused.has(item.key)), context, served);
     const server = this.deps.server();
     if (server !== null && context !== null) void this.deps.host.realtimeStart(server, context).catch(() => this.setMode('polling'));
     const last = context === null ? undefined : this.prefs.lastConversation[context];
     if (last !== undefined && this.sync.store.conversation(last) !== null) await this.open(last, false);
     this.render();
+  }
+
+  /**
+   * Another API (the time API, BD-3a) got `403 context_forbidden` for `context`: it is never used again in this run, and
+   * the chat leaves it for Personal when it is the current one (the same single fallback as above).
+   */
+  async refuseContext(context: string): Promise<void> {
+    if (context === 'personal' || this.refused.has(context)) return;
+    this.refused.add(context);
+    if (this.context === context) await this.switchContext('personal', false);
+    else if (this.me !== null) this.deps.onContexts(this.me.contexts.filter((item) => !this.refused.has(item.key)), this.context, false);
   }
 
   private async lostAuthorization(): Promise<void> {
@@ -284,7 +303,7 @@ export class ChatModule {
     this.mode = 'stopped';
     this.connect = { kind: 'idle', message };
     this.deps.onConnection(false);
-    this.deps.onContexts([], null);
+    this.deps.onContexts([], null, false);
     this.deps.onUnread(0, false);
     this.render();
   }

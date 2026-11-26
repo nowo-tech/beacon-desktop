@@ -4,7 +4,7 @@
  * on a 4 / 8 px grid, radii 4 / 6 / 8 / 12, motion 120–180 ms and off with reduced motion. Light and dark sets; the
  * system decides unless Settings → Theme forces one (data-theme on <html>, as styles.css).
  */
-:where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu) {
+:where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) {
   --ink: #0f1c18; --ink-2: #3f514a; --ink-3: #5f6e68;
   --surface: #ffffff; --surface-2: #f6f8f7; --surface-3: #edf2ef; --hover: #f1f5f3;
   --line: #e2e8e4; --line-strong: #cbd5cf;
@@ -29,7 +29,7 @@
   font-family: var(--font-ui);
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) :where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu) {
+  :root:not([data-theme='light']) :where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) {
     --ink: #e5eee9; --ink-2: #b4c4bc; --ink-3: #93a49c;
     --surface: #121a17; --surface-2: #161f1b; --surface-3: #1c2722; --hover: #18221e;
     --line: #233029; --line-strong: #34453d;
@@ -45,7 +45,7 @@
     --shadow-lg: 0 2px 8px rgb(0 0 0 / 50%), 0 24px 60px rgb(0 0 0 / 60%);
   }
 }
-:root[data-theme='dark'] :where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu) {
+:root[data-theme='dark'] :where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) {
   --ink: #e5eee9; --ink-2: #b4c4bc; --ink-3: #93a49c;
   --surface: #121a17; --surface-2: #161f1b; --surface-3: #1c2722; --hover: #18221e;
   --line: #233029; --line-strong: #34453d;
@@ -74,10 +74,10 @@
 #mod-chat { background: var(--surface); }
 
 /* Buttons of the shell's own parts start from nothing (styles.css styles the Time module's buttons). */
-:where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu) button {
+:where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) button {
   font: inherit; color: inherit; min-height: 0; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; gap: 0; cursor: pointer; justify-content: center;
 }
-:where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu) :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 :where(.titlebar, .rail, #mod-chat, .sh-dialog) h1, :where(.titlebar, .rail, #mod-chat, .sh-dialog) h2 { color: var(--ink); flex: none; }
 svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 svg.i.sm { width: 14px; height: 14px; }
@@ -418,5 +418,76 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
   .msg { padding-left: 12px; padding-right: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  :where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu) *, :where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu) *::before, .sh-dialog .dlg { animation: none !important; transition: none !important; }
+  :where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) *, :where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) *::before, .sh-dialog .dlg { animation: none !important; transition: none !important; }
+}
+
+/* ---------- BD-3a: required time fields dialog (Q5) ---------- */
+.alloc-dialog .dlg { width: min(480px, calc(100vw - 32px)); }
+.alloc-b { display: grid; gap: 14px; padding-top: 8px; }
+.alloc-lead { color: var(--ink-2); font-size: var(--fs-sm); }
+.alloc-summary { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); font-size: var(--fs-sm); min-width: 0; }
+.alloc-summary .as-task { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 600; }
+.alloc-summary .as-time { font: 600 var(--fs-sm)/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--signal); min-width: 7ch; text-align: right; }
+.alloc-policy { display: flex; gap: 8px; align-items: flex-start; font-size: var(--fs-xs); color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; }
+.alloc-policy svg { flex: none; color: var(--moss); margin-top: 1px; }
+.sh-dialog .form-row { display: grid; gap: 6px; margin: 0; }
+.sh-dialog .form-row > label { display: block; font-size: var(--fs-sm); font-weight: 600; color: var(--ink); margin: 0; padding: 0; }
+.sh-dialog .form-row > label span { display: inline; padding: 0; margin: 0; }
+.sh-dialog .form-row .req { color: var(--danger); font-weight: 700; margin-left: 2px; }
+.sh-dialog .form-row .opt { font-weight: 400; color: var(--ink-3); }
+/* One line, always present: the field's state never moves the rows below it. */
+.sh-dialog .form-row .help { font-size: var(--fs-xs); color: var(--ink-3); min-height: 1.4em; line-height: 1.4; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.sh-dialog .form-row .help.warn { color: var(--warn); }
+.sh-dialog .form-row .row-msg { display: grid; }
+.sh-dialog .form-row .row-msg > * { grid-area: 1 / 1; }
+.sh-dialog .form-row .field-err { font-size: var(--fs-xs); color: var(--danger); visibility: hidden; min-height: 1.4em; line-height: 1.4; font-weight: 600; }
+.sh-dialog .form-row.invalid .field-err { visibility: visible; }
+.sh-dialog .form-row.invalid .row-msg .help { visibility: hidden; }
+.sh-dialog .form-row.invalid .selectish { border-color: var(--danger); }
+.sh-dialog .selectish, .sh-dialog .combo-field input { width: 100%; height: 34px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); padding: 0 10px; font: inherit; font-size: var(--fs-sm); color-scheme: light dark; }
+.sh-dialog .selectish:focus-visible, .sh-dialog .combo-field input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--ink-3); }
+.sh-dialog .selectish[disabled] { color: var(--ink-3); background: var(--surface-2); cursor: progress; }
+.sh-dialog .link-btn[aria-disabled='true'] { cursor: not-allowed; text-decoration: none; color: var(--ink-3); }
+.sh-dialog .link-btn { display: inline-flex; align-items: center; gap: 4px; color: var(--moss); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; padding: 0 2px; }
+.combo { display: flex; gap: 8px; }
+.combo .combo-type { width: auto; flex: none; max-width: 40%; }
+.combo-field { position: relative; flex: 1; min-width: 0; }
+.combo-field input { padding-right: 34px; }
+.sh-dialog .combo-clear { position: absolute; right: 4px; top: 4px; width: 26px; height: 26px; display: grid; place-items: center; color: var(--ink-3); }
+.sh-dialog .combo-clear:hover { background: var(--hover); color: var(--ink); }
+.sh-dialog .combo-clear[hidden] { display: none; }
+.combo-list { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 2; max-height: 188px; overflow-y: auto; overscroll-behavior: contain; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-md); box-shadow: var(--shadow-md); padding: 4px; }
+.combo-list[hidden] { display: none; }
+.combo-opt { display: flex; align-items: baseline; gap: 8px; padding: 7px 8px; border-radius: var(--r-sm); cursor: pointer; font-size: var(--fs-sm); color: var(--ink); }
+.combo-opt[aria-selected='true'] { background: var(--moss-soft); color: var(--ink); box-shadow: inset 2px 0 0 var(--moss); }
+.combo-opt .co-t { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.combo-opt .co-h { font-size: var(--fs-xs); color: var(--ink-3); }
+.combo-note { padding: 8px; font-size: var(--fs-xs); color: var(--ink-3); }
+.combo-note.warn { color: var(--warn); }
+.alloc-dialog .dlg-f .btn svg { flex: none; }
+
+/* ---------- BD-3a: mini timer window (Q2) ---------- */
+.mini-window, .mini-window body { margin: 0; height: 100%; overflow: hidden; }
+.mini-window #app { display: block; height: 100%; }
+.mini-timer { height: 100vh; box-sizing: border-box; display: grid; grid-template-rows: auto auto 1fr auto; gap: 2px; padding: 12px 14px 10px; background: var(--surface); color: var(--ink); user-select: none; -webkit-user-select: none; }
+.mini-window:has(.mini-timer) body { background: var(--surface); }
+.mini-timer p { margin: 0; }
+.mini-timer .mt-status { display: flex; align-items: center; gap: 6px; font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; color: var(--ink-3); min-width: 0; }
+.mini-timer[data-running='true'] .mt-status { color: var(--signal); }
+.mini-timer .mt-status-t { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.mini-timer .mt-task { font-weight: 600; font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
+.mini-timer .mt-row { display: flex; align-items: center; gap: 8px; align-self: end; }
+/* Tabular figures in a fixed width: the seconds never move the buttons. */
+.mini-timer .mt-time { flex: 1; font: 500 1.6rem/1 var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; min-width: 8ch; color: var(--ink); }
+.mini-timer .mt-btn { height: 32px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); font-weight: 600; border: 1px solid transparent; }
+.mini-timer .mt-btn.stop { background: var(--signal-soft); border-color: color-mix(in srgb, var(--signal) 45%, transparent); color: var(--signal); }
+.mini-timer .mt-btn.start { background: var(--moss); color: var(--on-moss); }
+.mini-timer .mt-btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+.mini-timer .mt-btn[aria-disabled='true'] { cursor: progress; }
+.mini-timer .mt-icon { width: 32px; height: 32px; display: grid; place-items: center; color: var(--ink-2); border: 1px solid var(--line-strong); }
+.mini-timer .mt-icon:hover { background: var(--hover); color: var(--ink); }
+.mini-timer .mt-hint { font-size: var(--fs-xs); color: var(--ink-3); min-height: 1.3em; }
+.mini-timer .mt-hint[hidden] { display: block; visibility: hidden; }
+@media (prefers-reduced-motion: reduce) {
+  .mini-timer .tp-dot { animation: none; }
 }

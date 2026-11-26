@@ -34,6 +34,11 @@ const ICONS = {
   users: [['circle', 9, 9, 3.2], ['path', 'M3 19.5a6 6 0 0 1 12 0M15.5 5.8a3.2 3.2 0 0 1 0 6.4M17.5 14a6 6 0 0 1 3.5 5.5']],
   beacon: [['path', 'M12 7.5 16.5 12 12 16.5 7.5 12z']],
   keyboard: [['rect', 2.5, 6, 19, 12, 2], ['path', 'M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7.5 14.5h9']],
+  play: [['path', 'M8 5.5v13l10.5-6.5z']],
+  shield: [['path', 'M12 3.5 19 6v6c0 4.2-3 7.4-7 8.5-4-1.1-7-4.3-7-8.5V6z']],
+  expand: [['path', 'M14 4.5h5.5V10M19.5 4.5 13 11M10 19.5H4.5V14M4.5 19.5 11 13']],
+  pip: [['rect', 3, 5, 18, 14, 2], ['rect', 12, 12, 6.5, 4.5, 1]],
+  refresh: [['path', 'M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5V9H15']],
 } satisfies Record<string, Shape[]>;
 
 export type ChatIconName = keyof typeof ICONS;

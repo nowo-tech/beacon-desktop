@@ -9,6 +9,8 @@
  * - `startedAt` / `endedAt` are the times the user acted (offline replay, idle check), never activity data.
  */
 import type {
+  ActivityType,
+  Allocation,
   ClampedTime,
   ClientSource,
   DeviceCode,
@@ -26,6 +28,7 @@ import type {
   Scope,
   StartResult,
   StopResult,
+  Subject,
   Task,
   TaskQuery,
   Timer,
@@ -34,6 +37,15 @@ import type {
 import { ALL_SCOPES } from './types';
 
 export const API_PREFIX = '/api/time-track';
+/** Tenant header of Beacon's client APIs (TimeTrackBundle 2.2 `client_api.context`, ChatKit 2.4): `personal`, `org:<uuid>`. */
+export const CONTEXT_HEADER = 'X-Beacon-Context';
+/** A context key as Beacon's APIs accept it (the same pattern as ChatKit's `CONTEXT_KEY`). */
+export const CONTEXT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const ACTIVITY_KEY = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
+const SUBJECT_TYPE = /^[a-z][a-z0-9_]{0,31}$/;
+/** Largest `subjects/search` page (`limit` 1–50) and query (≤ 100 characters). */
+export const MAX_SUBJECT_LIMIT = 50;
+export const MAX_SUBJECT_QUERY = 100;
 export const MAX_TASK_LIMIT = 50;
 export const MAX_ENTRY_LIMIT = 100;
 
@@ -133,6 +145,18 @@ export function clampedTime(value: unknown): ClampedTime | null {
   return { requested: raw.requested, applied: raw.applied, clamped: raw.clamped, reason: typeof raw.reason === 'string' ? raw.reason : null };
 }
 
+/** The allocation fields of a write body (contract v0.4); malformed values are left out (never sent). */
+function allocationBody(allocation: Allocation | undefined): { subject?: { type: string; id: string } | null; activityTypeKey?: string } {
+  if (allocation === undefined) return {};
+  const body: { subject?: { type: string; id: string } | null; activityTypeKey?: string } = {};
+  if (allocation.activityTypeKey !== undefined && ACTIVITY_KEY.test(allocation.activityTypeKey)) body.activityTypeKey = allocation.activityTypeKey;
+  if (allocation.subject === null) body.subject = null;
+  else if (allocation.subject !== undefined && SUBJECT_TYPE.test(allocation.subject.type) && allocation.subject.id !== '' && new TextEncoder().encode(allocation.subject.id).length <= 64) {
+    body.subject = { type: allocation.subject.type, id: allocation.subject.id };
+  }
+  return body;
+}
+
 function filenameFrom(disposition: string | null, fallback: string): string {
   const match = disposition !== null ? /filename="?([^";]+)"?/i.exec(disposition) : null;
   return match !== null ? match[1] : fallback;
@@ -144,6 +168,17 @@ export interface ApiClientConfig {
   token?: string | null;
   prefix?: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Tenant sent as `X-Beacon-Context` on every request (BD-3a; TimeTrackBundle 2.2 ignores it without a host context
+   * policy). `null`: no header.
+   */
+  context?: string | null;
+  /**
+   * The server answered `403 context_forbidden` for `context`. A read (GET) was then retried once with `personal`
+   * (always the person's own); a write is never retried in another context (its time would land in another
+   * organization). The caller stops using `context` in this run.
+   */
+  onContextRefused?: (context: string) => void;
 }
 
 interface RequestOptions {
@@ -159,6 +194,8 @@ export class TimeTrackApi {
   private readonly prefix: string;
   private readonly source: ClientSource;
   private readonly fetchImpl: typeof fetch;
+  private context: string | null;
+  private readonly onContextRefused: ((context: string) => void) | undefined;
 
   constructor(config: ApiClientConfig) {
     this.baseUrl = normalizeServerUrl(config.baseUrl);
@@ -166,6 +203,13 @@ export class TimeTrackApi {
     this.source = config.source;
     this.token = config.token ?? null;
     this.fetchImpl = config.fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
+    this.context = config.context !== undefined && config.context !== null && CONTEXT_PATTERN.test(config.context) ? config.context : null;
+    this.onContextRefused = config.onContextRefused;
+  }
+
+  /** The context this client sends (`null`: none). */
+  get currentContext(): string | null {
+    return this.context;
   }
 
   get server(): string {
@@ -239,10 +283,10 @@ export class TimeTrackApi {
    * `timer/start`, optionally backdated (`startedAt`, 1.10+). The server clamps an out-of-range time and reports it in
    * `startedAtResult`; a 1.9 server ignores `startedAt` and sends no result, so `startedAtResult` is then `null`.
    */
-  async startAt(taskId: string, options: { note?: string; startedAt?: Date } = {}): Promise<StartResult> {
+  async startAt(taskId: string, options: { note?: string; startedAt?: Date; allocation?: Allocation } = {}): Promise<StartResult> {
     const data = await this.json<{ timer: Timer; startedAtResult?: unknown }>('timer/start', {
       method: 'POST',
-      body: { taskId, note: blankToUndefined(options.note), source: this.source, startedAt: isoOrUndefined(options.startedAt) },
+      body: { taskId, note: blankToUndefined(options.note), source: this.source, startedAt: isoOrUndefined(options.startedAt), ...allocationBody(options.allocation) },
     });
     return { timer: data.timer, startedAtResult: clampedTime(data.startedAtResult) };
   }
@@ -256,11 +300,11 @@ export class TimeTrackApi {
    * `timer/stop`, optionally at an earlier time (`endedAt`, 1.10+), with the same clamp-and-report rule as `startAt`.
    * `entry` is `null` when no timer was running (`404 no_active_timer`).
    */
-  async stopAt(options: { note?: string; endedAt?: Date } = {}): Promise<StopResult> {
+  async stopAt(options: { note?: string; endedAt?: Date; allocation?: Allocation } = {}): Promise<StopResult> {
     try {
       const data = await this.json<{ entry: Entry; endedAtResult?: unknown }>('timer/stop', {
         method: 'POST',
-        body: { note: blankToUndefined(options.note), endedAt: isoOrUndefined(options.endedAt) },
+        body: { note: blankToUndefined(options.note), endedAt: isoOrUndefined(options.endedAt), ...allocationBody(options.allocation) },
       });
       return { entry: data.entry, endedAtResult: clampedTime(data.endedAtResult) };
     } catch (error) {
@@ -275,13 +319,53 @@ export class TimeTrackApi {
    * Stops the running timer (if any) and starts `taskId` atomically. `note` goes to the stopped entry; `meeting` marks
    * the new timer as "Track the meeting" (send it only to a 1.14 server: `features.meetings`).
    */
-  async switchTask(taskId: string, note?: string, options: { meeting?: boolean } = {}): Promise<TimerChange> {
+  async switchTask(taskId: string, note?: string, options: { meeting?: boolean; allocation?: Allocation } = {}): Promise<TimerChange> {
     const data = await this.json<Partial<TimerChange>>('timer/switch', {
       method: 'POST',
-      // "Track the meeting" (TimeTrackBundle 1.14, Q-B22): the only metadata the server accepts on a switch.
-      body: { taskId, note: blankToUndefined(note), source: this.source, metadata: options.meeting === true ? { origin: 'meeting' } : undefined },
+      // "Track the meeting" (TimeTrackBundle 1.14, Q-B22): the only metadata the server accepts on a switch. The
+      // allocation (2.1) is the next timer's.
+      body: { taskId, note: blankToUndefined(note), source: this.source, metadata: options.meeting === true ? { origin: 'meeting' } : undefined, ...allocationBody(options.allocation) },
     });
     return { entry: data.entry ?? null, timer: data.timer ?? null };
+  }
+
+  /**
+   * `timer/allocate` (TimeTrackBundle 2.1): sets the subject and / or activity type of the running timer (before a
+   * stop or a switch, so the closed entry carries them). `null` when no timer runs (`404 no_active_timer`).
+   */
+  async allocate(allocation: Allocation): Promise<Timer | null> {
+    try {
+      const data = await this.json<{ timer?: Timer }>('timer/allocate', { method: 'POST', body: allocationBody(allocation) });
+      return data?.timer ?? null;
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'no_active_timer') return null;
+      throw error;
+    }
+  }
+
+  /** Active activity types of the current scope (TimeTrackBundle 2.1, `tasks:read`, rate-limited per token). */
+  async activityTypes(): Promise<ActivityType[]> {
+    const data = await this.json<{ activityTypes?: unknown }>('activity-types');
+    const list = Array.isArray(data?.activityTypes) ? data.activityTypes : [];
+    return list.flatMap((raw): ActivityType[] => {
+      const item = raw as Partial<ActivityType> | null;
+      if (typeof item?.key !== 'string' || !ACTIVITY_KEY.test(item.key) || typeof item.label !== 'string') return [];
+      return [{ key: item.key, label: item.label.slice(0, 200), group: typeof item.group === 'string' ? item.group.slice(0, 200) : null }];
+    });
+  }
+
+  /** `subjects/search` (TimeTrackBundle 2.1): a hint list, every write is checked again. `429` carries `retryAfter`. */
+  async searchSubjects(type: string, query: string, limit = 20): Promise<Subject[]> {
+    if (!SUBJECT_TYPE.test(type)) throw new ApiError(0, 'invalid_request', 'Invalid subject type.');
+    const data = await this.json<{ subjects?: unknown }>('subjects/search', {
+      query: { type, q: query.trim().slice(0, MAX_SUBJECT_QUERY), limit: Math.min(Math.max(Math.trunc(limit), 1), MAX_SUBJECT_LIMIT) },
+    });
+    const list = Array.isArray(data?.subjects) ? data.subjects : [];
+    return list.flatMap((raw): Subject[] => {
+      const item = raw as Partial<Subject> | null;
+      if (item?.type !== type || typeof item.id !== 'string' || item.id === '' || item.id.length > 64 || typeof item.label !== 'string') return [];
+      return [{ type, id: item.id, label: item.label.slice(0, 200), hint: typeof item.hint === 'string' ? item.hint.slice(0, 200) : null }];
+    });
   }
 
   /**
@@ -412,6 +496,23 @@ export class TimeTrackApi {
   }
 
   private async raw(path: string, options: RequestOptions = {}): Promise<Response> {
+    try {
+      return await this.send(path, options);
+    } catch (error) {
+      const refused = this.context;
+      if (!(error instanceof ApiError && error.status === 403 && error.code === 'context_forbidden' && refused !== null && refused !== 'personal')) throw error;
+      // Beacon's rule (as the chat's): the refused context is never used again; Personal is always the person's own.
+      this.onContextRefused?.(refused);
+      // A write is not retried and does not move this client either (its time would be recorded in another
+      // organization, and later writes keep the context they were made for, audit ZCD-M1).
+      if ((options.method ?? 'GET') !== 'GET') throw error;
+      // A read is retried once in Personal.
+      this.context = 'personal';
+      return this.send(path, options);
+    }
+  }
+
+  private async send(path: string, options: RequestOptions): Promise<Response> {
     const url = new URL(`${this.baseUrl}${this.prefix}/${path}`);
     for (const [key, value] of Object.entries(options.query ?? {})) {
       if (value !== undefined) {
@@ -419,6 +520,7 @@ export class TimeTrackApi {
       }
     }
     const headers: Record<string, string> = { Accept: 'application/json' };
+    if (this.context !== null) headers[CONTEXT_HEADER] = this.context;
     if (options.body !== undefined) {
       headers['Content-Type'] = 'application/json';
     }

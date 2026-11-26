@@ -1,5 +1,5 @@
 import { ApiError, type TimeTrackApi } from '../api/client';
-import type { ClampReason, IdleAction, IdleThen, Timer } from '../api/types';
+import type { Allocation, ClampReason, IdleAction, IdleThen, Timer } from '../api/types';
 import { type ServerFeatures, serverFeatures } from './serverFeatures';
 
 /**
@@ -15,11 +15,18 @@ import { type ServerFeatures, serverFeatures } from './serverFeatures';
  *
  * Keep this file identical in time-track-extension and time-track-desktop.
  */
-export type QueuedAction =
-  | { kind: 'start'; taskId: string; taskTitle: string; at: string; note?: string }
-  | { kind: 'stop'; at: string; note?: string }
-  | { kind: 'switch'; taskId: string; taskTitle: string; at: string }
-  | { kind: 'idle'; from: string; to: string; action: IdleAction; taskId?: string; taskTitle?: string; then?: IdleThen; note?: string };
+export type QueuedAction = (
+  | { kind: 'start'; taskId: string; taskTitle: string; at: string; note?: string; allocation?: Allocation }
+  | { kind: 'stop'; at: string; note?: string; allocation?: Allocation; taskTitle?: string; startedAt?: string; timerId?: string }
+  | { kind: 'switch'; taskId: string; taskTitle: string; at: string; closing?: Allocation; allocation?: Allocation; closingTitle?: string; startedAt?: string; timerId?: string }
+  | { kind: 'idle'; from: string; to: string; action: IdleAction; taskId?: string; taskTitle?: string; then?: IdleThen; note?: string }
+) & {
+  /**
+   * The tenant the action was recorded in (`X-Beacon-Context`, BD-3a, audit ZCD-M1): it is replayed there, never in the
+   * organization shown at replay time. Absent on actions queued by older versions (replayed in the current one).
+   */
+  context?: string;
+};
 
 /** A time the server did not record as asked. `not_supported`: a 1.9 server recorded "now" instead. */
 export interface ClampNote {
@@ -36,7 +43,16 @@ export interface SyncResult {
   clamps: ClampNote[];
   /** The running timer after the last replayed action (`undefined`: nothing replayed). */
   timer: Timer | null | undefined;
+  /**
+   * The server refused a queued stop / switch for a missing required field (`409 activity_type_required` /
+   * `allocation_required`, audit ZCD-M2): the action stays first in the queue (nothing after it was sent) until the
+   * person answers (`withAllocation`).
+   */
+  blocked?: { action: QueuedAction; code: string };
 }
+
+/** Which API replays an action: bound to the action's own context (the client never changes it for a write). */
+export type ApiFor = (context: string | null) => TimeTrackApi;
 
 /** Where a client keeps the queue (localStorage on the desktop, `storage.local` in the extension). */
 export interface QueueStore {
@@ -52,8 +68,54 @@ const UNREPORTED_MS = 60_000;
  * other API errors drop that action and are reported. Each action is removed only once it is done, so a restart in the
  * middle replays from the first action not yet done.
  */
-export function syncQueue(store: QueueStore, api: TimeTrackApi, now: () => Date = () => new Date(), knownFeatures?: ServerFeatures): Promise<SyncResult> {
-  return exclusive(() => drain(store, api, now, knownFeatures));
+export function syncQueue(store: QueueStore, api: TimeTrackApi | ApiFor, now: () => Date = () => new Date(), knownFeatures?: ServerFeatures): Promise<SyncResult> {
+  const apiFor: ApiFor = typeof api === 'function' ? api : () => api;
+  return exclusive(() => drain(store, apiFor, now, knownFeatures));
+}
+
+/** The queued action with the person's answer to the fields the server required (audit ZCD-M2). */
+export function withAllocation(action: QueuedAction, allocation: Allocation): QueuedAction {
+  if (action.kind === 'stop') return { ...action, allocation: { ...action.allocation, ...allocation } };
+  if (action.kind === 'switch') return { ...action, closing: { ...action.closing, ...allocation } };
+  return action;
+}
+
+const ALLOCATION_REQUIRED = new Set(['activity_type_required', 'allocation_required']);
+
+/** `dropped` code of a queued stop / switch whose timer was no longer running (audit ZCD-v-M1). */
+export const STALE = 'already_stopped';
+
+function sameSecond(a: string, b: string): boolean {
+  const x = Date.parse(a);
+  const y = Date.parse(b);
+  return !Number.isNaN(x) && !Number.isNaN(y) && Math.abs(x - y) < 1000;
+}
+
+/**
+ * Whether the server still runs the timer a queued stop / switch is about: the one a start of this replay created
+ * (`created`, matched by id), else the one that started at `startedAt` (to the second).
+ */
+async function stillRunning(api: TimeTrackApi, action: { startedAt?: string; timerId?: string }, created: { at: string; id: string } | null): Promise<boolean> {
+  const timer = await api.timer();
+  if (timer === null) return false;
+  // Bound by an earlier replay (ZCD-v3-L1): the very timer the server created for it.
+  if (action.timerId !== undefined) return timer.id === action.timerId;
+  const startedAt = action.startedAt ?? '';
+  if (created !== null && sameSecond(created.at, startedAt)) return timer.id === created.id;
+  return sameSecond(timer.startedAt, startedAt);
+}
+
+/** A queued stop / switch about the timer queued at `at`, bound to the server's timer (id and recorded start). */
+function bindTimer(action: QueuedAction, at: string, timer: Timer): QueuedAction {
+  if ((action.kind !== 'stop' && action.kind !== 'switch') || action.timerId !== undefined || action.startedAt === undefined || !sameSecond(action.startedAt, at)) return action;
+  return { ...action, timerId: timer.id, startedAt: timer.startedAt };
+}
+
+/** Whether a queued stop / switch is about `timer` (its bound id, else its start to the second). */
+export function closesTimer(action: QueuedAction, timer: Pick<Timer, 'id' | 'startedAt'>): boolean {
+  if ((action.kind !== 'stop' && action.kind !== 'switch') || (action.startedAt === undefined && action.timerId === undefined)) return false;
+  if (action.timerId !== undefined) return action.timerId === timer.id;
+  return sameSecond(action.startedAt ?? '', timer.startedAt);
 }
 
 /** Name of the Web Lock that serialises replays (the extension's popup and background share it). */
@@ -72,19 +134,56 @@ function exclusive<T>(run: () => Promise<T>): Promise<T> {
   return next;
 }
 
-async function drain(store: QueueStore, api: TimeTrackApi, now: () => Date, knownFeatures: ServerFeatures | undefined): Promise<SyncResult> {
+async function drain(store: QueueStore, apiFor: ApiFor, now: () => Date, knownFeatures: ServerFeatures | undefined): Promise<SyncResult> {
   const result: SyncResult = { synced: 0, dropped: [], clamps: [], timer: undefined };
-  if ((await store.read()).length === 0) return result;
-  const features = knownFeatures ?? (await featuresOf(api));
+  const first = (await store.read())[0];
+  if (first === undefined) return result;
+  const features = knownFeatures ?? (await featuresOf(apiFor(first.context ?? null)));
+  // The timer a replayed start / switch of this run created: its queued time and the server's id (ZCD-v2-L1).
+  let created: { at: string; id: string } | null = null;
   for (let action = (await store.read())[0]; action !== undefined; action = (await store.read())[0]) {
     try {
+      // A fresh client per action, bound to the context it was recorded in.
+      const api = apiFor(action.context ?? null);
+      // Audit ZCD-v-M1 / v2-L1: a queued stop / switch closes only the timer it was made for. When a start / switch
+      // of this replay created that timer (same queued time), the server must still run that very timer (same id; its
+      // start may have been clamped); otherwise the running timer must have the stored start. Any other running
+      // timer (a newer one, started live or on another device) is never stopped by it.
+      if ((action.kind === 'stop' || action.kind === 'switch') && (action.startedAt !== undefined || action.timerId !== undefined) && !(await stillRunning(api, action, created))) {
+        result.dropped.push({ action, code: STALE });
+        await store.write((await store.read()).slice(1));
+        continue;
+      }
       const outcome = await replay(api, action, features, now());
       result.timer = outcome.timer;
+      if ((action.kind === 'start' || action.kind === 'switch') && outcome.timer !== null) {
+        created = { at: action.at, id: outcome.timer.id };
+        // Audit ZCD-v3-L1: the later queued stop / switch of that timer keeps the server's id, so a later replay (after
+        // a 409 left it queued) still finds it even when the server clamped the start.
+        // Only the next stop / switch in the queue closes this timer (several actions may share one second).
+        const [current, ...rest] = await store.read();
+        const next = rest.findIndex((item) => item.kind === 'stop' || item.kind === 'switch');
+        if (next >= 0) rest[next] = bindTimer(rest[next], action.at, outcome.timer);
+        await store.write([current, ...rest]);
+      } else if (action.kind === 'stop' || action.kind === 'idle') created = null;
       result.clamps.push(...outcome.clamps);
       result.synced++;
     } catch (error) {
       if (!(error instanceof ApiError) || error.isNetwork || error.isUnauthorized || error.status === 429) {
         throw error;
+      }
+      if (ALLOCATION_REQUIRED.has(error.code) && (action.kind === 'stop' || action.kind === 'switch')) {
+        // Never dropped: the timer is still running on the server. Kept first until the person answers.
+        result.blocked = { action, code: error.code };
+        return result;
+      }
+      if (error.code === 'context_forbidden' && action.context !== undefined) {
+        // That organization is no longer usable: its remaining actions go too (never replayed in another one).
+        const context = action.context;
+        const rest = await store.read();
+        for (const item of rest) if (item.context === context) result.dropped.push({ action: item, code: error.code });
+        await store.write(rest.filter((item) => item.context !== context));
+        continue;
       }
       result.dropped.push({ action, code: error.code });
     }
@@ -113,20 +212,21 @@ function notPast(at: string, now: Date): Date {
   return Number.isNaN(date.getTime()) || date > now ? now : date;
 }
 
-async function stopAt(api: TimeTrackApi, at: Date, now: Date, features: ServerFeatures, note: string | undefined): Promise<ClampNote[]> {
+async function stopAt(api: TimeTrackApi, at: Date, now: Date, features: ServerFeatures, note: string | undefined, allocation?: Allocation): Promise<ClampNote[]> {
   if (features.stopBackdate) {
-    const { endedAtResult } = await api.stopAt({ endedAt: at, note });
+    const { endedAtResult } = await api.stopAt({ endedAt: at, note, allocation });
     return endedAtResult?.clamped ? [{ kind: 'stop', taskTitle: null, requested: endedAtResult.requested, applied: endedAtResult.applied, reason: endedAtResult.reason }] : [];
   }
   try {
     if (at.getTime() >= now.getTime() - 1000) {
-      await api.stop(note);
+      await api.stopAt({ note, allocation });
       return [];
     }
+    if (allocation !== undefined && Object.keys(allocation).length > 0) await api.allocate(allocation);
     await api.discardIdle(at, now, 'discard');
   } catch (error) {
     if (error instanceof ApiError && error.code === 'invalid_request') {
-      await api.stop(note);
+      await api.stopAt({ note, allocation });
       return [];
     }
     if (error instanceof ApiError && error.code === 'no_active_timer') return [];
@@ -135,9 +235,9 @@ async function stopAt(api: TimeTrackApi, at: Date, now: Date, features: ServerFe
   return [];
 }
 
-async function startAt(api: TimeTrackApi, taskId: string, taskTitle: string, at: Date, now: Date, note: string | undefined): Promise<Outcome> {
+async function startAt(api: TimeTrackApi, taskId: string, taskTitle: string, at: Date, now: Date, note: string | undefined, allocation?: Allocation): Promise<Outcome> {
   try {
-    const { timer, startedAtResult } = await api.startAt(taskId, { startedAt: at, note });
+    const { timer, startedAtResult } = await api.startAt(taskId, { startedAt: at, note, allocation });
     if (startedAtResult !== null) {
       return {
         timer,
@@ -147,7 +247,7 @@ async function startAt(api: TimeTrackApi, taskId: string, taskTitle: string, at:
     return { timer, clamps: unreported(taskTitle, at, timer, now) };
   } catch (error) {
     if (error instanceof ApiError && error.code === 'timer_running') {
-      const timer = (await api.switchTask(taskId)).timer;
+      const timer = (await api.switchTask(taskId, undefined, { allocation })).timer;
       return { timer, clamps: timer !== null ? unreported(taskTitle, at, timer, now) : [] };
     }
     throw error;
@@ -164,15 +264,15 @@ function unreported(taskTitle: string, at: Date, timer: Timer, now: Date): Clamp
 export async function replay(api: TimeTrackApi, action: QueuedAction, features: ServerFeatures, now: Date): Promise<Outcome> {
   switch (action.kind) {
     case 'stop':
-      return { timer: null, clamps: await stopAt(api, notPast(action.at, now), now, features, action.note) };
+      return { timer: null, clamps: await stopAt(api, notPast(action.at, now), now, features, action.note, action.allocation) };
     case 'switch': {
       const at = notPast(action.at, now);
-      const stopped = await stopAt(api, at, now, features, undefined);
-      const started = await startAt(api, action.taskId, action.taskTitle, at, now, undefined);
+      const stopped = await stopAt(api, at, now, features, undefined, action.closing);
+      const started = await startAt(api, action.taskId, action.taskTitle, at, now, undefined, action.allocation);
       return { timer: started.timer, clamps: [...stopped, ...started.clamps] };
     }
     case 'start':
-      return startAt(api, action.taskId, action.taskTitle, notPast(action.at, now), now, action.note);
+      return startAt(api, action.taskId, action.taskTitle, notPast(action.at, now), now, action.note, action.allocation);
     case 'idle': {
       const options = { taskId: action.taskId, then: action.then, note: action.note };
       try {

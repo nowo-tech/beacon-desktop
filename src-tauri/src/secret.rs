@@ -60,20 +60,29 @@ pub const SIGN_IN_WINDOW: Duration = Duration::from_secs(30 * 60);
 
 /// Refusal while a token is stored for another server.
 pub const SIGNED_IN_ELSEWHERE: &str = "signed in to another server: sign out first";
+/// Refusal of a rebind to another base path of the same server while a chat token is stored (ZBZ-v-I1).
+pub const CHAT_BOUND_ELSEWHERE: &str =
+    "chat is connected under another path of this server: disconnect chat first";
 /// Refusal of a sign-in while a token is stored.
 pub const ALREADY_SIGNED_IN: &str = "already signed in: sign out first";
 
 /// A stored session: the token and the origin (ASCII serialisation) that issued it. `origin` is `None` only for an
-/// entry written by 0.5.1 or earlier.
+/// entry written by 0.5.1 or earlier. `base` (chat token, 0.11.0+): the server's base path when the token was stored;
+/// chat routes stay anchored to it and a rebind to another base path is refused while it is stored (ZBZ-v-I1).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stored {
     pub origin: Option<String>,
     pub token: String,
+    pub base: Option<String>,
 }
 
 impl Stored {
     fn encode(&self) -> String {
-        serde_json::json!({"v": 1, "origin": self.origin, "token": self.token}).to_string()
+        match &self.base {
+            Some(base) => serde_json::json!({"v": 1, "origin": self.origin, "token": self.token, "base": base}),
+            None => serde_json::json!({"v": 1, "origin": self.origin, "token": self.token}),
+        }
+        .to_string()
     }
 
     /// The keychain value: our JSON entry, else (0.5.1) the bare token.
@@ -87,6 +96,10 @@ impl Stored {
                             .and_then(Value::as_str)
                             .map(str::to_string),
                         token: token.to_string(),
+                        base: entry
+                            .get("base")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                     };
                 }
             }
@@ -94,6 +107,7 @@ impl Stored {
         Self {
             origin: None,
             token: value,
+            base: None,
         }
     }
 }
@@ -784,6 +798,7 @@ impl Session {
             Some(Stored {
                 origin: Some(owner),
                 token,
+                ..
             }) if owner == origin => Ok(Some(bearer(&token)?)),
             _ => Ok(None),
         }
@@ -804,12 +819,41 @@ impl Session {
     }
 
     /// Binds `server` (start-up, or no session). While a token is stored, only its origin; a 0.5.1 token without one
-    /// adopts this origin (trust on first use) and the entry is rewritten.
+    /// adopts this origin (trust on first use) and the entry is rewritten. While a chat token is stored, only the base
+    /// path it was stored under (ZBZ-v-I1: the webview cannot move the chat-route anchor); a 0.10.0 chat entry without
+    /// one adopts this base path the same way.
     pub fn bind(&self, server: &url::Url) -> Result<(), String> {
         let origin = server.origin();
         let serialised = origin.ascii_serialization();
+        let base = base_path(server);
         let _io = self.io()?;
         self.load_locked()?;
+        // An unreadable chat entry does not block the time binding: the chat token is then never used either
+        // (`chat_bearer_for` reads it again and fails closed).
+        let chat = match self.load_chat_locked() {
+            Ok(()) => self.lock()?.chat.clone(),
+            Err(_) => None,
+        };
+        match chat {
+            Some(Stored {
+                base: Some(stored_base),
+                ..
+            }) if stored_base != base => return Err(CHAT_BOUND_ELSEWHERE.into()),
+            Some(Stored {
+                origin: Some(owner),
+                token,
+                base: None,
+            }) if owner == serialised => {
+                let adopted = Stored {
+                    origin: Some(owner),
+                    token,
+                    base: Some(base.clone()),
+                };
+                self.chat_store.write(&adopted)?;
+                self.lock()?.chat = Some(adopted);
+            }
+            _ => {}
+        }
         let stored = self.lock()?.stored.clone();
         match stored {
             Some(Stored {
@@ -819,10 +863,12 @@ impl Session {
             Some(Stored {
                 origin: None,
                 token,
+                ..
             }) => {
                 let adopted = Stored {
                     origin: Some(serialised),
                     token,
+                    base: None,
                 };
                 self.store.write(&adopted)?;
                 self.lock()?.stored = Some(adopted);
@@ -831,7 +877,7 @@ impl Session {
         }
         let mut state = self.lock()?;
         state.bound = Some(origin);
-        state.base = base_path(server);
+        state.base = base;
         Ok(())
     }
 
@@ -913,6 +959,7 @@ impl Session {
             Some(Stored {
                 origin: Some(owner),
                 token,
+                ..
             }) if owner == origin => Ok(Authorization::Bearer(bearer(&token)?)),
             _ => Ok(Authorization::None),
         }
@@ -956,6 +1003,7 @@ impl Session {
                 let stored = Stored {
                     origin: Some(origin.ascii_serialization()),
                     token,
+                    base: None,
                 };
                 self.store.write(&stored)?;
                 let mut state = self.lock()?;
@@ -994,19 +1042,24 @@ impl Session {
                 .stored
                 .as_ref()
                 .is_some_and(|stored| stored.origin.as_deref() == Some(serialised.as_str()));
-            state.chat_connect.clone().filter(|pending| {
-                pending.origin == *origin
-                    && pending.at.elapsed() <= self.sign_in_window
-                    && state.chat.is_none()
-                    && time_here
-            })
+            state
+                .chat_connect
+                .clone()
+                .filter(|pending| {
+                    pending.origin == *origin
+                        && pending.at.elapsed() <= self.sign_in_window
+                        && state.chat.is_none()
+                        && time_here
+                })
+                .map(|pending| (pending, state.base.clone()))
         };
-        let Some(pending) = pending else {
+        let Some((pending, base)) = pending else {
             return Ok(None);
         };
         let stored = Stored {
             origin: Some(origin.ascii_serialization()),
             token,
+            base: Some(base),
         };
         self.chat_store.write(&stored)?;
         let mut state = self.lock()?;
@@ -1221,6 +1274,7 @@ pub mod tests {
                         .ascii_serialization(),
                 ),
                 token: token.into(),
+                base: None,
             });
             store
         }
@@ -1230,6 +1284,7 @@ pub mod tests {
             *store.value.lock().unwrap() = Some(Stored {
                 origin: None,
                 token: token.into(),
+                base: None,
             });
             store
         }
@@ -1329,13 +1384,15 @@ pub mod tests {
         let stored = Stored {
             origin: Some(A.into()),
             token: "t\"ok".into(),
+            base: None,
         };
         assert_eq!(Stored::decode(stored.encode()), stored);
         assert_eq!(
             Stored::decode("bare-0.5.1-token".into()),
             Stored {
                 origin: None,
-                token: "bare-0.5.1-token".into()
+                token: "bare-0.5.1-token".into(),
+                base: None,
             }
         );
         // A JSON-looking bare token is still a bare token.
@@ -1495,7 +1552,8 @@ pub mod tests {
             store.stored(),
             Some(Stored {
                 origin: Some(A.into()),
-                token: "fresh-token".into()
+                token: "fresh-token".into(),
+                base: None,
             })
         );
         let other = br#"{"token":"attacker-token"}"#;
@@ -1655,6 +1713,48 @@ pub mod tests {
     }
 
     #[test]
+    fn the_chat_token_keeps_the_base_path_it_was_stored_under() {
+        // ZBZ-v-I1: a 0.10.0 chat entry (no base) adopts the first bind's base path, then a rebind elsewhere is refused.
+        let (time, chat) = (
+            MemoryStore::with(A, "time-secret"),
+            MemoryStore::with(A, "chat-secret"),
+        );
+        let session = chat_session(&time, &chat);
+        session.bind(&url(&format!("{A}/beacon/"))).unwrap();
+        assert_eq!(chat.stored().unwrap().base.as_deref(), Some("/beacon"));
+        for elsewhere in ["/api/time-track/v1/x", "/", "/other"] {
+            assert_eq!(
+                session.bind(&url(&format!("{A}{elsewhere}"))).unwrap_err(),
+                CHAT_BOUND_ELSEWHERE,
+                "{elsewhere}"
+            );
+        }
+        // Nothing moved: the chat token still goes to the stored base only.
+        assert_eq!(
+            bearer_of(&session, &format!("{A}/api/time-track/v1/x/api/chat/v1/me")).as_deref(),
+            None
+        );
+        assert_eq!(
+            bearer_of(&session, &format!("{A}/beacon/api/chat/v1/me")).as_deref(),
+            Some("Bearer chat-secret")
+        );
+        // The same base again is fine (a restart binds it again).
+        session.bind(&url(&format!("{A}/beacon"))).unwrap();
+        // A restart reads the stored base: a webview that binds another path first is refused too.
+        let restarted = chat_session(&time, &chat);
+        assert_eq!(
+            restarted.bind(&url(&format!("{A}/x"))).unwrap_err(),
+            CHAT_BOUND_ELSEWHERE
+        );
+        assert!(Stored::decode(chat.stored().unwrap().encode())
+            .base
+            .is_some());
+        // After "Disconnect chat" any base path of the time token's origin can be bound again.
+        restarted.disconnect_chat().unwrap();
+        restarted.bind(&url(&format!("{A}/x"))).unwrap();
+    }
+
+    #[test]
     fn a_chat_token_for_another_origin_is_never_used() {
         let (time, chat) = (
             MemoryStore::with(A, "time-secret"),
@@ -1742,7 +1842,8 @@ pub mod tests {
             chat.stored(),
             Some(Stored {
                 origin: Some(A.into()),
-                token: "chat-secret".into()
+                token: "chat-secret".into(),
+                base: Some(String::new()),
             })
         );
         assert_eq!(time.stored().unwrap().token, "time-secret");

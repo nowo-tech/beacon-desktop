@@ -491,6 +491,30 @@ The tasks module adds work to BD-2 (family registered, off), BD-3 (tasks core, T
 (realtime, comments, questions, create from chat, TaskBoardBundle 3.5.0): see
 [BEACON_DESKTOP_TASKS.md §11](BEACON_DESKTOP_TASKS.md#11-phases-and-versions).
 
+### 7.1 BD-3a (built ahead of BD-3, app 0.11.0)
+
+Time context, mini timer and required fields, without the tasks module (it needs TaskBoard's client API, 3.4.0).
+Owner decisions: Q2 (timer placement + mini window), Q4 (switching with a running timer), Q5 (required fields on
+start / stop / both, inherit the task's last activity type). File inventory:
+
+| File | New / changed | Role |
+|---|---|---|
+| `src/lib/allocation.ts` | new | Required-field rules (`GET me.features` 2.1), ask on start / stop / both, last activity per `context\|taskId`, `GET me.contexts` |
+| `src/shell/allocationDialog.ts` | new | Native modal dialog: activity type (loading / empty / offline / 429 states), optional subject combobox |
+| `src/ui/miniWindow.ts` | new | Mini timer window (`index.html?window=mini`): view, buttons, keys; no session, no network |
+| `src-tauri/src/mini.rs` | new | `mini_open` / `mini_update` / `mini_close` (main), `mini_view` / `mini_action` (mini), placement, closed event |
+| `src-tauri/capabilities/mini.json` | new | Mini window ACL: listen + its two commands |
+| `playwright.bd3a.config.ts`, `tests/screenshots/bd3a.spec.ts` | new | Owner screenshots, axe on every new dialog |
+| `tests/unit/bd3a.test.ts` | new | Context header and fallback, required fields, switch, mini timer, ZBZ-v-I3 |
+| `src/api/client.ts`, `src/api/types.ts` | changed | `X-Beacon-Context`, Personal retry for reads, `timer/allocate`, `activity-types`, `subjects/search`, allocation on start / stop / switch |
+| `src/ui/app.ts`, `src/lib/settings.ts` | changed | Context of the time API, fields asked on start / stop / switch, 409 handling, settings |
+| `src/shell/shell.ts`, `src/chat/module.ts`, `src/chat/i18n.ts`, `src/chat/icons.ts`, `src/chat/chat.css` | changed | Switch flow, time-only contexts, mini timer toggle, Settings → Time tracking, ZBZ-v-I3 |
+| `src/platform.ts`, `src/platform-tauri.ts`, `src/main.ts` | changed | `MiniHost` / `MiniClient`, `bringForward` |
+| `src-tauri/src/secret.rs`, `src-tauri/src/browser.rs`, `src-tauri/src/lib.rs`, `src-tauri/app-commands.rs`, `src-tauri/capabilities/default.json` | changed | ZBZ-v-I1 base path, ZBZ-v-I2 `%20`, mini commands and ACL |
+| `mock-server/server.mjs` | changed | Context policy, activity types, subjects, `timer/allocate`, `409 activity_type_required`, tasks per context |
+| `src/lib/replay.ts`, `src/lib/queue.ts` | changed (ZCD) | Queued actions carry their context and allocation; replay per context; a replay 409 is kept (`blocked`) |
+| `tests/e2e/bd3a.spec.ts` | new (ZCD) | Two organizations + offline queue; mini timer keyboard focus |
+
 ## 8. Open questions
 
 Each question has options and a recommendation. **[Beacon]** = needs Beacon's answer; the rest are the owner's.

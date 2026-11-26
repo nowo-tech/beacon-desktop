@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mini",
+  "description": "Mini timer window (BD-3a, owner Q2): receives its view as events and may call only mini_view and mini_action (start, stop, expand, close); no keychain, updater, tray, network, opener, notification, window or autostart permission.",
+  "windows": ["mini"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "allow-mini-view", "allow-mini-action"]
+}

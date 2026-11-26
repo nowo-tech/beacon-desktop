@@ -16,7 +16,7 @@ describe('one TimeTrack, one tray icon (0.5.1)', () => {
     for (const file of sources()) {
       expect(readFileSync(file, 'utf8'), file).not.toMatch(/@tauri-apps\/api\/tray|TrayIcon\.new/);
     }
-    for (const capability of ['default', 'prompt']) {
+    for (const capability of ['default', 'prompt', 'mini']) {
       const permissions: unknown[] = JSON.parse(readFileSync(`src-tauri/capabilities/${capability}.json`, 'utf8')).permissions;
       const names = permissions.filter((p): p is string => typeof p === 'string');
       // core:default includes core:tray:default (allow-new).

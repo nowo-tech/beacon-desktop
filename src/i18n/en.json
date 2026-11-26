@@ -453,5 +453,10 @@
   "settingsTabSchedule": "Schedule",
   "settingsTabNotifications": "Notifications",
   "settingsTabMeetings": "Meetings",
-  "settingsTabUpdates": "Updates"
+  "settingsTabUpdates": "Updates",
+  "taskOtherOrg": "\"{task}\" belongs to another organization. Switch to it first; the task list is reloaded.",
+  "contextChangedDuringDialog": "The organization changed while the question was open, so nothing was started or stopped.",
+  "timerChanged": "The timer changed on another device meanwhile, so it was not stopped here.",
+  "queuedNeedsFields": "A stop saved offline still needs an activity type: Beacon keeps the timer running until you choose one.",
+  "queuedStale": "{count} stop(s) saved offline were skipped: that timer had already been stopped (here or on another device), so the newer one was left as it is."
 }

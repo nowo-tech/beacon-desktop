@@ -224,9 +224,20 @@ const TONES = ['neutral', 'info', 'success', 'warning', 'danger'] as const;
 const MAILTO_PARAMS = new Set(['to', 'cc', 'bcc', 'subject', 'body']);
 
 function mailtoWithoutExtras(url: URL): string {
-  const kept = [...url.searchParams].filter(([name]) => MAILTO_PARAMS.has(name.toLowerCase()));
-  const query = new URLSearchParams(kept).toString();
-  return `mailto:${url.pathname}${query === '' ? '' : `?${query}`}`;
+  // The raw pairs are kept as written (RFC 6068 has no form encoding: `+` is a plus, audit ZCD-I1; the URL parser
+  // already percent-encoded spaces and other unsafe characters); only the name is decoded, to compare it.
+  const kept = url.search
+    .slice(1)
+    .split('&')
+    .filter((pair) => {
+      const name = pair.split('=', 1)[0];
+      try {
+        return MAILTO_PARAMS.has(decodeURIComponent(name).toLowerCase());
+      } catch {
+        return false;
+      }
+    });
+  return `mailto:${url.pathname}${kept.length === 0 ? '' : `?${kept.join('&')}`}`;
 }
 
 /** `http(s)` and `mailto` only, as an absolute URL (relative ones resolved against `origin`); anything else is `null`. */

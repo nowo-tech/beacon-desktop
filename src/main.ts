@@ -1,5 +1,6 @@
-import { browserPlatform, hostOs, browserPromptClient, type BrowserPromptHooks, type Platform } from './platform';
-import { tauriPlatform, tauriPromptClient } from './platform-tauri';
+import { browserMiniClient, browserPlatform, hostOs, browserPromptClient, type BrowserMiniHooks, type BrowserPromptHooks, type Platform } from './platform';
+import { tauriMiniClient, tauriPlatform, tauriPromptClient } from './platform-tauri';
+import { startMiniWindow } from './ui/miniWindow';
 import { DesktopApp } from './ui/app';
 import { Shell } from './shell/shell';
 import { detectLocale } from './lib/i18n';
@@ -16,6 +17,11 @@ if (root !== null && new URLSearchParams(location.search).get('window') === 'pro
   const scope = window as unknown as { __timeTrackPrompt?: BrowserPromptHooks };
   scope.__timeTrackPrompt ??= { view: null, answers: [] };
   void startPromptWindow(root, isTauri ? tauriPromptClient() : browserPromptClient(scope.__timeTrackPrompt));
+} else if (root !== null && new URLSearchParams(location.search).get('window') === 'mini') {
+  // The mini timer (src-tauri/src/mini.rs): it only draws what the main window sends and reports its buttons.
+  const scope = window as unknown as { __timeTrackMini?: BrowserMiniHooks };
+  scope.__timeTrackMini ??= { view: null, actions: [] };
+  void startMiniWindow(root, isTauri ? tauriMiniClient() : browserMiniClient(scope.__timeTrackMini));
 } else if (root !== null) {
   const platform: Platform = isTauri ? tauriPlatform() : browserPlatform(__VERSION__);
   // The shell (BD-2): rail, title bar, Chat and Time modules; the time tracker lives in the Time module.
@@ -26,6 +32,10 @@ if (root !== null && new URLSearchParams(location.search).get('window') === 'pro
   const app = new DesktopApp(shell.timeRoot, platform, {
     onRender: () => shell.onAppRender(),
     beforeSignOut: () => shell.chat.revokeOnServer(),
+    askAllocation: (request) => shell.askAllocation(request),
+    onContextRefused: (context) => void shell.timeContextRefused(context),
+    contextLabel: () => shell.contextLabel(),
+    contextLabelOf: (context) => shell.contextLabelOf(context),
     beaconUrl: __BEACON_URL__,
     channel: __CHANNEL__,
     ...(__STORE_URL__ !== '' ? { storeUrl: __STORE_URL__ } : {}),
