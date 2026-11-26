@@ -68,7 +68,9 @@ and **2.2** (context policy); an older server behaves as before (no fields asked
     never from the running timer (which is per person). **ZCD-v-I1/I2**: the list's served context is recorded;
     a switch held by queued time says so instead of "offline". **ZCD-v2-L1**: the start check is skipped only for
     the timer a replayed start / switch of the same run created (matched by its id), never after an idle answer or
-    another stop.
+    another stop. **ZCD-v3-L1**: a replayed start binds the following queued stop / switch of that timer to the
+    server's timer id and recorded start, so a stop left queued by a 409 still finds that timer later (even with a
+    clamped start), while an unrelated newer timer stays protected.
 
 ### Planned for 0.10.0 (BD-2)
 

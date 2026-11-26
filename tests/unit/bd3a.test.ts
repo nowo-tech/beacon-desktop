@@ -27,6 +27,7 @@ import {
 } from '../../src/lib/allocation';
 import { loadLocal } from '../../src/lib/settings';
 import { OfflineQueue } from '../../src/lib/queue';
+import { withAllocation } from '../../src/lib/replay';
 import { AllocationDialog } from '../../src/shell/allocationDialog';
 import { chatText } from '../../src/chat/i18n';
 import { rememberTaskContexts, sanitizeTaskContexts, taskInContext, MAX_TASK_CONTEXTS } from '../../src/lib/allocation';
@@ -760,6 +761,45 @@ describe('audit ZCD fixes', () => {
     expect((await again.sync(() => api)).dropped.map((item) => item.code)).toEqual(['already_stopped']);
     expect((await api.timer())?.id).toBe(t3.id);
   });
+
+  for (const other of [false, true]) {
+    it(`ZCD-v3-L1: a clamped start then a blocked stop: the next replay ${other ? 'leaves an unrelated T2 alone' : 'still stops that timer'}`, async () => {
+      await env.control('config', { backdateMaxSeconds: 60, allocation: { requireActivityType: true } });
+      const tok = await token();
+      const api = new TimeTrackApi({ baseUrl: env.url, source: 'desktop', token: tok, fetchImpl: nodeFetch, context: 'personal' });
+      const at = new Date(Date.now() - 3600_000).toISOString();
+      const queue = new OfflineQueue(localStorage);
+      queue.push(
+        { kind: 'start', taskId: 'T-101', taskTitle: 'Write onboarding guide', at, context: 'personal' },
+        { kind: 'stop', at: new Date().toISOString(), startedAt: at, taskTitle: 'Write onboarding guide', context: 'personal' },
+      );
+      const first = await queue.sync(() => api);
+      expect(first.clamps.length).toBeGreaterThan(0);
+      expect(first.blocked?.code).toBe('activity_type_required');
+      const t1 = await api.timer();
+      // The queued stop now carries the server's timer (id and clamped start).
+      const head = queue.list()[0] as { kind: string; timerId?: string; startedAt?: string };
+      expect(head).toMatchObject({ kind: 'stop', timerId: t1?.id, startedAt: t1?.startedAt });
+      queue.replaceFirst(withAllocation(queue.list()[0], { activityTypeKey: 'dev' }));
+      let t2: Awaited<ReturnType<typeof api.timer>> = null;
+      if (other) {
+        await api.allocate({ activityTypeKey: 'dev' });
+        await api.stop();
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+        t2 = (await api.start('T-104'));
+      }
+      const second = await queue.sync(() => api);
+      expect(queue.size).toBe(0);
+      if (other) {
+        expect(second.dropped.map((item) => item.code)).toEqual(['already_stopped']);
+        expect((await api.timer())?.id).toBe(t2?.id);
+      } else {
+        expect(second.synced).toBe(1);
+        expect(second.dropped).toEqual([]);
+        expect(await api.timer()).toBeNull();
+      }
+    });
+  }
 
   it('ZCD-v-M1: a live stop of the same timer removes the blocked queued stop', async () => {
     await env.control('config', { allocation: { requireActivityType: true } });

@@ -146,6 +146,33 @@ test('an offline [idle, stop T1] queue never stops T2 started on another device 
   await expect(page.locator('#timer-pill .tp-task')).toHaveText('Fix invoice rounding bug');
 });
 
+test('a clamped queued start then a blocked stop: answering the dialog stops that timer (ZCD-v3-L1)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await signIn(page);
+  await control('config', { backdateMaxSeconds: 60 });
+  // What the desktop recorded offline an hour ago: a start (the server clamps it to a minute ago), then its stop.
+  await page.evaluate(() => {
+    const at = new Date(Date.now() - 3600_000).toISOString();
+    localStorage.setItem('time-track-desktop.queue', JSON.stringify([
+      { kind: 'start', taskId: 'T-101', taskTitle: 'Write onboarding guide', at, context: 'personal' },
+      { kind: 'stop', at: new Date().toISOString(), startedAt: at, taskTitle: 'Write onboarding guide', context: 'personal' },
+    ]));
+  });
+  void page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
+  // The stop is refused (no activity type): the dialog asks for it, then the same timer is stopped.
+  await expect(page.locator('#alloc-dialog')).toBeVisible();
+  await expect(page.locator('#alloc-dialog .as-task')).toHaveText('Write onboarding guide');
+  await expect(page.locator('#alloc-activity')).toBeEnabled();
+  await page.locator('#alloc-activity').selectOption('dev');
+  await page.locator('#alloc-submit').click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as Tt).__timeTrack.app.pendingSync)).toBe(0);
+  const state = (await control('state')) as { timers: Record<string, unknown>; requests: Req[] };
+  expect(Object.keys(state.timers)).toEqual([]);
+  const stop = state.requests.filter((item) => item.path.endsWith('timer/stop')).at(-1);
+  expect(JSON.parse(stop?.body ?? '{}').activityTypeKey).toBe('dev');
+  await expect(page.locator('#notice')).not.toContainText('had already been stopped');
+});
+
 test('mini timer keeps keyboard focus across Stop and Resume', async ({ page }) => {
   await page.setViewportSize({ width: 312, height: 132 });
   const view = {

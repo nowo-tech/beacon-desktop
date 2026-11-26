@@ -17,8 +17,8 @@ import { type ServerFeatures, serverFeatures } from './serverFeatures';
  */
 export type QueuedAction = (
   | { kind: 'start'; taskId: string; taskTitle: string; at: string; note?: string; allocation?: Allocation }
-  | { kind: 'stop'; at: string; note?: string; allocation?: Allocation; taskTitle?: string; startedAt?: string }
-  | { kind: 'switch'; taskId: string; taskTitle: string; at: string; closing?: Allocation; allocation?: Allocation; closingTitle?: string; startedAt?: string }
+  | { kind: 'stop'; at: string; note?: string; allocation?: Allocation; taskTitle?: string; startedAt?: string; timerId?: string }
+  | { kind: 'switch'; taskId: string; taskTitle: string; at: string; closing?: Allocation; allocation?: Allocation; closingTitle?: string; startedAt?: string; timerId?: string }
   | { kind: 'idle'; from: string; to: string; action: IdleAction; taskId?: string; taskTitle?: string; then?: IdleThen; note?: string }
 ) & {
   /**
@@ -95,17 +95,27 @@ function sameSecond(a: string, b: string): boolean {
  * Whether the server still runs the timer a queued stop / switch is about: the one a start of this replay created
  * (`created`, matched by id), else the one that started at `startedAt` (to the second).
  */
-async function stillRunning(api: TimeTrackApi, startedAt: string, created: { at: string; id: string } | null): Promise<boolean> {
+async function stillRunning(api: TimeTrackApi, action: { startedAt?: string; timerId?: string }, created: { at: string; id: string } | null): Promise<boolean> {
   const timer = await api.timer();
   if (timer === null) return false;
+  // Bound by an earlier replay (ZCD-v3-L1): the very timer the server created for it.
+  if (action.timerId !== undefined) return timer.id === action.timerId;
+  const startedAt = action.startedAt ?? '';
   if (created !== null && sameSecond(created.at, startedAt)) return timer.id === created.id;
   return sameSecond(timer.startedAt, startedAt);
 }
 
-/** Whether a queued stop / switch is about the timer that started at `startedAt` (to the second). */
-export function closesTimer(action: QueuedAction, startedAt: string): boolean {
-  if ((action.kind !== 'stop' && action.kind !== 'switch') || action.startedAt === undefined) return false;
-  return Math.abs(Date.parse(action.startedAt) - Date.parse(startedAt)) < 1000;
+/** A queued stop / switch about the timer queued at `at`, bound to the server's timer (id and recorded start). */
+function bindTimer(action: QueuedAction, at: string, timer: Timer): QueuedAction {
+  if ((action.kind !== 'stop' && action.kind !== 'switch') || action.timerId !== undefined || action.startedAt === undefined || !sameSecond(action.startedAt, at)) return action;
+  return { ...action, timerId: timer.id, startedAt: timer.startedAt };
+}
+
+/** Whether a queued stop / switch is about `timer` (its bound id, else its start to the second). */
+export function closesTimer(action: QueuedAction, timer: Pick<Timer, 'id' | 'startedAt'>): boolean {
+  if ((action.kind !== 'stop' && action.kind !== 'switch') || (action.startedAt === undefined && action.timerId === undefined)) return false;
+  if (action.timerId !== undefined) return action.timerId === timer.id;
+  return sameSecond(action.startedAt ?? '', timer.startedAt);
 }
 
 /** Name of the Web Lock that serialises replays (the extension's popup and background share it). */
@@ -139,15 +149,23 @@ async function drain(store: QueueStore, apiFor: ApiFor, now: () => Date, knownFe
       // of this replay created that timer (same queued time), the server must still run that very timer (same id; its
       // start may have been clamped); otherwise the running timer must have the stored start. Any other running
       // timer (a newer one, started live or on another device) is never stopped by it.
-      if ((action.kind === 'stop' || action.kind === 'switch') && action.startedAt !== undefined && !(await stillRunning(api, action.startedAt, created))) {
+      if ((action.kind === 'stop' || action.kind === 'switch') && (action.startedAt !== undefined || action.timerId !== undefined) && !(await stillRunning(api, action, created))) {
         result.dropped.push({ action, code: STALE });
         await store.write((await store.read()).slice(1));
         continue;
       }
       const outcome = await replay(api, action, features, now());
       result.timer = outcome.timer;
-      if ((action.kind === 'start' || action.kind === 'switch') && outcome.timer !== null) created = { at: action.at, id: outcome.timer.id };
-      else if (action.kind === 'stop' || action.kind === 'idle') created = null;
+      if ((action.kind === 'start' || action.kind === 'switch') && outcome.timer !== null) {
+        created = { at: action.at, id: outcome.timer.id };
+        // Audit ZCD-v3-L1: the later queued stop / switch of that timer keeps the server's id, so a later replay (after
+        // a 409 left it queued) still finds it even when the server clamped the start.
+        // Only the next stop / switch in the queue closes this timer (several actions may share one second).
+        const [current, ...rest] = await store.read();
+        const next = rest.findIndex((item) => item.kind === 'stop' || item.kind === 'switch');
+        if (next >= 0) rest[next] = bindTimer(rest[next], action.at, outcome.timer);
+        await store.write([current, ...rest]);
+      } else if (action.kind === 'stop' || action.kind === 'idle') created = null;
       result.clamps.push(...outcome.clamps);
       result.synced++;
     } catch (error) {

@@ -661,7 +661,7 @@ export class DesktopApp {
   /** A live stop ended `timer`: a queued stop about it (blocked by a 409) has nothing left to do (ZCD-v-M1). */
   private dropQueuedStopOf(timer: Timer): void {
     const head = this.queue.list()[0];
-    if (head !== undefined && closesTimer(head, timer.startedAt)) this.queue.dropFirst();
+    if (head !== undefined && closesTimer(head, timer)) this.queue.dropFirst();
   }
 
   /** A stop / switch queued offline that the server refused for a missing field: when it was last asked about. */
