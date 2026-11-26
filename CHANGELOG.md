@@ -5,9 +5,11 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
-Planned as **0.10.0** (BD-2, design `docs/design/BEACON_DESKTOP.md` §3–§5 and §7): Beacon chat, read-only. Needs
-TimeTrackBundle **2.2.0** (scope families, contract v0.5) and ChatKitBundle **2.4.0** (client API `/api/chat/v1`) on
-the server.
+## [0.10.0] - 2026-11-26
+
+BD-2 (design `docs/design/BEACON_DESKTOP.md` §3–§5 and §7): Beacon chat, read-only. Needs TimeTrackBundle **2.2.0**
+(scope families, contract v0.5) and ChatKitBundle **2.4.0** (client API `/api/chat/v1`; **2.4.1** for the chat
+logout) on the server (Beacon 1.178.0 or later).
 
 ### Added
 
