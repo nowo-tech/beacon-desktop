@@ -79,11 +79,11 @@ and **2.2** (context policy); an older server behaves as before (no fields asked
     server's timer id and recorded start, so a stop left queued by a 409 still finds that timer later (even with a
     clamped start), while an unrelated newer timer stays protected.
 
-### Planned for 0.10.0 (BD-2)
+## [0.10.0] - 2026-11-26
 
-Planned as **0.10.0** (BD-2, design `docs/design/BEACON_DESKTOP.md` §3–§5 and §7): Beacon chat, read-only. Needs
-TimeTrackBundle **2.2.0** (scope families, contract v0.5) and ChatKitBundle **2.4.0** (client API `/api/chat/v1`) on
-the server.
+BD-2 (design `docs/design/BEACON_DESKTOP.md` §3–§5 and §7): Beacon chat, read-only. Needs TimeTrackBundle **2.2.0**
+(scope families, contract v0.5) and ChatKitBundle **2.4.0** (client API `/api/chat/v1`; **2.4.1** for the chat
+logout) on the server (Beacon 1.178.0 or later).
 
 ### Added
 
