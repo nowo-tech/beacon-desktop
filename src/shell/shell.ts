@@ -18,6 +18,10 @@ import { ChatModule, showMenu } from '../chat/module';
 import { rankConversations } from '../chat/format';
 import type { Context, Conversation } from '../chat/types';
 import { isMuted, sectionOf } from '../chat/store';
+import type { Allocation } from '../api/types';
+import { type AskOn, meContexts } from '../lib/allocation';
+import { AllocationDialog, type AllocationRequest } from './allocationDialog';
+import type { MiniAction, MiniView } from '../ui/miniWindow';
 
 export type ModuleId = 'chat' | 'time';
 export type Density = 'comfortable' | 'compact';
@@ -102,6 +106,10 @@ export class Shell {
   private readonly settings: HTMLDialogElement;
   private readonly keys: HTMLDialogElement;
   private readonly confirm: HTMLDialogElement;
+  /** Required time fields (Q5, BD-3a). */
+  readonly allocation: AllocationDialog;
+  /** The mini timer window is open (Q2, BD-3a). */
+  miniOpen = false;
   private ticker: ReturnType<typeof setInterval> | null = null;
   private signedIn = false;
   private started = false;
@@ -131,13 +139,24 @@ export class Shell {
       openVerification: (url) => void this.app?.openVerification(url),
       copy: (text) => this.copy(text),
       announce: (text) => this.announce(text),
-      onContexts: (contexts, current) => {
+      onContexts: (contexts, current, remember) => {
+        // Chat disconnected: the time API's contexts stay (BD-3a), the chat's empty list does not replace them.
+        if (!this.chat.connected && contexts.length === 0 && this.app?.state.session) {
+          this.contexts = [];
+          this.context = null;
+          this.timeContexts();
+          this.renderChrome();
+          return;
+        }
         this.contexts = contexts;
         this.context = current;
-        if (current !== null && current !== this.prefs.context) {
+        // ZBZ-v-I3: only a context the server served is remembered (not one shown after a network error).
+        if (remember && current !== null && current !== this.prefs.context) {
           this.prefs.context = current;
           this.save();
         }
+        // The time API follows the chosen organization (`X-Beacon-Context`, BD-3a); its tasks are reloaded.
+        if (current !== null) this.followTimeContext(current);
         this.renderChrome();
       },
       onUnread: (total, capped) => {
@@ -161,7 +180,9 @@ export class Shell {
     this.settings = h('dialog', { class: 'sh-dialog', id: 'shell-settings', attrs: { 'aria-labelledby': 'shell-settings-title', closedby: 'any' } });
     this.keys = h('dialog', { class: 'sh-dialog', id: 'shell-keys', attrs: { 'aria-labelledby': 'shell-keys-title', closedby: 'any' } });
     this.confirm = h('dialog', { class: 'sh-dialog', id: 'shell-confirm', attrs: { 'aria-labelledby': 'shell-confirm-title' } });
-    this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.timePanel), this.live, this.switcher, this.settings, this.keys, this.confirm);
+    this.allocation = new AllocationDialog(this.t, (text) => this.announce(text), () => this.now());
+    this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.timePanel), this.live, this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog);
+    platform.miniWindow?.onAction((action) => void this.onMiniAction(action));
     this.mount.replaceChildren(this.root);
     this.root.addEventListener('chat-switcher', () => this.openSwitcher());
     document.addEventListener('keydown', (event) => this.onKey(event));
@@ -173,6 +194,62 @@ export class Shell {
   /** Attaches the Time module (its constructor needs `timeRoot`) and follows its renders. */
   attach(app: DesktopApp): void {
     this.app = app;
+    // Before the first time API request: the organization used last (Personal on a first launch).
+    app.setContext(this.prefs.context);
+  }
+
+  /** The fields dialog for the Time module (`AppDeps.askAllocation`). */
+  askAllocation(request: AllocationRequest): Promise<Allocation | null> {
+    for (const dialog of [this.switcher, this.settings, this.keys]) if (dialog.open) dialog.close();
+    return this.allocation.ask(request);
+  }
+
+  /** Label of the current organization for the dialogs, `null` for Personal or unknown. */
+  contextLabel(): string | null {
+    const current = this.currentContext();
+    return current === null || current.context.key === 'personal' ? null : current.context.label;
+  }
+
+  /**
+   * The time API was refused the current context (`403 context_forbidden`): the chat leaves it too (Beacon's single
+   * fallback to Personal), and the person is told.
+   */
+  async timeContextRefused(context: string): Promise<void> {
+    const label = this.contexts.find((item) => item.key === context)?.label ?? context;
+    if (this.chat.connected) await this.chat.refuseContext(context);
+    else if (this.context === context) {
+      this.context = 'personal';
+      this.contexts = this.contexts.filter((item) => item.key !== context);
+      this.renderChrome();
+    }
+    this.announce(this.t('contextRefusedTime', { name: label }));
+  }
+
+  /**
+   * Chat not connected: the time API's own contexts (`GET me`, TimeTrackBundle 2.2 with Beacon's policy) feed the
+   * switcher. Returns whether anything changed.
+   */
+  private timeContexts(): boolean {
+    const app = this.app;
+    if (app === null || this.chat.connected || app.state.session === null) return false;
+    const own = meContexts(app.me);
+    if (own.contexts.length === 0) return false;
+    const changed = own.contexts.length !== this.contexts.length || own.contexts.some((item, index) => item.key !== this.contexts[index]?.key);
+    const current = own.contexts.some((item) => item.key === app.context) ? app.context : (own.context ?? own.contexts[0].key);
+    if (!changed && current === this.context) return false;
+    this.contexts = own.contexts;
+    this.context = current;
+    this.renderRail();
+    this.renderTitlebar();
+    return true;
+  }
+
+  /** Sets the time API's context and reloads the Time module's tasks when it changed. */
+  private followTimeContext(context: string): void {
+    const app = this.app;
+    if (app === null || app.context === context) return;
+    app.setContext(context);
+    if (app.state.session !== null) void app.refresh();
   }
 
   /** After every Time render: sign-in state, timer, theme. */
@@ -193,8 +270,11 @@ export class Shell {
     }
     this.root.dataset.bare = signedIn ? 'false' : 'true';
     if (!signedIn) this.show('time', false);
+    if (signedIn) this.timeContexts();
+    if (!signedIn && this.miniOpen) void this.closeMini();
     this.renderTitlebar();
     this.syncTicker();
+    this.pushMini();
   }
 
   /** Signed in (at start-up or after the sign-in): landing module, then chat. */
@@ -260,6 +340,7 @@ export class Shell {
     this.renderTitlebar();
     this.renderRail();
     this.chat.render();
+    this.pushMini();
   }
 
   private currentContext(): { context: Context; index: number } | null {
@@ -303,6 +384,12 @@ export class Shell {
     const dark = document.documentElement.getAttribute('data-theme') === 'dark' || (document.documentElement.getAttribute('data-theme') === null && globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches === true);
     const theme = this.iconButton('tb-btn', dark ? 'sun' : 'moon', dark ? t('themeLight') : t('themeDark'), () => void this.setTheme(dark ? 'light' : 'dark'), 'tb-theme');
     const help = this.iconButton('tb-btn', 'keyboard', t('shortcuts'), () => this.openKeys(), 'tb-help');
+    if (this.platform.miniWindow !== null) {
+      const mini = this.iconButton('tb-btn', 'pip', this.miniOpen ? t('miniClose') : t('miniOpen'), () => void this.toggleMini(), 'tb-mini');
+      mini.setAttribute('aria-pressed', this.miniOpen ? 'true' : 'false');
+      mini.setAttribute('aria-keyshortcuts', 'Control+Shift+M Meta+Shift+M');
+      right.append(mini);
+    }
     right.append(theme, help);
     this.titlebar.replaceChildren(left, h('div', { class: 'tb-mid' }, search), right);
     document.title = current !== null ? `${current.context.label} · ${t('appName')}` : t('appName');
@@ -434,19 +521,44 @@ export class Shell {
   /** Owner Q4: a timer never keeps running in another organization. Stop it (asked first) or stay. */
   async switchContext(key: string): Promise<void> {
     if (key === this.context || !this.contexts.some((item) => item.key === key)) return;
-    const timer = this.app?.state.activeTimer ?? null;
-    if (timer !== null) {
-      const confirmed = await this.askStopAndSwitch(key);
-      if (!confirmed) return;
-      await this.app?.stop();
-      if (this.app?.state.activeTimer !== null) {
+    const app = this.app;
+    // Time recorded offline is replayed in the organization it was recorded in: switch only once it is sent.
+    if (app !== null && (app.pendingSync > 0 || app.offline)) {
+      if (app.pendingSync > 0 && !app.offline) await app.refresh();
+      if (app.pendingSync > 0 || app.offline) {
+        this.announce(this.t('contextOffline'));
+        return;
+      }
+    }
+    const timer = app?.state.activeTimer ?? null;
+    if (app !== null && timer !== null) {
+      const target = this.contexts.find((item) => item.key === key)?.label ?? key;
+      const where = { org: this.currentContext()?.context.label ?? null, target };
+      // Required fields missing: one dialog asks for them and confirms the switch; otherwise the plain question.
+      const missing = app.stopMissing();
+      if (!missing.activityType && !missing.subject) {
+        const confirmed = await this.askStopAndSwitch(key);
+        if (!confirmed) return;
+      }
+      const outcome = await app.stop(where);
+      if (outcome === 'cancelled') return;
+      if (app.state.activeTimer !== null) {
         this.announce(this.t('stopFailed'));
         return;
       }
     }
-    // Remembered by `onContexts` only once the server served it (a refused context is never kept).
-    await this.chat.switchContext(key);
     const label = this.contexts.find((item) => item.key === key)?.label ?? key;
+    if (this.chat.connected) {
+      // Remembered by `onContexts` only once the server served it (a refused context is never kept); the time API
+      // follows there too.
+      await this.chat.switchContext(key);
+    } else {
+      // Time only: the time API's contexts.
+      this.context = key;
+      this.prefs.context = key;
+      this.save();
+      this.followTimeContext(key);
+    }
     if (this.context === key) this.announce(this.t('contextSwitched', { name: label }));
     this.renderChrome();
   }
@@ -646,6 +758,25 @@ export class Shell {
       this.settingRow(t('switcherStyle'), t('switcherStyleHint'), this.segmented(t('switcherStyle'), [['tiles', t('switcherTiles')], ['dropdown', t('switcherDropdown')]], this.prefs.switcher, (switcher) => update({ switcher }))),
       this.settingRow(t('timerPlacement'), t('timerPlacementHint'), this.segmented(t('timerPlacement'), [['title', t('timerTitle')], ['title-sidebar', t('timerTitleSidebar')]], this.prefs.timer, (timer) => update({ timer }))),
     );
+    const settings = this.app?.state.settings;
+    const time = h('div', { class: 'set-group' }, h('h3', {}, t('settingsTime')));
+    if (settings !== undefined) {
+      time.append(
+        this.settingRow(t('askOn'), t('askOnHint'), this.segmented<AskOn>(t('askOn'), [['stop', t('askOnStop')], ['start', t('askOnStart')], ['both', t('askOnBoth')]], settings.askOn, (askOn) => {
+          this.app?.setAllocationSetting({ askOn });
+          this.renderSettings();
+        })),
+        this.settingRow(t('inheritActivity'), t('inheritActivityHint'), this.segmented<'on' | 'off'>(t('inheritActivity'), [['on', t('inheritOn')], ['off', t('inheritOff')]], settings.inheritActivity ? 'on' : 'off', (value) => {
+          this.app?.setAllocationSetting({ inheritActivity: value === 'on' });
+          this.renderSettings();
+        })),
+      );
+    }
+    if (this.platform.miniWindow !== null) {
+      const mini = h('button', { class: 'btn sm', id: 'settings-mini', attrs: { type: 'button', 'aria-pressed': this.miniOpen ? 'true' : 'false' } }, chatIcon('pip', 'sm'), this.miniOpen ? t('miniClose') : t('miniOpen'));
+      mini.addEventListener('click', () => void this.toggleMini().then(() => this.renderSettings()));
+      time.append(this.settingRow(t('miniTimer'), t('miniTimerHint'), mini));
+    }
     const connection = h('div', { class: 'set-group' }, h('h3', {}, t('settingsChat')));
     if (this.chat.connected) {
       const disconnect = h('button', { class: 'btn sm danger', id: 'chat-disconnect', attrs: { type: 'button' } }, t('disconnect'));
@@ -662,14 +793,14 @@ export class Shell {
       });
       connection.append(this.settingRow(t('chatConnection'), t('chatNotConnected'), connect));
     }
-    this.settings.replaceChildren(h('div', { class: 'dlg settings' }, h('div', { class: 'dlg-h' }, h('h1', { id: 'shell-settings-title' }, t('shellSettings')), close), h('div', { class: 'dlg-b' }, look, connection)));
+    this.settings.replaceChildren(h('div', { class: 'dlg settings' }, h('div', { class: 'dlg-h' }, h('h1', { id: 'shell-settings-title' }, t('shellSettings')), close), h('div', { class: 'dlg-b' }, look, time, connection)));
   }
 
   openKeys(): void {
     const t = this.t;
     const mod = modKey();
     const sections: [string, [string, string[]][]][] = [
-      [t('keysAnywhere'), [[t('keySwitcher'), [mod, 'K']], [t('keyModules'), [mod, '1 2']], [t('keySettings'), [mod, ',']], [t('keyTheme'), [mod, 'Shift', 'L']], [t('keySheet'), ['?']]]],
+      [t('keysAnywhere'), [[t('keySwitcher'), [mod, 'K']], [t('keyModules'), [mod, '1 2']], [t('keySettings'), [mod, ',']], [t('keyTheme'), [mod, 'Shift', 'L']], [t('keyToggleTimer'), [mod, 'Shift', 'S']], [t('keyMini'), [mod, 'Shift', 'M']], [t('keySheet'), ['?']]]],
       [
         t('keysChat'),
         [
@@ -694,13 +825,101 @@ export class Shell {
     close.focus();
   }
 
+  // ---- mini timer (Q2, BD-3a) ---------------------------------------------------------------------------------------
+
+  /** What the mini timer shows (translated here; the window has no strings of its own). */
+  miniView(): MiniView {
+    const t = this.t;
+    const app = this.app;
+    const timer = app?.state.activeTimer ?? null;
+    const last = timer === null ? (app?.lastTask() ?? null) : null;
+    const org = this.contextLabel();
+    const dark = document.documentElement.getAttribute('data-theme');
+    return {
+      theme: dark === 'dark' || dark === 'light' ? dark : 'system',
+      lang: document.documentElement.lang || 'en',
+      windowTitle: t('miniTimer'),
+      running: timer !== null,
+      task: timer?.taskTitle ?? last?.title ?? null,
+      startedAt: timer?.startedAt ?? null,
+      status: timer !== null ? (org !== null ? t('miniTracking', { org }) : t('miniTrackingPersonal')) : t('miniNotTracking'),
+      canStart: timer === null && last !== null,
+      busy: app?.busy === true,
+      labels: {
+        stop: t('miniStop'),
+        start: t('miniStart'),
+        startTask: t('miniStartTask', { task: last?.title ?? '' }),
+        expand: t('miniExpand'),
+        close: t('miniClose'),
+        noTask: t('miniNoTask'),
+        elapsed: t('miniElapsed', { time: '' }).trim(),
+      },
+    };
+  }
+
+  private lastMini = '';
+
+  /** Sends the view to an open mini timer when it changed (renders are frequent; the window ticks by itself). */
+  private pushMini(): void {
+    const host = this.platform.miniWindow;
+    if (host === null || !this.miniOpen) return;
+    const view = this.miniView();
+    const key = JSON.stringify(view);
+    if (key === this.lastMini) return;
+    this.lastMini = key;
+    void host.update(view).catch(() => undefined);
+  }
+
+  async toggleMini(): Promise<void> {
+    if (this.miniOpen) return this.closeMini();
+    const host = this.platform.miniWindow;
+    if (host === null || this.root.dataset.bare === 'true') return;
+    const view = this.miniView();
+    try {
+      await host.open(view);
+      this.miniOpen = true;
+      this.lastMini = JSON.stringify(view);
+    } catch {
+      this.miniOpen = false;
+    }
+    this.renderTitlebar();
+  }
+
+  async closeMini(): Promise<void> {
+    this.miniOpen = false;
+    this.lastMini = '';
+    await this.platform.miniWindow?.close().catch(() => undefined);
+    this.renderTitlebar();
+  }
+
+  /** A button of the mini timer. The decisions (fields dialog, offline queue) stay here, in the main window. */
+  private async onMiniAction(action: MiniAction): Promise<void> {
+    const app = this.app;
+    if (action === 'closed' || action === 'close') {
+      if (action === 'close') await this.platform.miniWindow?.close().catch(() => undefined);
+      this.miniOpen = false;
+      this.lastMini = '';
+      this.renderTitlebar();
+      return;
+    }
+    if (action === 'expand') {
+      await this.platform.windowHost.bringForward?.().catch(() => undefined);
+      this.show('time');
+      return;
+    }
+    if (app === null || app.busy) return;
+    if (action === 'stop' && app.state.activeTimer !== null) await app.stop();
+    else if (action === 'start' && app.state.activeTimer === null) await app.resume();
+    this.pushMini();
+  }
+
   // ---- keys ---------------------------------------------------------------------------------------------------------
 
   private onKey(event: KeyboardEvent): void {
     if (this.root.dataset.bare === 'true') return;
     const mod = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
-    const dialogOpen = [this.switcher, this.settings, this.keys, this.confirm].some((dialog) => dialog.open);
+    const dialogOpen = [this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog].some((dialog) => dialog.open);
     const target = event.target as HTMLElement | null;
     const typing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target?.isContentEditable === true;
     if (mod && !event.shiftKey && key === 'k' && this.module === 'chat') {
@@ -710,6 +929,11 @@ export class Shell {
       return;
     }
     if (dialogOpen) return;
+    if (mod && event.shiftKey && !event.altKey && key === 'm' && this.platform.miniWindow !== null) {
+      event.preventDefault();
+      void this.toggleMini();
+      return;
+    }
     if (mod && !event.shiftKey && !event.altKey && (event.key === '1' || event.key === '2')) {
       event.preventDefault();
       const next: ModuleId = event.key === '1' ? 'chat' : 'time';
