@@ -85,13 +85,21 @@ const ALLOCATION_REQUIRED = new Set(['activity_type_required', 'allocation_requi
 /** `dropped` code of a queued stop / switch whose timer was no longer running (audit ZCD-v-M1). */
 export const STALE = 'already_stopped';
 
-/** Whether the server's running timer is the one that started at `startedAt` (to the second). */
-async function stillRunning(api: TimeTrackApi, startedAt: string): Promise<boolean> {
+function sameSecond(a: string, b: string): boolean {
+  const x = Date.parse(a);
+  const y = Date.parse(b);
+  return !Number.isNaN(x) && !Number.isNaN(y) && Math.abs(x - y) < 1000;
+}
+
+/**
+ * Whether the server still runs the timer a queued stop / switch is about: the one a start of this replay created
+ * (`created`, matched by id), else the one that started at `startedAt` (to the second).
+ */
+async function stillRunning(api: TimeTrackApi, startedAt: string, created: { at: string; id: string } | null): Promise<boolean> {
   const timer = await api.timer();
   if (timer === null) return false;
-  const a = Date.parse(timer.startedAt);
-  const b = Date.parse(startedAt);
-  return !Number.isNaN(a) && !Number.isNaN(b) && Math.abs(a - b) < 1000;
+  if (created !== null && sameSecond(created.at, startedAt)) return timer.id === created.id;
+  return sameSecond(timer.startedAt, startedAt);
 }
 
 /** Whether a queued stop / switch is about the timer that started at `startedAt` (to the second). */
@@ -121,20 +129,25 @@ async function drain(store: QueueStore, apiFor: ApiFor, now: () => Date, knownFe
   const first = (await store.read())[0];
   if (first === undefined) return result;
   const features = knownFeatures ?? (await featuresOf(apiFor(first.context ?? null)));
+  // The timer a replayed start / switch of this run created: its queued time and the server's id (ZCD-v2-L1).
+  let created: { at: string; id: string } | null = null;
   for (let action = (await store.read())[0]; action !== undefined; action = (await store.read())[0]) {
     try {
       // A fresh client per action, bound to the context it was recorded in.
       const api = apiFor(action.context ?? null);
-      // Audit ZCD-v-M1: a queued stop / switch closes only the timer it was made for. Unless an earlier action of
-      // this replay started it, the running timer must be that one (same start); otherwise it was already stopped
-      // (live, or on another device) and a newer timer must never be stopped by it.
-      if ((action.kind === 'stop' || action.kind === 'switch') && action.startedAt !== undefined && result.timer === undefined && !(await stillRunning(api, action.startedAt))) {
+      // Audit ZCD-v-M1 / v2-L1: a queued stop / switch closes only the timer it was made for. When a start / switch
+      // of this replay created that timer (same queued time), the server must still run that very timer (same id; its
+      // start may have been clamped); otherwise the running timer must have the stored start. Any other running
+      // timer (a newer one, started live or on another device) is never stopped by it.
+      if ((action.kind === 'stop' || action.kind === 'switch') && action.startedAt !== undefined && !(await stillRunning(api, action.startedAt, created))) {
         result.dropped.push({ action, code: STALE });
         await store.write((await store.read()).slice(1));
         continue;
       }
       const outcome = await replay(api, action, features, now());
       result.timer = outcome.timer;
+      if ((action.kind === 'start' || action.kind === 'switch') && outcome.timer !== null) created = { at: action.at, id: outcome.timer.id };
+      else if (action.kind === 'stop' || action.kind === 'idle') created = null;
       result.clamps.push(...outcome.clamps);
       result.synced++;
     } catch (error) {

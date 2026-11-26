@@ -115,6 +115,37 @@ test('a queued stop refused for a missing field never stops the newer timer (ZCD
   await expect(page.locator('#timer-pill .tp-task')).toHaveText('Fix invoice rounding bug');
 });
 
+test('an offline [idle, stop T1] queue never stops T2 started on another device (ZCD-v2-L1)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await signIn(page);
+  const login = (await (await fetch(`${MOCK}/api/time-track/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'ada@example.com', password: 'app-password-123', clientType: 'web' }) })).json()) as { token: string };
+  const other = async (path: string, body: unknown = {}) =>
+    (await (await fetch(`${MOCK}/api/time-track/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${login.token}`, 'X-Beacon-Context': 'personal' }, body: JSON.stringify(body) })).json()) as { timer?: { id: string; startedAt: string } };
+  const t1 = (await other('timer/start', { taskId: 'T-103', source: 'web' })).timer!;
+  await other('timer/allocate', { activityTypeKey: 'dev' });
+  await other('timer/stop');
+  await page.waitForTimeout(1100);
+  const t2 = (await other('timer/start', { taskId: 'T-104', source: 'web' })).timer!;
+  await page.waitForTimeout(200);
+  // What the desktop recorded offline: an idle answer (the server accepts it, inside T2), then the stop of T1.
+  await page.evaluate(
+    ([from, started]) => {
+      const now = new Date().toISOString();
+      localStorage.setItem('time-track-desktop.queue', JSON.stringify([
+        { kind: 'idle', from, to: now, action: 'keep', context: 'personal' },
+        { kind: 'stop', at: now, startedAt: started, taskTitle: 'Customer call: Acme quarterly review', context: 'personal' },
+      ]));
+    },
+    [t2.startedAt, t1.startedAt],
+  );
+  await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
+  await expect(page.locator('#notice')).toContainText('had already been stopped');
+  expect(await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.pendingSync)).toBe(0);
+  const state = (await control('state')) as { timers: Record<string, { id: string; taskId: string }> };
+  expect(Object.values(state.timers).map((timer) => timer.id)).toEqual([t2.id]);
+  await expect(page.locator('#timer-pill .tp-task')).toHaveText('Fix invoice rounding bug');
+});
+
 test('mini timer keeps keyboard focus across Stop and Resume', async ({ page }) => {
   await page.setViewportSize({ width: 312, height: 132 });
   const view = {

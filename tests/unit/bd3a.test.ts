@@ -716,6 +716,51 @@ describe('audit ZCD fixes', () => {
     expect(ui.app.state.activeTimer?.taskId).toBe('T-104');
   });
 
+  it('ZCD-v2-L1: an earlier replayed idle answer does not let a queued stop hit a newer timer', async () => {
+    const tok = await token();
+    const api = new TimeTrackApi({ baseUrl: env.url, source: 'desktop', token: tok, fetchImpl: nodeFetch, context: 'personal' });
+    const t1 = await api.start('T-103');
+    // Another device stops T1 and starts T2.
+    await api.stop();
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const t2 = await api.start('T-104');
+    // Offline queue: an idle answer the server accepts (inside T2), then the stop of T1.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const queue = new OfflineQueue(localStorage);
+    queue.push(
+      { kind: 'idle', from: t2.startedAt, to: new Date().toISOString(), action: 'keep', context: 'personal' },
+      { kind: 'stop', at: new Date().toISOString(), startedAt: t1.startedAt, taskTitle: t1.taskTitle, context: 'personal' },
+    );
+    const result = await queue.sync(() => api);
+    expect(result.synced).toBe(1);
+    expect(result.dropped.map((item) => item.code)).toEqual(['already_stopped']);
+    expect((await api.timer())?.id).toBe(t2.id);
+    expect((await requests()).filter((item) => item.path.endsWith('timer/stop')).length).toBe(1);
+  });
+
+  it('ZCD-v2-L1: a queued stop of a timer this replay started still stops it, even with a clamped start', async () => {
+    await env.control('config', { backdateMaxSeconds: 60 });
+    const tok = await token();
+    const api = new TimeTrackApi({ baseUrl: env.url, source: 'desktop', token: tok, fetchImpl: nodeFetch, context: 'personal' });
+    const at = new Date(Date.now() - 3600_000).toISOString();
+    const queue = new OfflineQueue(localStorage);
+    queue.push(
+      { kind: 'start', taskId: 'T-101', taskTitle: 'Write onboarding guide', at, context: 'personal' },
+      { kind: 'stop', at: new Date().toISOString(), startedAt: at, taskTitle: 'Write onboarding guide', context: 'personal' },
+    );
+    const result = await queue.sync(() => api);
+    expect(result.clamps.length).toBeGreaterThan(0);
+    expect(result.synced).toBe(2);
+    expect(result.dropped).toEqual([]);
+    expect(await api.timer()).toBeNull();
+    // A start, then a stop, then a stop about the first one: the second stop finds nothing of its own.
+    const again = new OfflineQueue(localStorage);
+    const t3 = await api.start('T-102');
+    again.push({ kind: 'stop', at: new Date().toISOString(), startedAt: new Date(Date.parse(t3.startedAt) - 5000).toISOString(), context: 'personal' });
+    expect((await again.sync(() => api)).dropped.map((item) => item.code)).toEqual(['already_stopped']);
+    expect((await api.timer())?.id).toBe(t3.id);
+  });
+
   it('ZCD-v-M1: a live stop of the same timer removes the blocked queued stop', async () => {
     await env.control('config', { allocation: { requireActivityType: true } });
     const { net, platform } = droppable();

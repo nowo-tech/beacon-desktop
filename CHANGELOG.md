@@ -66,7 +66,9 @@ and **2.2** (context policy); an older server behaves as before (no fields asked
     start); otherwise it is skipped with a notice, so a newer timer is never stopped by it, and a live stop of that
     timer removes it from the queue. **ZCD-v-L1**: tasks are filed under an organization from its task lists only,
     never from the running timer (which is per person). **ZCD-v-I1/I2**: the list's served context is recorded;
-    a switch held by queued time says so instead of "offline".
+    a switch held by queued time says so instead of "offline". **ZCD-v2-L1**: the start check is skipped only for
+    the timer a replayed start / switch of the same run created (matched by its id), never after an idle answer or
+    another stop.
 
 ### Planned for 0.10.0 (BD-2)
 
