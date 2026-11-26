@@ -223,6 +223,14 @@ export class Shell {
       this.renderChrome();
     }
     this.announce(this.t('contextRefusedTime', { name: label }));
+    // Audit ZCD-L2: the task list still shows the refused organization's tasks: reload it in Personal.
+    if (this.app?.state.session) void this.app.refresh();
+  }
+
+  /** Label of a known organization, `null` for Personal or unknown (a stop queued offline in another one). */
+  contextLabelOf(context: string): string | null {
+    if (context === 'personal') return null;
+    return this.contexts.find((item) => item.key === context)?.label ?? null;
   }
 
   /**
@@ -266,6 +274,10 @@ export class Shell {
       this.chat.signedOut();
       this.contexts = [];
       this.context = null;
+      // Audit ZCD-L3: the next sign-in (maybe another account or server) starts in Personal. Written only when the
+      // preferences are stored at all ("Clear local data" before a sign-out leaves nothing behind).
+      this.prefs.context = null;
+      if (this.deps.storage?.getItem(SHELL_KEY) !== null && this.deps.storage?.getItem(SHELL_KEY) !== undefined) this.save();
       void this.platform.chat?.setUnreadBadge(0).catch(() => undefined);
     }
     this.root.dataset.bare = signedIn ? 'false' : 'true';
@@ -542,6 +554,11 @@ export class Shell {
       }
       const outcome = await app.stop(where);
       if (outcome === 'cancelled') return;
+      // Audit ZCD-M1: a stop only queued (the network dropped) is sent from here first; no switch before it is.
+      if (outcome === 'queued' || app.pendingSync > 0) {
+        this.announce(this.t('contextOffline'));
+        return;
+      }
       if (app.state.activeTimer !== null) {
         this.announce(this.t('stopFailed'));
         return;
@@ -552,12 +569,16 @@ export class Shell {
       // Remembered by `onContexts` only once the server served it (a refused context is never kept); the time API
       // follows there too.
       await this.chat.switchContext(key);
-    } else {
-      // Time only: the time API's contexts.
+    } else if (app !== null) {
+      // Time only: the time API's contexts. Remembered once the server served it (audit ZCD-I4, as ZBZ-v-I3).
       this.context = key;
-      this.prefs.context = key;
-      this.save();
-      this.followTimeContext(key);
+      app.setContext(key);
+      this.renderChrome();
+      await app.refresh();
+      if (app.context === key && app.error === null) {
+        this.prefs.context = key;
+        this.save();
+      }
     }
     if (this.context === key) this.announce(this.t('contextSwitched', { name: label }));
     this.renderChrome();

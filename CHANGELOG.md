@@ -14,21 +14,32 @@ and **2.2** (context policy); an older server behaves as before (no fields asked
 
 - **Time API context**: every time API request carries `X-Beacon-Context` (`personal` / `org:<uuid>`), the
   organization chosen in the app, as the chat does. Needed before Beacon turns on TimeTrackBundle's context policy
-  (`400 context_required` without it). A `403 context_forbidden` makes the app use Personal for the rest of the run:
-  a read is retried once in Personal, a write is never retried in another organization. Switching organization
-  reloads the Time module's tasks; without chat, the organizations come from the time API (`GET me.contexts`).
+  (`400 context_required` without it). A `403 context_forbidden` makes the app use Personal for the rest of the run
+  and reloads the task list there: a read is retried once in Personal, a write is never retried in another
+  organization. Switching organization reloads the Time module's tasks; without chat, the organizations come from the
+  time API (`GET me.contexts`) and one is remembered only once the server served it.
+- **Offline queue per organization**: an action recorded offline keeps the organization it was made in and replays
+  there, whatever is shown at the time; an organization refused at replay drops only its own actions (with a notice).
 - **Switching organization with a running timer** (owner Q4): when required fields are missing, one dialog asks for
-  them and confirms the switch ("Stop the timer in <org> and switch?"), *Cancel* keeps both; time recorded offline
-  is sent before a switch (offline, the switch waits). The timer never keeps running in another organization.
+  them and confirms the switch ("Stop the timer in <org> and switch?"), *Cancel* keeps both. Offline, or while time
+  recorded offline (including that very stop) is not sent yet, the app stays in the organization and says why; the
+  switch works once it is sent. Resume (mini timer, tray, shortcut, reminders) and the pinned tasks offer only tasks
+  of the organization shown, and a task listed in another organization is never started here.
 - **Required fields** (owner Q5): when an organization requires an activity type (TimeTrackBundle 2.1
   `requireActivityType`), the app asks for it on stop (default), on start, or both (Settings → Time tracking), with
   an optional client or subject search. A stop the server refuses (`409 activity_type_required`) opens the same
-  dialog and is sent again at the time of the first click. "Use the task's last activity type" (on by default) starts
-  a task with the type last used with it on this computer (ids only, per organization, at most 200 tasks).
+  dialog and is sent again at the time of the first click, also when it has to wait in the offline queue (the queued
+  stop keeps the chosen type and that time). A queued stop the server refuses at replay is kept and the dialog asks
+  for the missing field (Cancel keeps it, with a notice). Nothing is sent when the organization or the timer changed
+  (another device) while the dialog was open. A `429` shows a ticking "Try again in N s"; Retry waits for it and the
+  list loads again by itself. "Use the task's last activity type" (on by default) starts a task with the type last
+  used with it on this computer (ids only, per organization, at most 200 tasks).
 - **Mini timer** (owner Q2): a small always-on-top window (title bar button, `Ctrl/⌘+Shift+M`, Settings) with the
   running task, its organization, the elapsed time, Stop / Resume and "Open Beacon Desktop"; `Esc` closes it,
-  `Ctrl/⌘+Shift+S` starts or stops. The running timer still shows in the title bar or title bar + sidebar (Settings).
-- English and Spanish for every new string; light and dark; axe WCAG 2.1 AA on every new dialog and the mini timer.
+  `Ctrl/⌘+Shift+S` starts or stops; keyboard focus stays on Stop / Resume while the main window works. The running
+  timer still shows in the title bar or title bar + sidebar (Settings).
+- English and Spanish for every new string; light and dark; axe WCAG 2.1 AA checks on every new dialog and the mini
+  timer, plus a focus check of the mini timer (axe does not test focus loss).
 
 #### Security
 
@@ -38,9 +49,19 @@ and **2.2** (context policy); an older server behaves as before (no fields asked
 - Review ZBZ-v Infos:
   - **ZBZ-v-I1**: the chat token keeps the base path of the server it was stored under (keychain entry); a rebind to
     another path of the same server is refused while it is stored, so the webview cannot move the chat-route anchor.
-  - **ZBZ-v-I2**: `mailto:` links keep spaces as `%20` (RFC 6068), not `+`, in the window and in Rust.
+  - **ZBZ-v-I2**: `mailto:` links keep spaces as `%20` (RFC 6068), not `+`, in the window and in Rust; a raw `+`
+    stays a plus (ZCD-I1: the kept parameters are copied as written).
   - **ZBZ-v-I3**: an organization shown after a failed switch (network, 5xx) is no longer remembered for the next
     launch; only one the server served is.
+- Review ZCD (ship after fixes, all closed before the release):
+  - **ZCD-M1**: queued offline actions carry their organization and replay there; a write's `403` never moves later
+    writes (or the client) to Personal; a stop that is only queued blocks the organization switch.
+  - **ZCD-M2**: a queued stop keeps the activity type and the click time; a replay `409` keeps it queued and asks.
+  - **ZCD-M3**: Resume and pinned tasks are scoped to the organization the task was listed in.
+  - **ZCD-L1**: the organization and the timer (`GET timer` id) are checked again after the dialog before anything
+    is sent. **L2**: a refused context reloads the task list. **L3**: sign-out forgets the context, the task
+    organizations and the remembered activity types; the next sign-in starts in Personal. **L4**: Retry honours
+    `Retry-After`. **L5**: the mini timer keeps keyboard focus. **I4**: a time-only switch is remembered once served.
 
 ### Planned for 0.10.0 (BD-2)
 

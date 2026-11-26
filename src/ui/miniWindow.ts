@@ -47,6 +47,8 @@ export class MiniTimer {
   readonly root: HTMLElement;
   private view: MiniView | null = null;
   private ticker: ReturnType<typeof setInterval> | null = null;
+  /** The control that last had focus: restored after a render even if focus fell to the page meanwhile. */
+  private focusId: string | null = null;
 
   constructor(
     mount: HTMLElement,
@@ -56,6 +58,10 @@ export class MiniTimer {
     document.documentElement.classList.add('mini-window');
     this.root = h('main', { class: 'mini-timer', id: 'mini-timer' });
     mount.replaceChildren(this.root);
+    this.root.addEventListener('focusin', (event) => {
+      const id = (event.target as HTMLElement | null)?.id;
+      if (id) this.focusId = id;
+    });
     document.addEventListener('keydown', (event) => this.onKey(event));
   }
 
@@ -82,15 +88,20 @@ export class MiniTimer {
     }
     const focused = document.activeElement instanceof HTMLElement && this.root.contains(document.activeElement) ? document.activeElement.id : null;
     const time = clockText(view.running ? view.startedAt : null, this.now());
+    // Busy: `aria-disabled`, never `disabled`, so keyboard focus stays on the button across Stop / Resume (ZCD-L5).
+    const busy = view.busy ? 'true' : undefined;
     const main = view.running
-      ? h('button', { class: 'mt-btn stop', id: 'mini-toggle', attrs: { type: 'button', disabled: view.busy, 'aria-keyshortcuts': 'Control+Shift+S Meta+Shift+S' } }, chatIcon('stop', 'sm'), view.labels.stop)
+      ? h('button', { class: 'mt-btn stop', id: 'mini-toggle', attrs: { type: 'button', 'aria-disabled': busy, 'aria-keyshortcuts': 'Control+Shift+S Meta+Shift+S' } }, chatIcon('stop', 'sm'), view.labels.stop)
       : h(
           'button',
-          { class: 'mt-btn start', id: 'mini-toggle', attrs: { type: 'button', disabled: view.busy || !view.canStart, 'aria-keyshortcuts': 'Control+Shift+S Meta+Shift+S', 'aria-label': view.canStart ? view.labels.startTask : view.labels.start, 'aria-describedby': view.canStart ? undefined : 'mini-hint' } },
+          { class: 'mt-btn start', id: 'mini-toggle', attrs: { type: 'button', disabled: !view.canStart, 'aria-disabled': busy, 'aria-keyshortcuts': 'Control+Shift+S Meta+Shift+S', 'aria-label': view.canStart ? view.labels.startTask : view.labels.start, 'aria-describedby': view.canStart ? undefined : 'mini-hint' } },
           chatIcon('play', 'sm'),
           view.labels.start,
         );
-    main.addEventListener('click', () => this.send(view.running ? 'stop' : 'start'));
+    main.addEventListener('click', () => {
+      if (this.view?.busy) return;
+      this.send(view.running ? 'stop' : 'start');
+    });
     const expand = h('button', { class: 'mt-icon', id: 'mini-expand', attrs: { type: 'button', 'aria-label': view.labels.expand, title: view.labels.expand, 'aria-keyshortcuts': 'Control+Shift+M Meta+Shift+M' } }, chatIcon('expand', 'sm'));
     expand.addEventListener('click', () => this.send('expand'));
     this.root.dataset.running = view.running ? 'true' : 'false';
@@ -107,7 +118,8 @@ export class MiniTimer {
       ),
       h('p', { class: 'mt-hint', id: 'mini-hint', attrs: { hidden: view.running || view.canStart } }, view.labels.noTask),
     );
-    if (focused) this.root.querySelector<HTMLElement>(`#${focused}`)?.focus();
+    const target = focused ?? (document.activeElement === document.body || document.activeElement === null ? this.focusId : null);
+    if (target) this.root.querySelector<HTMLElement>(`#${target}`)?.focus();
   }
 
   private syncTicker(): void {

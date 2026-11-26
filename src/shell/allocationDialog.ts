@@ -59,6 +59,8 @@ export class AllocationDialog {
   private search: SearchState = { kind: 'idle' };
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private ticker: ReturnType<typeof setInterval> | null = null;
+  /** Counts a `429` down (Retry-After) and retries once at its end (audit ZCD-L4). */
+  private limitTicker: ReturnType<typeof setInterval> | null = null;
   private searchSeq = 0;
   private optionIndex = -1;
   private submitted = false;
@@ -102,6 +104,8 @@ export class AllocationDialog {
 
   private finish(value: Allocation | null): void {
     if (this.ticker !== null) clearInterval(this.ticker);
+    if (this.limitTicker !== null) clearInterval(this.limitTicker);
+    this.limitTicker = null;
     if (this.searchTimer !== null) clearTimeout(this.searchTimer);
     this.ticker = null;
     this.searchTimer = null;
@@ -126,6 +130,7 @@ export class AllocationDialog {
       if (this.request !== request) return;
       this.load = error instanceof ApiError && error.status === 429 ? { kind: 'limited', until: this.now() + (error.retryAfter ?? 30) * 1000 } : { kind: 'offline' };
     }
+    this.syncLimitTicker();
     // Focus waited on Cancel while the list loaded (a disabled select cannot take it): move it to the field now.
     const active = document.activeElement?.id;
     const refocus = active === 'alloc-activity' || (active === 'alloc-cancel' && request.missing.activityType && !this.submitted);
@@ -218,9 +223,14 @@ export class AllocationDialog {
     // One help line, always present (fixed height): the state of the list, or the inherited hint.
     if (load.kind === 'offline' || load.kind === 'limited') {
       status.classList.add('warn');
-      status.append(load.kind === 'offline' ? t('allocActivityOffline') : t('allocRateLimited', { seconds: Math.max(1, Math.ceil((load.until - this.now()) / 1000)) }), ' ');
-      const retry = h('button', { class: 'link-btn', id: 'alloc-activity-retry', attrs: { type: 'button' } }, chatIcon('refresh', 'xs'), t('allocRetry'));
-      retry.addEventListener('click', () => void this.loadActivities());
+      status.append(h('span', { id: 'alloc-activity-limit' }, load.kind === 'offline' ? t('allocActivityOffline') : this.waitText(load.until)), ' ');
+      // While Retry-After runs, Retry waits too (and the list is fetched again by itself at its end).
+      const waiting = load.kind === 'limited' && load.until > this.now();
+      const retry = h('button', { class: 'link-btn', id: 'alloc-activity-retry', attrs: { type: 'button', 'aria-disabled': waiting ? 'true' : undefined } }, chatIcon('refresh', 'xs'), t('allocRetry'));
+      retry.addEventListener('click', () => {
+        if (this.load.kind === 'limited' && this.load.until > this.now()) return;
+        void this.loadActivities();
+      });
       status.append(retry);
     } else if (load.kind === 'ready' && load.list.length === 0) {
       status.append(t('allocActivityEmpty'));
@@ -290,6 +300,45 @@ export class AllocationDialog {
     this.searchTimer = setTimeout(() => void this.runSearch(query), SEARCH_DELAY_MS);
   }
 
+  /** "Try again in N s" (whole seconds, at least 1). */
+  private waitText(until: number): string {
+    return this.t('allocRateLimited', { seconds: Math.max(1, Math.ceil((until - this.now()) / 1000)) });
+  }
+
+  /** Ticks the 429 countdowns every second; at the end the request runs once again by itself (audit ZCD-L4). */
+  private syncLimitTicker(): void {
+    const limited = this.load.kind === 'limited' || this.search.kind === 'limited';
+    if (!limited) {
+      if (this.limitTicker !== null) clearInterval(this.limitTicker);
+      this.limitTicker = null;
+      return;
+    }
+    if (this.limitTicker !== null) return;
+    this.limitTicker = setInterval(() => this.tickLimits(), 1000);
+  }
+
+  /** One second of the 429 countdowns (exposed for tests). */
+  tickLimits(): void {
+    const now = this.now();
+    if (this.load.kind === 'limited') {
+      if (this.load.until <= now) void this.loadActivities();
+      else {
+        const text = this.dialog.querySelector('#alloc-activity-limit');
+        if (text !== null) text.textContent = this.waitText(this.load.until);
+      }
+    }
+    if (this.search.kind === 'limited') {
+      if (this.search.until <= now) {
+        this.search = { kind: 'idle' };
+        this.queueSearch(this.dialog.querySelector<HTMLInputElement>('#alloc-subject')?.value ?? '');
+      } else {
+        const text = this.dialog.querySelector('#alloc-subject-limit');
+        if (text !== null) text.textContent = this.waitText(this.search.until);
+      }
+    }
+    this.syncLimitTicker();
+  }
+
   private async runSearch(query: string): Promise<void> {
     const request = this.request;
     const type = this.subjectType;
@@ -303,6 +352,7 @@ export class AllocationDialog {
       if (seq !== this.searchSeq || this.request !== request) return;
       this.search = error instanceof ApiError && error.status === 429 ? { kind: 'limited', until: this.now() + (error.retryAfter ?? 30) * 1000 } : { kind: 'offline' };
     }
+    this.syncLimitTicker();
     this.optionIndex = this.search.kind === 'results' && this.search.list.length > 0 ? 0 : -1;
     this.renderList();
     if (this.search.kind === 'results') this.announce(this.t('allocSubjectResults', { count: this.search.list.length }));
@@ -321,7 +371,11 @@ export class AllocationDialog {
     }
     if (search.kind === 'searching') list.replaceChildren(note(t('allocSubjectSearching')));
     else if (search.kind === 'offline') list.replaceChildren(note(t('allocActivityOffline'), ' warn'));
-    else if (search.kind === 'limited') list.replaceChildren(note(t('allocRateLimited', { seconds: Math.max(1, Math.ceil((search.until - this.now()) / 1000)) }), ' warn'));
+    else if (search.kind === 'limited') {
+      const limit = note(this.waitText(search.until), ' warn');
+      limit.id = 'alloc-subject-limit';
+      list.replaceChildren(limit);
+    }
     else if (search.list.length === 0) list.replaceChildren(note(t('allocSubjectNone')));
     else {
       list.replaceChildren(

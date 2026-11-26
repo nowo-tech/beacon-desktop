@@ -155,3 +155,29 @@ export function meContexts(me: Me | null): { contexts: { key: string; label: str
   const context = typeof me?.context === 'string' && pattern.test(me.context) ? me.context : null;
   return { contexts, context };
 }
+
+/** At most this many task ids keep the organization they were listed in (oldest dropped first). */
+export const MAX_TASK_CONTEXTS = 500;
+const CONTEXT_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+/** The remembered `{taskId: context}` map (audit ZCD-M3): valid keys only, at most `MAX_TASK_CONTEXTS`. */
+export function sanitizeTaskContexts(value: unknown): Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  const entries = Object.entries(value as Record<string, unknown>).filter(([id, context]) => id !== '' && id.length <= 200 && typeof context === 'string' && CONTEXT_KEY.test(context)) as [string, string][];
+  return Object.fromEntries(entries.slice(-MAX_TASK_CONTEXTS));
+}
+
+/** Records that `ids` were listed in `context` (moved to the end; returns the same map when nothing changed). */
+export function rememberTaskContexts(map: Record<string, string>, ids: readonly string[], context: string): Record<string, string> {
+  if (!CONTEXT_KEY.test(context) || ids.every((id) => map[id] === context)) return map;
+  const fresh = new Set(ids);
+  const next = Object.fromEntries(Object.entries(map).filter(([id]) => !fresh.has(id)));
+  for (const id of ids) if (id !== '' && id.length <= 200) next[id] = context;
+  return sanitizeTaskContexts(next);
+}
+
+/** Whether a task may start in `context`: listed there, or never seen (older data, a task not listed yet). */
+export function taskInContext(map: Record<string, string>, taskId: string, context: string): boolean {
+  const known = map[taskId];
+  return known === undefined || known === context;
+}

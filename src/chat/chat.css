@@ -447,6 +447,7 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .sh-dialog .selectish, .sh-dialog .combo-field input { width: 100%; height: 34px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); padding: 0 10px; font: inherit; font-size: var(--fs-sm); color-scheme: light dark; }
 .sh-dialog .selectish:focus-visible, .sh-dialog .combo-field input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--ink-3); }
 .sh-dialog .selectish[disabled] { color: var(--ink-3); background: var(--surface-2); cursor: progress; }
+.sh-dialog .link-btn[aria-disabled='true'] { cursor: not-allowed; text-decoration: none; color: var(--ink-3); }
 .sh-dialog .link-btn { display: inline-flex; align-items: center; gap: 4px; color: var(--moss); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; padding: 0 2px; }
 .combo { display: flex; gap: 8px; }
 .combo .combo-type { width: auto; flex: none; max-width: 40%; }
@@ -482,6 +483,7 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .mini-timer .mt-btn.stop { background: var(--signal-soft); border-color: color-mix(in srgb, var(--signal) 45%, transparent); color: var(--signal); }
 .mini-timer .mt-btn.start { background: var(--moss); color: var(--on-moss); }
 .mini-timer .mt-btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+.mini-timer .mt-btn[aria-disabled='true'] { cursor: progress; }
 .mini-timer .mt-icon { width: 32px; height: 32px; display: grid; place-items: center; color: var(--ink-2); border: 1px solid var(--line-strong); }
 .mini-timer .mt-icon:hover { background: var(--hover); color: var(--ink); }
 .mini-timer .mt-hint { font-size: var(--fs-xs); color: var(--ink-3); min-height: 1.3em; }

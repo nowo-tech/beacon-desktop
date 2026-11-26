@@ -124,6 +124,8 @@ function freshState() {
       contextPolicy: null,
       // TimeTrackBundle 2.1 subjects and activity types: null = a 2.0 server; else {requireActivityType, subjects: bool}.
       allocation: null,
+      // Tasks listed per context ({context: [task ids]}); null = every task in every context.
+      contextTasks: null,
     },
   };
 }
@@ -432,8 +434,10 @@ export function createMockServer(options = {}) {
         const search = (url.searchParams.get('search') ?? '').toLowerCase();
         const limit = Math.min(Number(url.searchParams.get('limit') ?? 50) || 50, 50);
         const offset = Number(url.searchParams.get('offset') ?? 0) || 0;
+        // BD-3a: `contextTasks` ({context: [task ids]}) lists only those tasks in that context, as Beacon's filter does.
+        const only = state.config.contextTasks?.[req.headers['x-beacon-context'] ?? 'personal'] ?? null;
         const tasks = allTasks().filter(
-          (t) => search === '' || t.title.toLowerCase().includes(search) || t.id.toLowerCase() === search,
+          (t) => (only === null || only.includes(t.id)) && (search === '' || t.title.toLowerCase().includes(search) || t.id.toLowerCase() === search),
         );
         return send(res, 200, { tasks: tasks.slice(offset, offset + limit).map((t) => withUrl(t, t.id)) });
       }

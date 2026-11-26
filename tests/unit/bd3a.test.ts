@@ -26,6 +26,10 @@ import {
   taskSubjectTypes,
 } from '../../src/lib/allocation';
 import { loadLocal } from '../../src/lib/settings';
+import { OfflineQueue } from '../../src/lib/queue';
+import { AllocationDialog } from '../../src/shell/allocationDialog';
+import { chatText } from '../../src/chat/i18n';
+import { rememberTaskContexts, sanitizeTaskContexts, taskInContext, MAX_TASK_CONTEXTS } from '../../src/lib/allocation';
 import type { Me } from '../../src/api/types';
 import { nodeFetch, startMock, until } from './helpers';
 
@@ -84,7 +88,8 @@ describe('time API context (X-Beacon-Context, BD-3a)', () => {
     // A write in a refused context fails (its time would otherwise land in another organization).
     const writer = new TimeTrackApi({ baseUrl: env.url, source: 'desktop', token: await token(), fetchImpl: nodeFetch, context: ORG2, onContextRefused: (key) => refused.push(key) });
     await expect(writer.start('T-101')).rejects.toMatchObject({ status: 403, code: 'context_forbidden' });
-    expect(writer.currentContext).toBe('personal');
+    // The client keeps its context for later writes (audit ZCD-M1): only the caller is told.
+    expect(writer.currentContext).toBe(ORG2);
     expect((await requests()).filter((item) => item.path.endsWith('timer/start')).length).toBe(1);
     // Personal is never retried, and another 403 (task_forbidden) never switches context.
     const personal = new TimeTrackApi({ baseUrl: env.url, source: 'desktop', token: await token(), fetchImpl: nodeFetch, context: ORG });
@@ -179,6 +184,13 @@ describe('required fields helpers (Q5)', () => {
   });
 });
 
+/** A fetch whose time API calls fail like a dropped network while `net.down` is true. */
+function droppable() {
+  const net = { down: false };
+  const fetchImpl = ((input: string, init?: RequestInit) => (net.down && input.includes('/api/time-track/') ? Promise.reject(new Error('offline')) : nodeFetch(input, init))) as typeof fetch;
+  return { net, platform: browserPlatform('0.1.0', fetchImpl) };
+}
+
 function mount(platform = browserPlatform('0.1.0', nodeFetch)) {
   document.body.replaceChildren();
   const root = document.createElement('div');
@@ -192,6 +204,7 @@ function mount(platform = browserPlatform('0.1.0', nodeFetch)) {
     askAllocation: (request) => shell.askAllocation(request),
     onContextRefused: (context) => void shell.timeContextRefused(context),
     contextLabel: () => shell.contextLabel(),
+    contextLabelOf: (context) => shell.contextLabelOf(context),
     sleep: () => new Promise((resolve) => setTimeout(resolve, 5)),
     searchDelayMs: 1,
   });
@@ -201,8 +214,8 @@ function mount(platform = browserPlatform('0.1.0', nodeFetch)) {
   return { root, platform, shell, app, $ };
 }
 
-async function signedIn() {
-  const ui = mount();
+async function signedIn(platform?: ReturnType<typeof browserPlatform>) {
+  const ui = mount(platform);
   await ui.app.init();
   const done = ui.app.connect(env.url);
   await until(() => ui.$('#user-code') !== null, 'the device code');
@@ -534,5 +547,312 @@ describe('chat context memory (audit ZBZ-v-I3)', () => {
     await ui.shell.timeContextRefused(ORG2);
     await until(() => ui.shell.context === 'personal', 'the chat to leave the refused context');
     await ui.shell.timeContextRefused('personal');
+  });
+});
+
+describe('audit ZCD fixes', () => {
+  it('M1: replays each queued action in its own context; a refused one drops only its context', async () => {
+    await env.control('config', { contextPolicy: { required: true, refuse: [ORG2] } });
+    const tok = await token();
+    const queue = new OfflineQueue(localStorage);
+    const at = new Date(Date.now() - 60_000).toISOString();
+    queue.push(
+      { kind: 'start', taskId: 'T-101', taskTitle: 'Write onboarding guide', at, context: ORG2 },
+      { kind: 'stop', at, context: ORG2 },
+      { kind: 'start', taskId: 'T-102', taskTitle: 'Review pull request queue', at, context: ORG },
+      { kind: 'stop', at, context: ORG },
+    );
+    const made: string[] = [];
+    const result = await queue.sync((context) => {
+      made.push(context ?? 'none');
+      return new TimeTrackApi({ baseUrl: env.url, source: 'desktop', token: tok, fetchImpl: nodeFetch, context });
+    });
+    expect(result.synced).toBe(2);
+    expect(result.dropped.map((item) => [item.action.kind, item.code])).toEqual([
+      ['start', 'context_forbidden'],
+      ['stop', 'context_forbidden'],
+    ]);
+    expect(queue.size).toBe(0);
+    const writes = (await requests()).filter((item) => /timer\/(start|stop)$/.test(item.path)).map((item) => item.context);
+    // The refused organization's start is sent once and nothing else of it; the later writes keep their own context.
+    expect(writes).toEqual([ORG2, ORG, ORG]);
+    expect(made).not.toContain('personal');
+  });
+
+  it('M1/M2: queued stop keeps its organization, activity type and click time; a later switch sends it first', async () => {
+    await env.control('config', { allocation: { requireActivityType: true }, contextPolicy: { required: true, refuse: [] } });
+    const { net, platform } = droppable();
+    const ui = await signedIn(platform);
+    await until(() => ui.shell.contexts.length === 3, 'the time contexts');
+    await ui.shell.switchContext(ORG);
+    await until(() => !ui.app.busy, 'the reload');
+    await startTask(ui, 'T-104');
+    // Org switch with the required field missing: one dialog; the network drops before the stop is sent.
+    const clicked = Date.now();
+    const switching = ui.shell.switchContext(ORG2);
+    await until(dialogOpen, 'the switch dialog');
+    await chooseActivity(ui, 'review');
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    net.down = true;
+    submit(ui);
+    await switching;
+    // Queued only: the switch did not happen.
+    expect(ui.shell.context).toBe(ORG);
+    expect(ui.app.context).toBe(ORG);
+    expect(ui.app.pendingSync).toBe(1);
+    const queued = new OfflineQueue(localStorage).list()[0] as { kind: string; at: string };
+    expect(queued).toMatchObject({ kind: 'stop', context: ORG, allocation: { activityTypeKey: 'review' }, taskTitle: 'Fix invoice rounding bug' });
+    expect(Date.parse(queued.at) - clicked).toBeLessThan(800);
+    // Offline the switch is refused outright.
+    await ui.shell.switchContext(ORG2);
+    expect(ui.shell.context).toBe(ORG);
+    // Even if the shown organization changed meanwhile, the stop replays in the one it was recorded in.
+    ui.app.setContext(ORG2);
+    net.down = false;
+    ui.app.offline = false;
+    await ui.app.refresh();
+    expect(ui.app.pendingSync).toBe(0);
+    const stop = (await requests()).filter((item) => item.path.endsWith('timer/stop')).at(-1);
+    expect(stop?.context).toBe(ORG);
+    const body = JSON.parse(stop?.body ?? '{}') as { activityTypeKey?: string; endedAt?: string };
+    expect(body.activityTypeKey).toBe('review');
+    expect(Math.abs(Date.parse(body.endedAt ?? '') - Date.parse(queued.at))).toBeLessThan(1000);
+    ui.app.setContext(ORG);
+    await ui.shell.switchContext(ORG2);
+    expect(ui.shell.context).toBe(ORG2);
+  });
+
+  it('M2: a queued stop the server refuses (409) is kept and completed through the dialog', async () => {
+    await env.control('config', { allocation: { requireActivityType: true } });
+    const { net, platform } = droppable();
+    const ui = await signedIn(platform);
+    ui.app.setAllocationSetting({ askOn: 'start', inheritActivity: false });
+    const starting = startTask(ui, 'T-101');
+    await until(dialogOpen, 'the start dialog');
+    await chooseActivity(ui, 'dev');
+    submit(ui);
+    await starting;
+    // The type is cleared on the server (another device), then the stop is queued offline without a type.
+    const api = ui.app.timeApi();
+    await api?.stop();
+    await api?.start('T-102');
+    ui.app.state.activeTimer = { ...(await api?.timer())!, activityType: { key: 'dev', label: 'Development' } };
+    net.down = true;
+    expect(await ui.app.stop()).toBe('queued');
+    net.down = false;
+    ui.app.offline = false;
+    const refreshing = ui.app.refresh();
+    await until(dialogOpen, 'the dialog for the queued stop');
+    // Kept, not dropped, while the person answers.
+    expect(ui.app.pendingSync).toBe(1);
+    expect(ui.$('#alloc-summary, .alloc-summary').textContent).toContain('Review pull request queue');
+    await refreshing;
+    await chooseActivity(ui, 'support');
+    submit(ui);
+    await until(() => ui.app.pendingSync === 0, 'the queued stop to replay');
+    expect(await api?.timer()).toBeNull();
+    const stop = (await requests()).filter((item) => item.path.endsWith('timer/stop')).at(-1);
+    expect(JSON.parse(stop?.body ?? '{}').activityTypeKey).toBe('support');
+  });
+
+  it('M2: Cancel keeps the queued stop and tells why', async () => {
+    await env.control('config', { allocation: { requireActivityType: true } });
+    const { net, platform } = droppable();
+    const ui = await signedIn(platform);
+    ui.app.setAllocationSetting({ askOn: 'start', inheritActivity: false });
+    const api = ui.app.timeApi();
+    await api?.start('T-103');
+    await ui.app.refresh();
+    net.down = true;
+    expect(await ui.app.stop()).toBe('queued');
+    net.down = false;
+    ui.app.offline = false;
+    void ui.app.refresh();
+    await until(dialogOpen, 'the dialog for the queued stop');
+    ui.$<HTMLButtonElement>('#alloc-cancel').click();
+    await until(() => ui.app.notice?.includes('still needs an activity type') === true, 'the notice');
+    expect(ui.app.pendingSync).toBe(1);
+    // Asked again only after a while: the next refresh just repeats the notice.
+    await ui.app.refresh();
+    expect(dialogOpen()).toBe(false);
+    expect(ui.app.pendingSync).toBe(1);
+  });
+
+  it('M3: Resume and pinned tasks never start another organization\'s task', async () => {
+    await env.control('config', { contextPolicy: { required: true, refuse: [] }, contextTasks: { personal: ['T-101', 'T-102'], [ORG]: ['T-104', 'T-105'], [ORG2]: ['T-106', 'T-107'] } });
+    const ui = await signedIn();
+    await until(() => ui.shell.contexts.length === 3, 'the time contexts');
+    await ui.shell.switchContext(ORG);
+    await until(() => ui.app.tasks.some((task) => task.id === 'T-104'), 'the Lumen Works tasks');
+    await startTask(ui, 'T-104');
+    expect(await ui.app.stop()).toBe('stopped');
+    ui.app.togglePin(ui.app.tasks.find((task) => task.id === 'T-104')!);
+    expect(ui.app.lastTask()?.id).toBe('T-104');
+    await ui.shell.toggleMini();
+    expect(ui.platform.hooks.mini?.canStart).toBe(true);
+    await ui.shell.switchContext(ORG2);
+    await until(() => ui.app.tasks.some((task) => task.id === 'T-106'), 'the Harbor Studio tasks');
+    // Nothing of Lumen Works to resume here: the mini timer, the tray and the shortcut offer nothing.
+    expect(ui.app.lastTask()?.id).not.toBe('T-104');
+    await until(() => ui.platform.hooks.mini?.canStart === false || ui.platform.hooks.mini?.task !== 'Fix invoice rounding bug', 'the mini view');
+    expect(ui.app.quickTasks().map((task) => task.id)).not.toContain('T-104');
+    const before = (await requests()).filter((item) => item.path.endsWith('timer/start')).length;
+    ui.platform.hooks.miniAction('start');
+    await ui.app.toggle();
+    await ui.app.start({ id: 'T-104', title: 'Fix invoice rounding bug' });
+    expect(ui.app.notice).toContain('belongs to another organization');
+    expect(ui.app.state.activeTimer).toBeNull();
+    expect((await requests()).filter((item) => item.path.endsWith('timer/start')).length).toBe(before);
+    // Back in Lumen Works it resumes.
+    await ui.shell.switchContext(ORG);
+    await until(() => !ui.app.busy, 'the reload');
+    expect(ui.app.lastTask()?.id).toBe('T-104');
+  });
+
+  it('L1: a context or timer change while the dialog is open acts on nothing', async () => {
+    await env.control('config', { allocation: { requireActivityType: true } });
+    const ui = await signedIn();
+    await startTask(ui, 'T-104');
+    const stopping = ui.app.stop();
+    await until(dialogOpen, 'the stop dialog');
+    await chooseActivity(ui, 'dev');
+    ui.app.setContext(ORG);
+    submit(ui);
+    expect(await stopping).toBe('cancelled');
+    expect(ui.app.notice).toContain('organization changed');
+    expect((await requests()).some((item) => item.path.endsWith('timer/stop'))).toBe(false);
+    ui.app.setContext('personal');
+    // Another device stops this timer and starts another while the 409 dialog is open: nothing is stopped here.
+    ui.app.setAllocationSetting({ askOn: 'start' });
+    const refused = ui.app.stop();
+    await until(dialogOpen, 'the dialog after the 409');
+    const api = ui.app.timeApi();
+    await api?.allocate({ activityTypeKey: 'dev' });
+    await api?.stop();
+    await api?.start('T-105');
+    await chooseActivity(ui, 'support');
+    submit(ui);
+    expect(await refused).toBe('failed');
+    expect(ui.app.notice).toContain('changed on another device');
+    expect(ui.app.state.activeTimer?.taskId).toBe('T-105');
+    expect((await api?.timer())?.taskId).toBe('T-105');
+  });
+
+  it('L2/L3: a refused context reloads the tasks; sign-out forgets contexts and remembered types', async () => {
+    await env.control('config', { allocation: { requireActivityType: false }, contextPolicy: { required: true, refuse: [] } });
+    const ui = await signedIn();
+    await until(() => ui.shell.contexts.length === 3, 'the time contexts');
+    await ui.shell.switchContext(ORG);
+    await until(() => !ui.app.busy, 'the reload');
+    expect(JSON.parse(localStorage.getItem('beacon-desktop-shell') ?? '{}').context).toBe(ORG);
+    await env.control('config', { contextPolicy: { required: true, refuse: [ORG] } });
+    await ui.app.refresh();
+    await until(async () => (await requests()).filter((item) => item.path.endsWith('/tasks')).at(-1)?.context === 'personal', 'the tasks reloaded in Personal');
+    ui.app.state.taskActivities = { [`${ORG}|T-1`]: 'dev' };
+    await ui.app.logout();
+    expect(ui.app.context).toBe('personal');
+    expect(ui.app.state.taskActivities).toEqual({});
+    expect(ui.app.state.taskContexts).toEqual({});
+    expect(JSON.parse(localStorage.getItem('beacon-desktop-shell') ?? '{}').context).toBeNull();
+  });
+
+  it('L4: Retry waits for Retry-After, the countdown ticks, the list loads again by itself', async () => {
+    document.body.replaceChildren();
+    let now = 1_000_000;
+    let calls = 0;
+    const dialog = new AllocationDialog(chatText('en'), () => undefined, () => now);
+    document.body.append(dialog.dialog);
+    const asked = dialog.ask({
+      mode: 'stop',
+      taskTitle: 'T',
+      startedAt: null,
+      org: null,
+      missing: { activityType: true, subject: false },
+      features: { subjects: [{ type: 'customer', label: 'Customer', allowsTask: true }], activityTypes: true, requireActivityType: true, requireAllocation: false },
+      initialActivity: null,
+      loadActivities: async () => {
+        calls += 1;
+        if (calls === 1) throw new ApiError(429, 'rate_limited', 'slow down', 5);
+        return [{ key: 'dev', label: 'Development' }];
+      },
+      searchSubjects: async () => {
+        throw new ApiError(429, 'rate_limited', 'slow down', 3);
+      },
+    });
+    const q = <T extends Element = HTMLElement>(selector: string) => dialog.dialog.querySelector(selector) as T;
+    await until(() => q('#alloc-activity-retry') !== null, 'the 429 state');
+    expect(q('#alloc-activity-limit').textContent).toContain('5 s');
+    expect(q('#alloc-activity-retry').getAttribute('aria-disabled')).toBe('true');
+    q<HTMLButtonElement>('#alloc-activity-retry').click();
+    expect(calls).toBe(1);
+    now += 2000;
+    dialog.tickLimits();
+    expect(q('#alloc-activity-limit').textContent).toContain('3 s');
+    // The subject search is limited too and counts down on its own.
+    const input = q<HTMLInputElement>('#alloc-subject');
+    input.value = 'a';
+    input.dispatchEvent(new Event('input'));
+    await until(() => q('#alloc-subject-limit') !== null, 'the search 429');
+    expect(q('#alloc-subject-limit').textContent).toContain('3 s');
+    now += 1000;
+    dialog.tickLimits();
+    expect(q('#alloc-subject-limit').textContent).toContain('2 s');
+    now += 3000;
+    dialog.tickLimits();
+    await until(() => !q<HTMLSelectElement>('#alloc-activity').disabled, 'the automatic retry');
+    expect(calls).toBe(2);
+    dialog.dialog.close();
+    expect(await asked).toBeNull();
+  });
+
+  it('L5: keyboard focus stays on the mini timer button across Stop and Resume', () => {
+    document.body.replaceChildren();
+    const root = document.createElement('div');
+    document.body.append(root);
+    const hooks: BrowserMiniHooks = { view: null, actions: [] };
+    const client = browserMiniClient(hooks);
+    const mini = new MiniTimer(root, client, () => Date.parse('2026-11-26T10:00:00Z'));
+    const view: MiniView = {
+      theme: 'light',
+      lang: 'en',
+      windowTitle: 'Mini timer',
+      running: true,
+      task: 'Fix invoice rounding bug',
+      startedAt: '2026-11-26T09:00:00Z',
+      status: 'Tracking',
+      canStart: false,
+      busy: false,
+      labels: { stop: 'Stop', start: 'Resume', startTask: 'Resume "x"', expand: 'Open', close: 'Close', noTask: 'Pick a task', elapsed: 'Elapsed' },
+    };
+    mini.show(view);
+    (root.querySelector('#mini-toggle') as HTMLButtonElement).focus();
+    mini.show({ ...view, busy: true });
+    const busy = root.querySelector('#mini-toggle') as HTMLButtonElement;
+    expect(busy.disabled).toBe(false);
+    expect(busy.getAttribute('aria-disabled')).toBe('true');
+    expect(document.activeElement?.id).toBe('mini-toggle');
+    busy.click();
+    expect(hooks.actions).toEqual([]);
+    mini.show({ ...view, running: false, startedAt: null, canStart: true });
+    expect(document.activeElement?.id).toBe('mini-toggle');
+    expect(root.querySelector('#mini-toggle')?.textContent).toContain('Resume');
+    // Focus fell to the page (nothing to resume), then comes back once it can.
+    mini.show({ ...view, running: false, startedAt: null, canStart: false });
+    (document.activeElement as HTMLElement | null)?.blur();
+    mini.show({ ...view, running: false, startedAt: null, canStart: true });
+    expect(document.activeElement?.id).toBe('mini-toggle');
+  });
+
+  it('remembers which organization each task was listed in, bounded', () => {
+    let map = rememberTaskContexts({}, ['T-1', 'T-2'], ORG);
+    expect(map).toEqual({ 'T-1': ORG, 'T-2': ORG });
+    expect(rememberTaskContexts(map, ['T-1'], ORG)).toBe(map);
+    expect(rememberTaskContexts(map, ['T-1'], 'bad key!')).toBe(map);
+    map = rememberTaskContexts(map, ['T-1'], ORG2);
+    expect(taskInContext(map, 'T-1', ORG2) && !taskInContext(map, 'T-2', ORG2) && taskInContext(map, 'T-9', ORG2)).toBe(true);
+    for (let i = 0; i < MAX_TASK_CONTEXTS + 3; i++) map = rememberTaskContexts(map, [`X-${i}`], ORG);
+    expect(Object.keys(map).length).toBe(MAX_TASK_CONTEXTS);
+    expect(sanitizeTaskContexts({ a: ORG, b: 'bad key!', '': ORG })).toEqual({ a: ORG });
+    expect(sanitizeTaskContexts(null)).toEqual({});
   });
 });

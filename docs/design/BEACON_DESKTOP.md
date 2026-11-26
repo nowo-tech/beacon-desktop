@@ -511,7 +511,9 @@ start / stop / both, inherit the task's last activity type). File inventory:
 | `src/shell/shell.ts`, `src/chat/module.ts`, `src/chat/i18n.ts`, `src/chat/icons.ts`, `src/chat/chat.css` | changed | Switch flow, time-only contexts, mini timer toggle, Settings → Time tracking, ZBZ-v-I3 |
 | `src/platform.ts`, `src/platform-tauri.ts`, `src/main.ts` | changed | `MiniHost` / `MiniClient`, `bringForward` |
 | `src-tauri/src/secret.rs`, `src-tauri/src/browser.rs`, `src-tauri/src/lib.rs`, `src-tauri/app-commands.rs`, `src-tauri/capabilities/default.json` | changed | ZBZ-v-I1 base path, ZBZ-v-I2 `%20`, mini commands and ACL |
-| `mock-server/server.mjs` | changed | Context policy, activity types, subjects, `timer/allocate`, `409 activity_type_required` |
+| `mock-server/server.mjs` | changed | Context policy, activity types, subjects, `timer/allocate`, `409 activity_type_required`, tasks per context |
+| `src/lib/replay.ts`, `src/lib/queue.ts` | changed (ZCD) | Queued actions carry their context and allocation; replay per context; a replay 409 is kept (`blocked`) |
+| `tests/e2e/bd3a.spec.ts` | new (ZCD) | Two organizations + offline queue; mini timer keyboard focus |
 
 ## 8. Open questions
 

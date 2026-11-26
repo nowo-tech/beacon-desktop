@@ -502,10 +502,12 @@ export class TimeTrackApi {
       const refused = this.context;
       if (!(error instanceof ApiError && error.status === 403 && error.code === 'context_forbidden' && refused !== null && refused !== 'personal')) throw error;
       // Beacon's rule (as the chat's): the refused context is never used again; Personal is always the person's own.
-      this.context = 'personal';
       this.onContextRefused?.(refused);
-      // A read is retried once in Personal; a write is not (its time would be recorded in another organization).
+      // A write is not retried and does not move this client either (its time would be recorded in another
+      // organization, and later writes keep the context they were made for, audit ZCD-M1).
       if ((options.method ?? 'GET') !== 'GET') throw error;
+      // A read is retried once in Personal.
+      this.context = 'personal';
       return this.send(path, options);
     }
   }

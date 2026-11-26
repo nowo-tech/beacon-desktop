@@ -453,5 +453,9 @@
   "settingsTabSchedule": "Horario",
   "settingsTabNotifications": "Notificaciones",
   "settingsTabMeetings": "Reuniones",
-  "settingsTabUpdates": "Actualizaciones"
+  "settingsTabUpdates": "Actualizaciones",
+  "taskOtherOrg": "«{task}» es de otra organización. Cambia a ella primero; la lista de tareas se recarga.",
+  "contextChangedDuringDialog": "La organización cambió mientras la pregunta estaba abierta, así que no se ha iniciado ni parado nada.",
+  "timerChanged": "El temporizador cambió entretanto en otro dispositivo, así que no se ha parado aquí.",
+  "queuedNeedsFields": "Una parada guardada sin conexión aún necesita un tipo de actividad: Beacon mantiene el temporizador en marcha hasta que elijas uno."
 }

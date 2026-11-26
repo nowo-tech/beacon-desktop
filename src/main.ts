@@ -35,6 +35,7 @@ if (root !== null && new URLSearchParams(location.search).get('window') === 'pro
     askAllocation: (request) => shell.askAllocation(request),
     onContextRefused: (context) => void shell.timeContextRefused(context),
     contextLabel: () => shell.contextLabel(),
+    contextLabelOf: (context) => shell.contextLabelOf(context),
     beaconUrl: __BEACON_URL__,
     channel: __CHANNEL__,
     ...(__STORE_URL__ !== '' ? { storeUrl: __STORE_URL__ } : {}),

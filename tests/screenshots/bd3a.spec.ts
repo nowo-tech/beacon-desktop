@@ -105,7 +105,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await shot(page, '06-switch-organization-fields', scheme);
     await page.locator('#alloc-cancel').click();
     // 07 activity types rate-limited (429) in the dialog.
-    await control('config', { failNext: { status: 429, error: 'rate_limited', retryAfter: 12 } });
+    await control('config', { failNext: { status: 429, error: 'rate_limited', retryAfter: 4 } });
     await page.evaluate(() => {
       const app = (window as unknown as { __timeTrack: { app: { setContext(c: string): void } } }).__timeTrack.app;
       app.setContext('personal');
@@ -113,9 +113,10 @@ for (const scheme of ['light', 'dark'] as const) {
     });
     await page.locator('#timer-pill .tp-act.stop').click();
     await expect(page.locator('#alloc-activity-retry')).toBeVisible();
+    // Retry waits for Retry-After (audit ZCD-L4); the list loads again by itself at its end.
+    await expect(page.locator('#alloc-activity-retry')).toHaveAttribute('aria-disabled', 'true');
     await shot(page, '07-activity-types-rate-limited', scheme);
-    await page.locator('#alloc-activity-retry').click();
-    await expect(page.locator('#alloc-activity')).toBeEnabled();
+    await expect(page.locator('#alloc-activity')).toBeEnabled({ timeout: 10_000 });
     await page.locator('#alloc-cancel').click();
     // 08 the title bar with the mini-timer button pressed, 11 the shortcut sheet.
     await page.locator('#tb-mini').click();

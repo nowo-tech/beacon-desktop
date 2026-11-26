@@ -1,4 +1,4 @@
-import { type AskOn, DEFAULT_ASK_ON, sanitizeAskOn, sanitizeTaskActivities } from './allocation';
+import { type AskOn, DEFAULT_ASK_ON, sanitizeAskOn, sanitizeTaskActivities, sanitizeTaskContexts } from './allocation';
 import type { Scope, Task, Timer } from '../api/types';
 import { defaultResumeShortcut, DEFAULT_SHORTCUT, type HostOs, hostOs, OLD_DEFAULT_RESUME_SHORTCUT } from '../platform';
 import { EMPTY_MESSAGES, type MessageState, sanitizeMessages } from './friendly';
@@ -121,6 +121,8 @@ export interface LocalState {
   meeting: MeetingState;
   /** Last activity type per `context|taskId` (keys only, at most 200; `lib/allocation.ts`). Local only. */
   taskActivities: Record<string, string>;
+  /** Organization each known task id was listed in (BD-3a, audit ZCD-M3): Resume never starts another org's task. */
+  taskContexts: Record<string, string>;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -170,6 +172,7 @@ export function emptyState(): LocalState {
     nudge: { ...EMPTY_NUDGE },
     meeting: { ...NO_MEETING },
     taskActivities: {},
+    taskContexts: {},
   };
 }
 
@@ -222,6 +225,7 @@ export function loadLocal(storage: Storage = localStorage): LocalState {
       },
       meeting: sanitizeMeeting(raw.meeting),
       taskActivities: sanitizeTaskActivities(raw.taskActivities),
+      taskContexts: sanitizeTaskContexts(raw.taskContexts),
       messages: sanitizeMessages(raw.messages),
       schedule: sanitizeSchedule(raw.schedule),
       nudge: sanitizeNudge(raw.nudge),

@@ -1,6 +1,6 @@
 import { ApiError, CONTEXT_PATTERN, TimeTrackApi, normalizeServerUrl } from '../api/client';
 import { type ActivityType, type Allocation, ALL_SCOPES, type DeviceCode, type Entry, type Me, MEETINGS_SCOPE, type Task, type Timer } from '../api/types';
-import { type AllocationFeatures, allocationFeatures, anyMissing, type AskOn, asksOnStart, asksOnStop, inheritedActivity, isAllocationRequired, type Missing, missingFields, rememberTaskActivity, taskActivityKey, taskSubjectTypes } from '../lib/allocation';
+import { type AllocationFeatures, allocationFeatures, anyMissing, type AskOn, asksOnStart, asksOnStop, inheritedActivity, isAllocationRequired, type Missing, missingFields, rememberTaskActivity, rememberTaskContexts, taskActivityKey, taskInContext, taskSubjectTypes } from '../lib/allocation';
 import type { AllocationRequest } from '../shell/allocationDialog';
 import { dashboardUrl, myTimeUrl, sameOriginHttps, taskUrl } from '../lib/beacon';
 import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
@@ -14,7 +14,7 @@ import { composeNudge, EMPTY_NUDGE, NUDGE_MINUTES_CHOICES, type NudgeAction, nud
 import { preflight } from '../lib/preflight';
 import { isSignInDeclined, isSignInWait } from '../lib/nativeFetch';
 import { OfflineQueue } from '../lib/queue';
-import { type ClampNote, type QueuedAction, type SyncResult, applyLocally } from '../lib/replay';
+import { type ClampNote, type QueuedAction, type SyncResult, applyLocally, withAllocation } from '../lib/replay';
 import { type ServerFeatures, effectiveThreshold, serverFeatures, thresholdChoices } from '../lib/serverFeatures';
 import { hostOf, prepareServerUrl, type ServerUrlProblem } from '../lib/serverUrl';
 import { type Feature, type LocalState, DEFAULT_SETTINGS, LOCAL_KEYS, MAX_PINNED, SETTINGS_TAB_KEY, emptyState, hasConsent, loadLocal, recordConsent, saveLocal } from '../lib/settings';
@@ -166,6 +166,8 @@ export interface AppDeps {
   beforeSignOut?: () => Promise<void>;
   /** Label of the current organization (the fields dialog names it), `null` for Personal. */
   contextLabel?: () => string | null;
+  /** Label of any known organization (a stop queued offline in another one), `null` for Personal or unknown. */
+  contextLabelOf?: (context: string) => string | null;
   /**
    * Asks for the required time fields (owner Q5, BD-3a): the shell's dialog. Resolves with what to send, or `null` when
    * the person cancelled (nothing is sent). Absent: the app never asks (a refused stop shows the server's error).
@@ -176,7 +178,7 @@ export interface AppDeps {
 }
 
 /** What `stop()` did: stopped (or queued offline), cancelled in the fields dialog, failed, or nothing was running. */
-export type StopOutcome = 'stopped' | 'cancelled' | 'failed' | 'none';
+export type StopOutcome = 'stopped' | 'queued' | 'cancelled' | 'failed' | 'none';
 
 /** Wording of the fields dialog when a stop is part of an organization switch (owner Q4). */
 export interface StopContext {
@@ -601,19 +603,94 @@ export class DesktopApp {
   /** Activity types of the current context, loaded once per context when a dialog or a start needs them. */
   private activityCache: { context: string; list: Promise<ActivityType[]> } | null = null;
 
-  private api(): TimeTrackApi {
+  /**
+   * A client bound to `context` (default: the current one). `follow`: a refused context moves the app and the shell to
+   * Personal; the offline queue's clients do not (an old action's organization is not the one shown, audit ZCD-M1).
+   */
+  private api(context: string = this.timeContext, follow = true): TimeTrackApi {
     return new TimeTrackApi({
       baseUrl: this.state.session?.server ?? this.state.lastServer ?? 'https://invalid.invalid',
       token: this.token,
       source: 'desktop',
       fetchImpl: this.platform.fetch,
-      context: this.timeContext,
-      onContextRefused: (refused) => {
-        // Beacon's rule: the refused context is not used again in this run; the shell follows (to Personal).
-        if (this.timeContext === refused) this.setContext('personal');
-        this.deps.onContextRefused?.(refused);
-      },
+      context,
+      onContextRefused: follow
+        ? (refused) => {
+            // Beacon's rule: the refused context is not used again in this run; the shell follows (to Personal).
+            if (this.timeContext === refused) this.setContext('personal');
+            this.deps.onContextRefused?.(refused);
+          }
+        : undefined,
     });
+  }
+
+  /** Replays the offline queue, each action in the context it was recorded in (audit ZCD-M1). */
+  private syncQueue(): Promise<SyncResult> {
+    return this.queue.sync((context) => this.api(context ?? this.timeContext, false), this.now, this.features());
+  }
+
+  /** Queues actions stamped with the current context (replayed there, audit ZCD-M1). */
+  private enqueue(...actions: QueuedAction[]): void {
+    this.queue.push(...actions.map((action) => ({ ...action, context: action.context ?? this.timeContext })));
+  }
+
+  /** Records the organization the listed tasks belong to (audit ZCD-M3). */
+  private rememberTaskContexts(tasks: readonly Task[], context: string): void {
+    const next = rememberTaskContexts(this.state.taskContexts, tasks.map((task) => task.id), context);
+    if (next !== this.state.taskContexts) this.persist({ taskContexts: next });
+  }
+
+  /** The task may start in the current organization (listed here, or never seen anywhere). */
+  inCurrentContext(taskId: string): boolean {
+    return taskInContext(this.state.taskContexts, taskId, this.timeContext);
+  }
+
+  /**
+   * Whether the server still runs `timer` (audit ZCD-L1): another device may have stopped it and started another one
+   * while a dialog was open. Not the same: the screen follows the server, the person is told, nothing is sent.
+   */
+  private async sameTimer(api: TimeTrackApi, timer: Timer): Promise<boolean> {
+    if (timer.id === 'offline') return true;
+    const current = await api.timer();
+    if (current !== null && current.id === timer.id) return true;
+    await this.setTimer(current);
+    this.setNotice(this.t('timerChanged'));
+    return false;
+  }
+
+  /** A stop / switch queued offline that the server refused for a missing field: when it was last asked about. */
+  private queueAskedAt = 0;
+
+  /**
+   * A queued stop / switch the server refused for a required field (audit ZCD-M2): ask now (at most every 10 minutes
+   * after a Cancel); the answer goes into the queued action, which is replayed again. Never dropped.
+   */
+  private async answerQueued(blocked: NonNullable<SyncResult['blocked']>): Promise<void> {
+    const ask = this.deps.askAllocation;
+    const action = blocked.action;
+    if (ask === undefined || (action.kind !== 'stop' && action.kind !== 'switch') || Date.now() - this.queueAskedAt < 10 * 60_000) {
+      this.setNotice(this.t('queuedNeedsFields'));
+      return;
+    }
+    this.queueAskedAt = Date.now();
+    const title = action.kind === 'stop' ? (action.taskTitle ?? '') : (action.closingTitle ?? '');
+    const missing = { activityType: blocked.code === 'activity_type_required' || this.allocationFeatures().requireActivityType, subject: blocked.code === 'allocation_required' };
+    const org = action.context !== undefined && action.context !== 'personal' ? (this.deps.contextLabelOf?.(action.context) ?? null) : null;
+    await this.platform.windowHost.bringForward?.().catch(() => undefined);
+    const request = this.allocationRequest(action.kind === 'stop' ? 'stop' : 'switch', title, action.startedAt ?? null, missing, null, false, org);
+    // The activity types of the action's organization, not the one shown now.
+    request.loadActivities = () => this.api(action.context ?? this.timeContext, false).activityTypes();
+    request.searchSubjects = (type, query) => this.api(action.context ?? this.timeContext, false).searchSubjects(type, query);
+    const answer = await ask(request);
+    if (answer === null) {
+      this.setNotice(this.t('queuedNeedsFields'));
+      return;
+    }
+    const first = this.queue.list()[0];
+    if (first === undefined || JSON.stringify(first) !== JSON.stringify(action)) return;
+    this.queue.replaceFirst(withAllocation(action, answer));
+    this.queueAskedAt = 0;
+    await this.refresh();
   }
 
   /** Actions recorded offline and not sent yet (an organization switch waits for them). */
@@ -961,6 +1038,9 @@ export class DesktopApp {
       meeting: { ...NO_MEETING },
       lastTask: null,
       pinned: [],
+      // Audit ZCD-L3: ids of the account's organizations and tasks go too, and the next sign-in starts in Personal.
+      taskActivities: {},
+      taskContexts: {},
       nudge: { ...EMPTY_NUDGE },
       settings: { ...this.state.settings, meetingGeneric: null },
     });
@@ -974,6 +1054,7 @@ export class DesktopApp {
     this.meetingPoll = FRESH_POLL;
     this.reconnectDismissed = false;
     this.queue.clear();
+    this.setContext('personal');
     this.dailyToast = null;
     this.nativeNotice = null;
     this.tasks = [];
@@ -1000,14 +1081,21 @@ export class DesktopApp {
   }
 
   private async load(api: TimeTrackApi): Promise<void> {
+    let blocked: SyncResult['blocked'];
     if (this.queue.size > 0) {
       const me = await api.me();
       this.setMe(me);
-      this.report(await this.queue.sync(api, this.now, serverFeatures(me)), true);
+      const result = await this.syncQueue();
+      this.report(result, true);
+      blocked = result.blocked;
     }
+    const context = api.currentContext ?? 'personal';
     const [timer, tasks, me, entries] = await Promise.all([api.timer(), api.tasks({ search: this.query }), api.me(), this.loadEntries(api)]);
     this.offline = false;
     this.tasks = tasks;
+    this.rememberTaskContexts(tasks, context);
+    if (timer !== null) this.rememberTaskContexts([{ id: timer.taskId, title: timer.taskTitle }], context);
+    if (blocked !== undefined) void this.answerQueued(blocked);
     this.setMe(me);
     this.entries = entries;
     await this.setTimer(timer);
@@ -1046,10 +1134,10 @@ export class DesktopApp {
   private async runActions(actions: QueuedAction[]): Promise<void> {
     if (actions.length === 0) return;
     const before = this.state.activeTimer;
-    this.queue.push(...actions);
+    this.enqueue(...actions);
     await this.guard(
       async () => {
-        const result = await this.queue.sync(this.api(), this.now, this.features());
+        const result = await this.syncQueue();
         this.offline = false;
         this.report(result, false);
         if (result.timer !== undefined) await this.setTimer(result.timer);
@@ -1086,13 +1174,23 @@ export class DesktopApp {
   async search(query: string): Promise<void> {
     this.query = query;
     await this.guard(async () => {
+      const context = this.timeContext;
       this.tasks = await this.api().tasks({ search: query });
+      this.rememberTaskContexts(this.tasks, context);
     });
     if (this.view === 'main' && query.trim() !== '' && this.query === query) this.announce(this.t('resultsCount', { count: this.visibleTasks().length }));
   }
 
   /** Starts `task` (switching from the running timer). `meeting`: *Track the meeting* (metadata origin, 1.14 servers). */
   async start(task: Task, options: { meeting?: boolean } = {}): Promise<void> {
+    // Audit ZCD-M3: a task of another organization never starts here (Beacon would run it there while this shows here).
+    if (!this.inCurrentContext(task.id)) {
+      this.setNotice(this.t('taskOtherOrg', { task: task.title }));
+      void this.refresh();
+      return;
+    }
+    const clickAt = this.now();
+    const context = this.timeContext;
     const running = this.state.activeTimer;
     // Required fields (Q5): the running entry's before it is closed, the new timer's before it starts. Cancel = no change.
     const closing = running !== null && this.asksBeforeStop(running, false) ? await this.allocationForStop(running, 'switch', false) : {};
@@ -1101,28 +1199,39 @@ export class DesktopApp {
     // No subjects or activity types on this server (2.0, or no providers): nothing to wait for.
     const allocation = features.activityTypes || features.requireActivityType || taskSubjectTypes(features).length > 0 ? await this.allocationForStart(task) : {};
     if (allocation === null) return;
+    // Audit ZCD-L1: the organization or the timer changed while a dialog was open: act on nothing.
+    if (this.timeContext !== context || this.state.activeTimer?.id !== running?.id) {
+      this.setNotice(this.t('contextChangedDuringDialog'));
+      return;
+    }
     this.welcome = false;
     if (running !== null) this.persist({ messages: afterStop(this.state.messages, this.timerKind(running), running.startedAt, this.now()) });
     this.persist({ lastTask: this.taskRef(task) });
+    const hasClosing = Object.keys(closing).length > 0;
     await this.guard(
       async () => {
-        const api = this.api();
+        const api = this.api(context);
         const meeting = options.meeting === true && this.me?.features?.meetings === true;
-        if (running !== null && Object.keys(closing).length > 0) await api.allocate(closing);
+        if (running !== null && hasClosing) {
+          if (!(await this.sameTimer(api, running))) return;
+          await api.allocate(closing);
+        }
         if (running !== null && closing.activityTypeKey !== undefined) this.rememberActivity(running.taskId, closing.activityTypeKey);
         await this.setTimer(running !== null ? (await api.switchTask(task.id, this.state.pendingNote ?? undefined, { meeting, allocation })).timer : (await api.startAt(task.id, { allocation })).timer);
         if (allocation.activityTypeKey !== undefined) this.rememberActivity(task.id, allocation.activityTypeKey);
         if (running !== null) this.takeNote();
       },
       () => {
-        const at = this.now().toISOString();
+        // Queued in the organization it was made in, with the answers and the time of the click (ZCD-M1 / M2).
+        const at = clickAt.toISOString();
         const note = running !== null ? this.takeNote() : undefined;
+        const start = { kind: 'start' as const, taskId: task.id, taskTitle: task.title, at, ...(Object.keys(allocation).length > 0 ? { allocation } : {}), context };
         if (note !== undefined) {
-          this.queue.push({ kind: 'stop', at, note }, { kind: 'start', taskId: task.id, taskTitle: task.title, at });
+          this.enqueue({ kind: 'stop', at, note, taskTitle: running?.taskTitle, startedAt: running?.startedAt, ...(hasClosing ? { allocation: closing } : {}), context }, start);
         } else if (running !== null) {
-          this.queue.push({ kind: 'switch', taskId: task.id, taskTitle: task.title, at });
+          this.enqueue({ kind: 'switch', taskId: task.id, taskTitle: task.title, at, closingTitle: running.taskTitle, startedAt: running.startedAt, ...(hasClosing ? { closing } : {}), ...(Object.keys(allocation).length > 0 ? { allocation } : {}), context });
         } else {
-          this.queue.push({ kind: 'start', taskId: task.id, taskTitle: task.title, at });
+          this.enqueue(start);
         }
         return this.setTimer({ id: 'offline', taskId: task.id, taskTitle: task.title, startedAt: at, url: task.url ?? null });
       },
@@ -1139,18 +1248,29 @@ export class DesktopApp {
   async stop(where: StopContext | null = null): Promise<StopOutcome> {
     const timer = this.state.activeTimer;
     if (timer === null) return 'none';
-    const allocation = this.asksBeforeStop(timer, where !== null) ? await this.allocationForStop(timer, where !== null ? 'context' : 'stop', where !== null, where) : {};
+    // The time of the click: a dialog, a refused stop or a queued one all end the entry here (audit ZCD-M2).
+    const clickAt = this.now();
+    const context = this.timeContext;
+    const asked = this.asksBeforeStop(timer, where !== null);
+    const allocation = asked ? await this.allocationForStop(timer, where !== null ? 'context' : 'stop', where !== null, where) : {};
     if (allocation === null) return 'cancelled';
+    // Audit ZCD-L1: the organization or the timer changed while the dialog was open.
+    if (this.timeContext !== context || this.state.activeTimer?.id !== timer.id) {
+      this.setNotice(this.t('contextChangedDuringDialog'));
+      return 'cancelled';
+    }
     this.persist({ lastTask: this.taskRef(this.timerTask(timer)) });
     let queued = false;
     let cancelled = false;
-    const at = this.now();
+    let changed = false;
+    let queuedAllocation: Allocation = allocation;
     await this.guard(
       async () => {
-        const api = this.api();
+        const api = this.api(context);
         const note = this.state.pendingNote ?? undefined;
+        const endedAt = this.features().stopBackdate ? clickAt : undefined;
         try {
-          await api.stopAt({ note, allocation });
+          await api.stopAt({ note, allocation, ...(asked ? { endedAt } : {}) });
           if (allocation.activityTypeKey !== undefined) this.rememberActivity(timer.taskId, allocation.activityTypeKey);
         } catch (error) {
           const ask = this.deps.askAllocation;
@@ -1158,12 +1278,20 @@ export class DesktopApp {
           // The server's rule is stricter than what `GET me` said (or the person asks on start only): ask now.
           const missing = { activityType: error.code === 'activity_type_required' || this.allocationFeatures().requireActivityType, subject: error.code === 'allocation_required' };
           await this.platform.windowHost.bringForward?.().catch(() => undefined);
-          const answer = await ask(this.allocationRequest(where !== null ? 'context' : 'stop', timer.taskTitle, timer.startedAt, missing, null, false, where?.org ?? this.deps.contextLabel?.() ?? null, where?.target ?? null));
+          const request = this.allocationRequest(where !== null ? 'context' : 'stop', timer.taskTitle, timer.startedAt, missing, null, false, where?.org ?? this.deps.contextLabel?.() ?? null, where?.target ?? null);
+          request.loadActivities = () => this.api(context, false).activityTypes();
+          const answer = await ask(request);
           if (answer === null) {
             cancelled = true;
             return;
           }
-          await api.stopAt({ note, allocation: answer, endedAt: this.features().stopBackdate ? at : undefined });
+          queuedAllocation = { ...allocation, ...answer };
+          // Audit ZCD-L1: still the same timer on the server (another device may have changed it meanwhile).
+          if (!(await this.sameTimer(api, timer))) {
+            changed = true;
+            return;
+          }
+          await api.stopAt({ note, allocation: queuedAllocation, endedAt });
           if (answer.activityTypeKey !== undefined) this.rememberActivity(timer.taskId, answer.activityTypeKey);
         }
         this.takeNote();
@@ -1172,15 +1300,17 @@ export class DesktopApp {
       () => {
         queued = true;
         const note = this.takeNote();
-        this.queue.push({ kind: 'stop', at: this.now().toISOString(), ...(note !== undefined ? { note } : {}) });
+        const fields = Object.keys(queuedAllocation).length > 0 ? { allocation: queuedAllocation } : {};
+        this.enqueue({ kind: 'stop', at: clickAt.toISOString(), taskTitle: timer.taskTitle, startedAt: timer.startedAt, ...(note !== undefined ? { note } : {}), ...fields, context });
         return this.setTimer(null);
       },
     );
     if (cancelled) return 'cancelled';
+    if (changed) return 'failed';
     const stopped = this.state.activeTimer === null && this.error === null;
     if (stopped) this.saved(timer, queued);
     if (this.entries !== null) await this.reloadEntries();
-    return stopped ? 'stopped' : 'failed';
+    return stopped ? (queued ? 'queued' : 'stopped') : 'failed';
   }
 
   /** Success moment after a stop: what was saved, in one of a few friendly wordings (queued: kept here for now). */
@@ -2289,7 +2419,9 @@ export class DesktopApp {
   /** The task "Resume" starts: the last one tracked here, else the newest entry. */
   lastTask(): Task | null {
     const recent = this.entries !== null ? recentTasks(this.entries, this.tasks, 1)[0] : undefined;
-    const last = this.state.lastTask ?? recent ?? null;
+    // Audit ZCD-M3: never another organization's task (the last one tracked may belong to the previous one).
+    const own = this.state.lastTask !== null && this.inCurrentContext(this.state.lastTask.id) ? this.state.lastTask : null;
+    const last = own ?? (recent !== undefined && this.inCurrentContext(recent.id) ? recent : null);
     return last !== null ? { ...this.findTask(last.id), ...last } : null;
   }
 
@@ -2300,7 +2432,8 @@ export class DesktopApp {
     const seen = new Set<string>();
     const recents = this.entries !== null ? recentTasks(this.entries, this.tasks, MAX_PINNED * 2) : [];
     for (const task of [...this.state.pinned, ...recents]) {
-      if (task.id === running || seen.has(task.id)) continue;
+      // Audit ZCD-M3: pinned tasks of another organization wait until it is chosen again.
+      if (task.id === running || seen.has(task.id) || !this.inCurrentContext(task.id)) continue;
       seen.add(task.id);
       result.push({ ...task, ...this.tasks.find((known) => known.id === task.id) });
       if (result.length >= MAX_PINNED) break;

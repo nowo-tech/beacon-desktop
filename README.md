@@ -120,10 +120,13 @@ TimeTrackBundle 2.2 and ChatKitBundle 2.4. Shortcuts: `?` in Chat.
 
 - **Organization**: time tracking follows the organization chosen on the rail (or the title-bar dropdown): every
   time request names it, as the chat does. Switching with a running timer stops it first (a timer never keeps running
-  in another organization); *Cancel* keeps both.
+  in another organization); *Cancel* keeps both. Offline, the switch waits until the time recorded offline (that stop
+  too) has been sent; it is always sent in the organization it was recorded in. Resume and pinned tasks only offer
+  tasks of the organization shown.
 - **Required fields**: when your organization requires an activity type, the app asks for it on stop (default), on
-  start, or both (Settings → Time tracking), with an optional client or subject. "Use the task's last activity type"
-  starts a task with the type you used last with it on this computer.
+  start, or both (Settings → Time tracking), with an optional client or subject. A stop saved offline keeps your
+  answer and the time you clicked; if Beacon still asks for a field when it is sent, the app asks you again.
+  "Use the task's last activity type" starts a task with the type you used last with it on this computer.
 - **Mini timer**: a small window that stays on top (title-bar button or `Ctrl/Cmd+Shift+M`): the running task, its
   organization and time, Stop / Resume and "Open Beacon Desktop". `Esc` closes it.
 
