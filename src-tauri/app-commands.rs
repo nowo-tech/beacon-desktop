@@ -27,6 +27,9 @@ pub const MAIN_COMMANDS: &[&str] = &[
     "prompt_open",
     "prompt_focus",
     "prompt_close",
+    "mini_open",
+    "mini_update",
+    "mini_close",
     "open_external",
     "open_chat_link",
     "list_browsers",
@@ -36,6 +39,9 @@ pub const MAIN_COMMANDS: &[&str] = &[
     "set_autostart",
     "get_autostart",
 ];
+
+/// Commands only the mini timer window may call (capabilities/mini.json, BD-3a).
+pub const MINI_COMMANDS: &[&str] = &["mini_view", "mini_action"];
 
 /// Commands only the "Still there?" window may call (capabilities/prompt.json).
 pub const PROMPT_COMMANDS: &[&str] = &["prompt_view", "prompt_answer", "prompt_show_main"];
@@ -67,6 +73,11 @@ pub const APP_COMMANDS: &[&str] = &[
     "prompt_view",
     "prompt_answer",
     "prompt_show_main",
+    "mini_open",
+    "mini_update",
+    "mini_close",
+    "mini_view",
+    "mini_action",
     "open_external",
     "open_chat_link",
     "list_browsers",

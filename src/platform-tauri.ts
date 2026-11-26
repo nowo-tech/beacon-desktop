@@ -6,9 +6,10 @@ import { availableMonitors, currentMonitor, getCurrentWindow, type Monitor, Phys
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { type NativeRequest, type NativeResponse, nativeFetch, SESSION_HANDLE } from './lib/nativeFetch';
-import { type ChatHost, type ChatRealtimeMode, type ConnectionSecurity, notificationBody, type NotificationPermission, type Platform, type WindowHost, type PromptClient, type PromptHost, type SessionEvent, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
+import { type ChatHost, type ChatRealtimeMode, type ConnectionSecurity, notificationBody, type NotificationPermission, type Platform, type WindowHost, type PromptClient, type PromptHost, type MiniHost, type SessionEvent, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
 import { type BrowserChoice, type DetectedBrowser, type OpenOutcome, sanitizeBrowser } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
+import type { MiniAction, MiniClient, MiniView } from './ui/miniWindow';
 
 const permission = (state: string): NotificationPermission => (state === 'granted' ? 'granted' : state === 'denied' ? 'denied' : 'prompt');
 
@@ -44,6 +45,29 @@ function windowHost(): WindowHost {
       void win.onResized(handler);
       void win.onMoved(handler);
     },
+    // core:window:allow-show / allow-unminimize / allow-set-focus (main window only).
+    bringForward: async () => {
+      await win.show();
+      await win.unminimize();
+      await win.setFocus();
+    },
+  };
+}
+
+/** The mini timer window (src-tauri/src/mini.rs): the view goes over `mini_open` / `mini_update`, buttons come back as events. */
+const miniHost: MiniHost = {
+  open: (view) => invoke('mini_open', { view }),
+  update: (view) => invoke('mini_update', { view }),
+  close: () => invoke('mini_close'),
+  onAction: (handler) => void listen<MiniAction>('mini-action', (event) => handler(event.payload)),
+};
+
+/** Inside the mini timer window: its view and its buttons only (capabilities/mini.json). */
+export function tauriMiniClient(): MiniClient {
+  return {
+    view: () => invoke<MiniView | null>('mini_view'),
+    onView: (handler) => void listen<MiniView>('mini-view', (event) => handler(event.payload)),
+    action: (action) => invoke('mini_action', { action }),
   };
 }
 
@@ -137,6 +161,7 @@ export function tauriPlatform(): Platform {
     // Meeting detection: what holds the microphone, from the heartbeat (src-tauri/src/meeting, app ids only).
     onMic: (handler) => void listen<unknown>('mic', (event) => handler(event.payload)),
     promptWindow: promptHost,
+    miniWindow: miniHost,
     windowHost: windowHost(),
     // Title bar / native menus follow the app's theme; `null` hands it back to the system (capability core:window:allow-set-theme).
     setWindowTheme: (theme) => getCurrentWindow().setTheme(theme),

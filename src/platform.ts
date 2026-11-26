@@ -1,6 +1,7 @@
 import type { Rect, Screens } from './lib/layout';
 import type { BrowserChoice, BrowserRequest, DetectedBrowser, OpenOutcome } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
+import type { MiniAction, MiniClient, MiniView } from './ui/miniWindow';
 import { SIGN_IN_DECLINED } from './lib/nativeFetch';
 
 /**
@@ -168,6 +169,19 @@ export interface WindowHost {
   setBounds(rect: Rect): Promise<void>;
   /** The window was moved or resized (by the person or by `setBounds`). */
   onChange(handler: () => void): void;
+  /** Shows, restores and focuses the main window (a dialog it must answer, BD-3a). */
+  bringForward?(): Promise<void>;
+}
+
+/** The mini timer window (owner Q2, BD-3a, src-tauri/src/mini.rs), as seen from the main window. */
+export interface MiniHost {
+  /** Opens it (top-right of the active monitor, always on top) with `view`, or shows and updates the open one. */
+  open(view: MiniView): Promise<void>;
+  /** Updates the open one (never opens it). */
+  update(view: MiniView): Promise<void>;
+  close(): Promise<void>;
+  /** A button of the mini timer, or `closed` when its window went away. */
+  onAction(handler: (action: MiniAction) => void): void;
 }
 
 /** Default global shortcut. `Ctrl+Alt+T` opens a terminal on Ubuntu / GNOME, so the default adds Shift. */
@@ -289,6 +303,8 @@ export interface Platform {
   setWakePlan(plan: WakePlan): Promise<void>;
   /** The "Still there?" window; `null` when the host has none (the prompt is then a modal in the main window). */
   readonly promptWindow: PromptHost | null;
+  /** The mini timer window; `null` when the host has none (a plain browser without `hooks.nativeMini`). */
+  readonly miniWindow: MiniHost | null;
   /** Size and position of the main window ("Compact view" / "Full view"). */
   readonly windowHost: WindowHost;
   /** Native window theme (title bar, menus): `null` follows the system. */
@@ -374,6 +390,14 @@ export interface BrowserHooks {
   promptFocused: number;
   /** The fake prompt window cannot be opened. */
   promptFails: boolean;
+  /** A fake mini timer window (on by default), its content (`null` = closed) and how often it was opened. */
+  nativeMini: boolean;
+  mini: MiniView | null;
+  miniOpened: number;
+  /** The fake main window was brought forward (a dialog to answer). */
+  broughtForward: number;
+  /** A button of the fake mini timer (or `closed`). */
+  miniAction(action: MiniAction): void;
   /** What the fake host answers for the connection's TLS pinning (`null`: unknown, nothing shown). */
   connectionSecurity: ConnectionSecurity | null;
   /** Servers the fake host's native "Sign in to …?" dialog was shown for; `declineSignIn` answers it with Cancel. */
@@ -416,6 +440,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
   const wakeHandlers: ((reason: WakeReason) => void)[] = [];
   const actionHandlers: ((id: string) => void)[] = [];
   const answerHandlers: ((answer: PromptAnswer) => void)[] = [];
+  const miniHandlers: ((action: MiniAction) => void)[] = [];
   const windowHandlers: (() => void)[] = [];
   const externalHandlers: ((url: string) => void)[] = [];
   const micHandlers: ((signal: unknown) => void)[] = [];
@@ -470,6 +495,14 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     promptOpened: 0,
     promptFocused: 0,
     promptFails: false,
+    nativeMini: true,
+    mini: null,
+    miniOpened: 0,
+    broughtForward: 0,
+    miniAction: (action) => {
+      if (action === 'close' || action === 'closed') hooks.mini = null;
+      miniHandlers.forEach((handler) => handler(action));
+    },
     connectionSecurity: null,
     signInConfirmations: [],
     declineSignIn: false,
@@ -492,6 +525,21 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     focus: async () => void (hooks.promptFocused += 1),
     close: async () => void (hooks.prompt = null),
     onAnswer: (handler) => void answerHandlers.push(handler),
+  };
+  const miniHost: MiniHost = {
+    open: async (view) => {
+      if (hooks.mini === null) hooks.miniOpened += 1;
+      hooks.mini = view;
+    },
+    update: async (view) => {
+      if (hooks.mini !== null) hooks.mini = view;
+    },
+    close: async () => {
+      if (hooks.mini === null) return;
+      hooks.mini = null;
+      miniHandlers.forEach((handler) => handler('closed'));
+    },
+    onAction: (handler) => void miniHandlers.push(handler),
   };
   const chat: ChatHost = {
     token: async () => (secret === null ? null : hooks.chatToken),
@@ -602,6 +650,9 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     get promptWindow() {
       return hooks.nativePrompt ? promptHost : null;
     },
+    get miniWindow() {
+      return hooks.nativeMini ? miniHost : null;
+    },
     windowHost: {
       bounds: async () => hooks.window.bounds,
       screens: async () => hooks.window.screens,
@@ -610,6 +661,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
         hooks.window.bounds = rect;
       },
       onChange: (handler) => void windowHandlers.push(handler),
+      bringForward: async () => void (hooks.broughtForward += 1),
     },
     setWindowTheme: async (theme) => void (hooks.windowTheme = theme),
     autostartEnabled: async () => autostart,
@@ -663,5 +715,26 @@ export function browserPromptClient(hooks: BrowserPromptHooks): PromptClient {
     onView: (handler) => void handlers.push(handler),
     answer: async (answer) => void hooks.answers.push(answer),
     openMain: async () => void (hooks.openedMain = (hooks.openedMain ?? 0) + 1),
+  };
+}
+
+/** Test / development hooks of the fake mini timer window (`window.__timeTrackMini`, set from Playwright). */
+export interface BrowserMiniHooks {
+  view: MiniView | null;
+  actions: MiniAction[];
+  setView?(view: MiniView): void;
+}
+
+/** The mini timer window's side in a plain browser (`?window=mini`): content and buttons through `hooks`. */
+export function browserMiniClient(hooks: BrowserMiniHooks): MiniClient {
+  const handlers: ((view: MiniView) => void)[] = [];
+  hooks.setView = (view) => {
+    hooks.view = view;
+    handlers.forEach((handler) => handler(view));
+  };
+  return {
+    view: async () => hooks.view,
+    onView: (handler) => void handlers.push(handler),
+    action: async (action) => void hooks.actions.push(action),
   };
 }
