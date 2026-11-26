@@ -1,8 +1,8 @@
 /**
  * Release channel helpers shared by time-track-extension and time-track-desktop (keep both copies identical).
  *
- * Bucket layout (Beacon spec, contract §7.1): `time-track-clients/<app>/<version>/<file>`, then
- * `time-track-clients/<app>/channel/stable.json` written LAST as the atomic switch:
+ * Bucket layout (Beacon spec, contract §7.1): `<S3_CLIENTS_PREFIX>/<app>/<version>/<file>` (default `time-track-clients`), then
+ * `<S3_CLIENTS_PREFIX>/<app>/channel/stable.json` written LAST as the atomic switch:
  * `{version, pub_date, notes, min_supported_version?, files: [{target, arch, kind, key, sha256, signature?}]}`.
  *
  * CLI:
@@ -17,7 +17,19 @@ import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
-export const PREFIX = 'time-track-clients';
+export const DEFAULT_PREFIX = 'time-track-clients';
+export const ALLOWED_PREFIXES = ['time-track-clients', 'beacon-clients'];
+
+/** S3 key prefix: env S3_CLIENTS_PREFIX (repository variable) or the default; anything off the allowlist throws. */
+export function clientsPrefix(env = process.env) {
+  const prefix = env.S3_CLIENTS_PREFIX || DEFAULT_PREFIX;
+  if (!ALLOWED_PREFIXES.includes(prefix)) {
+    throw new Error(`Invalid S3_CLIENTS_PREFIX "${prefix}" (expected ${ALLOWED_PREFIXES.join(' | ')})`);
+  }
+  return prefix;
+}
+
+export const PREFIX = clientsPrefix();
 export const APPS = ['desktop', 'firefox', 'chromium'];
 export const KINDS = ['installer', 'updater', 'xpi'];
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
@@ -38,14 +50,14 @@ export function objectKey(app, version, file) {
   if (!SAFE_FILE.test(name)) {
     throw new Error(`Unsafe file name "${name}"`);
   }
-  return `${PREFIX}/${app}/${assertVersion(version)}/${name}`;
+  return `${clientsPrefix()}/${app}/${assertVersion(version)}/${name}`;
 }
 
 export function channelKey(app) {
   if (!APPS.includes(app)) {
     throw new Error(`Unknown app "${app}"`);
   }
-  return `${PREFIX}/${app}/channel/stable.json`;
+  return `${clientsPrefix()}/${app}/channel/stable.json`;
 }
 
 /** Compares MAJOR.MINOR.PATCH[-pre] versions (pre-release sorts first). */

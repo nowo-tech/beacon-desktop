@@ -5,6 +5,13 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+### CI
+
+- **Release**: the S3 key prefix of every release object (files and `stable.json`) comes from the repository variable
+  `S3_CLIENTS_PREFIX`, falling back to `time-track-clients` (D-20261125-08). `channel.mjs` and `s3-put.sh` accept only
+  `time-track-clients` or `beacon-clients` and fail on anything else. Unset, nothing changes; flip the variable only
+  after the Beacon updater reads the same prefix.
+
 ### Planned for 0.11.0 (BD-3a: time context, mini timer, required fields)
 
 Targets **0.11.0** together with BD-3 (chat send). Works with TimeTrackBundle **2.1** (subjects and activity types)

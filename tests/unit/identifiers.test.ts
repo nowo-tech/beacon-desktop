@@ -1,4 +1,7 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PREFIX } from '../../scripts/release/channel.mjs';
 import { buildManifest } from '../../scripts/store/msix-manifest.mjs';
@@ -65,7 +68,7 @@ describe('Q-BD-1 option A: technical ids unchanged by the rename', () => {
       '"{}/api/time-track/updates/desktop/{{{{target}}}}/{{{{arch}}}}/{{{{current_version}}}}?bundle_type={{{{bundle_type}}}}"',
     );
     expect(PREFIX).toBe('time-track-clients');
-    expect(read('scripts/release/s3-put.sh')).toContain('time-track-clients/*)');
+    expect(read('scripts/release/s3-put.sh')).toContain('S3_CLIENTS_PREFIX:-time-track-clients');
   });
 
   it('keeps the Windows installer keys and the Store identity', () => {
@@ -107,5 +110,42 @@ describe('Q-BD-1 option A: the visible name is "Beacon Desktop"', () => {
     const plist = read('src-tauri/Info.plist');
     expect(plist).toMatch(/<key>CFBundleDisplayName<\/key>\s*<string>Beacon Desktop<\/string>/);
     expect([...plist.matchAll(/<key>([^<]+)<\/key>/g)].map((m) => m[1])).toEqual(['CFBundleDisplayName']);
+  });
+});
+
+describe('s3-put.sh prefix guard', () => {
+  // A stub `aws` on PATH: the guard runs before it, so a rejected key never reaches it.
+  const bin = mkdtempSync(join(tmpdir(), 's3put-'));
+  writeFileSync(join(bin, 'aws'), '#!/usr/bin/env bash\nexit 0\n');
+  chmodSync(join(bin, 'aws'), 0o755);
+  const run = (key: string, prefix?: string) =>
+    spawnSync('bash', ['scripts/release/s3-put.sh', 'package.json', key], {
+      encoding: 'utf8',
+      env: {
+        PATH: `${bin}:${process.env.PATH}`,
+        TIME_TRACK_S3_ENDPOINT: 'http://x',
+        TIME_TRACK_S3_BUCKET: 'b',
+        TIME_TRACK_S3_ACCESS_KEY_ID: 'k',
+        TIME_TRACK_S3_SECRET_ACCESS_KEY: 's',
+        ...(prefix === undefined ? {} : { S3_CLIENTS_PREFIX: prefix }),
+      },
+    });
+
+  it('accepts the default prefix and rejects beacon-clients keys by default', () => {
+    expect(run('time-track-clients/desktop/1.0.0/a').status).toBe(0);
+    expect(run('beacon-clients/desktop/1.0.0/a').status).toBe(1);
+  });
+
+  it('follows S3_CLIENTS_PREFIX=beacon-clients', () => {
+    expect(run('beacon-clients/desktop/1.0.0/a', 'beacon-clients').status).toBe(0);
+    expect(run('time-track-clients/desktop/1.0.0/a', 'beacon-clients').status).toBe(1);
+  });
+
+  it('rejects an invalid prefix, traversal and absolute keys', () => {
+    const bad = run('evil/desktop/a', 'evil');
+    expect(bad.status).toBe(1);
+    expect(bad.stderr).toContain('invalid S3_CLIENTS_PREFIX');
+    expect(run('time-track-clients/../x').status).toBe(1);
+    expect(run('/time-track-clients/x').status).toBe(1);
   });
 });
