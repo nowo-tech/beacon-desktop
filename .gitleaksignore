@@ -1,0 +1,2 @@
+# Made-up minisign public-key fixture in a unit test: computed at runtime (Buffer.from + repeat), not a key.
+f9449aa6daf870c3239cf45920e74768e6edbd0c:tests/unit/release-scripts.test.ts:generic-api-key:7
