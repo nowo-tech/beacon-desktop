@@ -94,7 +94,9 @@ a ghost Windows removes when the mouse passes over it.
 
 1. Enter your Beacon URL and click **Connect**. The app asks *Sign in to <host>?* in a system dialog: check the host
    and click **Sign in** (if you did not just ask to sign in, click **Cancel**).
-2. The app shows a code like `BCDF-GHJK` and opens Beacon's *Connect a device* page in your browser.
+2. The app shows a code like `BCDF-GHJK` and opens Beacon's *Connect a device* page in your browser. The page's
+   address is shown too, with **Copy link** (0.12.1): if the browser that opened is not the one where you are signed
+   in to Beacon, paste it there.
 3. Check the code, approve. The app is now listed in Beacon under Account → Security → Time tracking apps, where you
    can revoke it. The session token is stored in the OS keychain only, and only Rust reads it: the app's web view
    never sees it. A system notification confirms every sign-in. If the app ever signs you out because the saved
@@ -105,7 +107,9 @@ a ghost Windows removes when the mouse passes over it.
 Beacon chat sits next to the timer: **Chat** and **Time** on the left rail (`Ctrl/Cmd+1`, `Ctrl/Cmd+2`).
 
 1. Open Chat and press **Connect chat**. Beacon asks you to approve a second, separate device request (it only works
-   for the person signed in to time tracking). Approve it in the browser page that opens.
+   for the person signed in to time tracking). Approve it in the browser page that opens, or use **Copy link** and
+   open it in the browser where you are signed in to Beacon. If it cannot start, the card says why (time session
+   expired, with *Connect time tracking again*; too many attempts, with the wait).
 2. Pick the organization on the rail (or in the title-bar dropdown, Settings → Organization switcher). The app sends
    it with every request; your web context in Beacon does not change.
 3. Read conversations, threads and reactions. From 0.12.0 (Beacon with ChatKitBundle 2.5) write in the message box

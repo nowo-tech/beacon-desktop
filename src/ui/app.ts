@@ -3109,6 +3109,18 @@ export class DesktopApp {
     return server === undefined ? Promise.resolve(false) : this.openExternal(url, { kind: 'device', server });
   }
 
+  /** The chat's verification page as shown and copied (0.12.1): validated as for opening it, without secret parameters. */
+  verificationLink(url: string): string | null {
+    const server = this.state.session?.server;
+    return server === undefined ? null : copyableUrl(url, { kind: 'device', server });
+  }
+
+  /** A `401` on the chat's chained device code: the time session is gone; sign in again (the login screen says why). */
+  async reconnectTime(): Promise<void> {
+    if (this.state.session === null) return;
+    await this.signedOut(this.t('sessionExpired'));
+  }
+
   openLink(url: string): void {
     void this.openExternal(url, sameOriginHttps(url, this.state.session?.server) !== null ? this.beaconRule() : { kind: 'help' });
   }
@@ -3950,6 +3962,9 @@ export class DesktopApp {
     const t = this.t;
     const code = this.device;
     const safe = this.deviceUrl;
+    const rule: LinkRule = { kind: 'device', server: this.deviceServer };
+    // Shown and copied as validated for opening, without secret parameters (the person may need another browser).
+    const link = copyableUrl(safe, rule);
     if (this.deviceState !== 'waiting' || code === null) {
       const expired = this.deviceState === 'expired';
       const titleKey: MessageKey = expired ? 'deviceExpiredTitle' : this.deviceState === 'denied' ? 'deviceDeniedTitle' : 'deviceScope';
@@ -3994,17 +4009,22 @@ export class DesktopApp {
       safe !== null
         ? h('p', { class: 'help' }, t('deviceHelp', { uri: code.verificationUri }))
         : h('p', { class: 'error', id: 'device-untrusted' }, t('deviceUntrusted'), ' ', h('code', {}, this.deviceUntrusted ?? '')),
+      link !== null &&
+        h('div', { class: 'device-link' }, h('span', { class: 'device-link-label', id: 'device-url-label' }, t('deviceLinkLabel')), h('code', { class: 'device-url', id: 'device-url', attrs: { 'aria-labelledby': 'device-url-label' } }, link)),
       h('p', { class: 'user-code', id: 'user-code', attrs: { 'aria-label': t('codeLabel', { code: spelled }) } }, code.userCode),
       h(
         'div',
         { class: 'row-actions' },
         h('button', { class: 'secondary', id: 'copy-code', key: 'copy-code', attrs: { type: 'button' }, on: { click: () => void this.copy(code.userCode) } }, icon('copy'), t('copyCode')),
-        safe !== null &&
-          h('button', { class: 'secondary', id: 'open-again', key: 'open-again', attrs: { type: 'button' }, on: { click: () => void this.openExternal(safe, { kind: 'device', server: this.deviceServer }) } }, icon('external'), t('openAgain')),
-        safe !== null && this.copyButton(safe, t('copyLink'), 'copy-device-link', { kind: 'device', server: this.deviceServer }),
+        link !== null &&
+          h('button', { class: 'secondary', id: 'copy-device-link', key: 'copy-device-link', attrs: { type: 'button', 'aria-describedby': 'device-browser-hint' }, on: { click: () => void this.copyLink(link, rule) } }, icon('copy'), t('copyLink')),
         safe === null &&
           h('button', { class: 'secondary', id: 'copy-address', attrs: { type: 'button' }, on: { click: () => void this.copy(this.deviceUntrusted ?? '') } }, icon('copy'), t('copyAddress')),
       ),
+      // Right under Copy link (0.12.1): the default browser may not be the one signed in to Beacon.
+      link !== null && h('p', { class: 'muted device-hint', id: 'device-browser-hint' }, t('deviceBrowserHint')),
+      safe !== null &&
+        h('div', { class: 'row-actions' }, h('button', { class: 'secondary', id: 'open-again', key: 'open-again', attrs: { type: 'button' }, on: { click: () => void this.openExternal(safe, rule) } }, icon('external'), t('openAgain'))),
       progress,
       h('p', { class: 'muted', attrs: { 'aria-live': 'off' } }, left, ' · ', t('waiting')),
       h('button', { class: 'secondary', id: 'cancel-device', on: { click: () => this.cancelDevice() } }, t('cancel')),

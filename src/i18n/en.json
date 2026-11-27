@@ -6,6 +6,8 @@
   "connect": "Connect",
   "deviceTitle": "Confirm this code in Beacon",
   "deviceHelp": "We opened {uri} in your browser. Check that it shows this code, then approve.",
+  "deviceLinkLabel": "Approval page:",
+  "deviceBrowserHint": "Open it in the browser where you are signed in to Beacon.",
   "openAgain": "Open the page again",
   "waiting": "Waiting for approval…",
   "cancel": "Cancel",

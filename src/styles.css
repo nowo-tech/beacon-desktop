@@ -156,6 +156,9 @@ kbd, code { font-family: var(--mono); font-size: 0.75rem; }
 .center { text-align: center; }
 .center button { margin: 0.25rem auto; }
 .user-code { font: 600 2rem/1.2 var(--mono); letter-spacing: 0.14em; text-align: center; padding: 0.875rem; background: var(--mist); border: 1px dashed var(--moss); border-radius: var(--radius-card); user-select: all; margin: 0.5rem 0; }
+.device-link { margin: 0.25rem 0; font-size: 0.875rem; }
+.device-url { display: block; margin-top: 0.125rem; user-select: text; -webkit-user-select: text; cursor: text; overflow-wrap: anywhere; font-family: var(--mono); }
+.device-hint { margin: 0.25rem 0 0.5rem; font-size: 0.8125rem; }
 .progress { height: 0.375rem; background: var(--mist); border-radius: 999px; overflow: hidden; margin: 0.75rem 0 0.25rem; }
 .progress-bar { height: 100%; background: var(--moss); }
 #cancel-device { width: 100%; margin-top: 0.5rem; }
