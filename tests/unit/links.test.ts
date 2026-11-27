@@ -274,6 +274,12 @@ describe('Copy link', () => {
     expect(ui.hooks.opened).toHaveLength(2);
     expect(ui.hooks.copied[0]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/device/);
     expect(ui.hooks.copied[0]).not.toContain('code=');
+    // 0.12.1: the same validated page as selectable text, the hint under Copy link, "Enlace copiado." in the status line.
+    expect(ui.$('#device-url').textContent).toBe(ui.hooks.copied[0]);
+    expect(ui.$('#device-browser-hint').textContent).toBe('Ábrelo en el navegador donde tienes la sesión de Beacon.');
+    expect(ui.$('#copy-device-link').textContent).toContain('Copiar enlace');
+    expect(ui.$('#status').getAttribute('aria-live')).toBe('polite');
+    expect(ui.$('#status').textContent).toContain('Enlace copiado.');
     await env.control('device/approve', { userCode: ui.$('#user-code').textContent ?? '' });
     await done;
     ui.app.destroy();

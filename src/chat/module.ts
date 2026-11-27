@@ -34,6 +34,12 @@ export interface ChatModuleDeps {
   /** The signed-in server (`null` while signed out). */
   server(): string | null;
   openVerification(url: string): void;
+  /** The verification page as shown and copied: validated as for opening it, without secret parameters, else `null`. */
+  verificationLink?(url: string): string | null;
+  /** Copies text; false when the clipboard refused it. */
+  copyText?(text: string): Promise<boolean>;
+  /** The time session expired (a `401` on the chained device code): sign in to time tracking again. */
+  reconnectTime?(): void;
   copy(text: string): Promise<void>;
   announce(text: string): void;
   /** The context changed (the shell redraws its switcher and title). */
@@ -58,9 +64,9 @@ export interface ChatModuleDeps {
 }
 
 type ConnectState =
-  | { kind: 'idle'; message: string | null }
+  | { kind: 'idle'; message: string | null; reconnect?: boolean }
   | { kind: 'starting' }
-  | { kind: 'code'; userCode: string; url: string }
+  | { kind: 'code'; userCode: string; url: string; link: string | null }
   | { kind: 'done' };
 
 /** Device-local chat view state (never message data): collapsed sections, last conversation per context, thread width. */
@@ -105,6 +111,8 @@ export class ChatModule {
   api: ChatApi | null = null;
   sync: ChatSync | null = null;
   connect: ConnectState = { kind: 'idle', message: null };
+  /** "Link copied" on the connect card: one polite live region kept across redraws, so it is announced. */
+  private readonly copiedNote = h('p', { class: 'cc-copied', id: 'chat-link-copied', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
   /** Realtime state from the host; `banner` shows only after a live stream was lost. */
   mode: ChatRealtimeMode = 'stopped';
   netState: 'ok' | 'offline' | 'limited' = 'ok';
@@ -396,7 +404,8 @@ export class ChatModule {
           sleep: this.deps.sleep,
           onCode: (code) => {
             const url = code.verificationUriComplete ?? code.verificationUri;
-            this.connect = { kind: 'code', userCode: code.userCode, url };
+            this.connect = { kind: 'code', userCode: code.userCode, url, link: this.deps.verificationLink?.(url) ?? null };
+            this.copiedNote.textContent = '';
             this.render();
             this.deps.openVerification(url);
           },
@@ -420,10 +429,8 @@ export class ChatModule {
               : error.reason === 'invalid_scope'
                 ? this.t('connectRefused')
                 : null
-          : error instanceof ApiError && (error.status === 400 || error.status === 403 || error.status === 404)
-            ? this.t('connectRefused')
-            : this.t('connectFailed');
-      this.connect = { kind: 'idle', message };
+          : connectErrorMessage(error, this.t);
+      this.connect = { kind: 'idle', message, reconnect: error instanceof ApiError && error.status === 401 };
       this.render();
     }
   }
@@ -810,6 +817,7 @@ export class ChatModule {
   private renderConnect(): HTMLElement {
     const t = this.t;
     const state = this.connect;
+    const link = state.kind === 'code' ? state.link : null;
     const body: Child[] = [];
     if (state.kind === 'code') {
       body.push(
@@ -820,12 +828,23 @@ export class ChatModule {
           { class: 'cc-row' },
           this.button('btn primary', t('connectOpen'), () => this.deps.openVerification(state.url), 'chat-open-approval'),
           this.button('btn', t('connectCopy'), () => void this.deps.copy(state.userCode.replace('-', ''))),
+          link !== null && this.copyLinkButton(link),
           this.button('btn-ghost', t('connectCancel'), () => this.cancelConnect(), 'chat-cancel'),
         ),
       );
+      if (link !== null) {
+        body.push(
+          h('p', { class: 'cc-hint', id: 'chat-browser-hint' }, t('connectBrowserHint')),
+          h('div', { class: 'cc-link' }, h('span', { class: 'cc-code-label', id: 'chat-url-label' }, t('connectLinkLabel')), h('code', { class: 'cc-url', id: 'chat-url', attrs: { 'aria-labelledby': 'chat-url-label' } }, link)),
+        );
+      }
+      body.push(this.copiedNote);
     } else {
       if (state.kind === 'idle' && state.message !== null) body.push(h('p', { class: 'cc-error', attrs: { role: 'alert' } }, state.message));
-      body.push(h('div', { class: 'cc-row' }, this.button('btn primary', t('connectButton'), () => void this.connectChat(), 'chat-connect', state.kind === 'starting')));
+      const reconnect = state.kind === 'idle' && state.reconnect === true ? this.deps.reconnectTime : undefined;
+      // An expired time session: the only useful step is to connect time tracking again (chat follows from there).
+      if (reconnect !== undefined) body.push(h('div', { class: 'cc-row' }, this.button('btn primary', t('connectSignInAgain'), () => reconnect(), 'chat-reconnect-time')));
+      else body.push(h('div', { class: 'cc-row' }, this.button('btn primary', t('connectButton'), () => void this.connectChat(), 'chat-connect', state.kind === 'starting')));
     }
     return h(
       'section',
@@ -836,6 +855,19 @@ export class ChatModule {
       h('p', { class: 'cc-points' }, t('connectPoints')),
       ...body,
     );
+  }
+
+  /** "Copy link" on the connect card: copies the validated page only; the result goes to a polite live region. */
+  private copyLinkButton(link: string): HTMLButtonElement {
+    const button = this.button('btn', this.t('connectCopyLink'), () => {
+      void (async () => {
+        const copied = (await this.deps.copyText?.(link)) ?? false;
+        this.copiedNote.textContent = '';
+        if (copied) setTimeout(() => (this.copiedNote.textContent = this.t('connectLinkCopied')), 30);
+      })();
+    }, 'chat-copy-link');
+    button.setAttribute('aria-describedby', 'chat-browser-hint');
+    return button;
   }
 
   private button(className: string, label: string, onClick: () => void, id?: string, disabled = false): HTMLButtonElement {
@@ -1698,4 +1730,20 @@ export function showEmojiMenu(anchor: HTMLElement, emojis: string[], mine: Set<s
   document.body.append(menu);
   menu.querySelector<HTMLElement>('[role="menuitemcheckbox"]')?.focus();
   return menu;
+}
+
+/**
+ * Why the chained `POST device/code` failed, in words (0.12.1): `401` the time session expired (the card adds the
+ * action), `429` too many attempts with the server's wait (`Retry-After`, seconds or HTTP date, capped by the client),
+ * a refusal of the chat family, else the generic text (network, `5xx`).
+ */
+export function connectErrorMessage(error: unknown, t: ChatText): string {
+  if (!(error instanceof ApiError)) return t('connectFailed');
+  if (error.status === 401) return t('connectSessionExpired');
+  if (error.status === 429) {
+    const seconds = error.retryAfter !== null ? Math.max(1, Math.ceil(error.retryAfter)) : null;
+    return seconds === null ? t('connectRateLimitedNoWait') : t('connectRateLimited', { seconds });
+  }
+  if (error.status === 400 || error.status === 403 || error.status === 404) return t('connectRefused');
+  return t('connectFailed');
 }
