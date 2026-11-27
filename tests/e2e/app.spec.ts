@@ -182,10 +182,10 @@ test('offline actions are queued and replayed with their real times', async ({ p
   await page.clock.install({ time: startedOffline });
   await context.setOffline(true);
   await page.locator('[data-task="T-103"] .row-action').click();
-  await expect(page.locator('#offline')).toContainText('1 action(s)');
+  await expect(page.locator('#offline')).toContainText('1 action will be sent');
   await context.setOffline(false);
   await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
-  await expect(page.locator('#notice')).toHaveText('Back online: 1 action(s) sent.');
+  await expect(page.locator('#notice')).toHaveText('Back online: 1 action sent.');
   await expect(page.locator('#offline')).toHaveCount(0);
   const state = (await control('state')) as { timers: Record<string, { taskId: string; startedAt: string }> };
   const [timer] = Object.values(state.timers);
@@ -254,7 +254,9 @@ test('Beacon links: Open Beacon, My time and same-origin task links on an https 
 test('typing in search keeps every letter and the focus; Enter on a row keeps focus (R1)', async ({ page }) => {
   await signIn(page);
   await control('config', { latencyMs: 30 });
-  await page.keyboard.press('Control+k');
+  // UX batch 3: in the shell, Ctrl/⌘+K is the global switcher; `/` is the Time search.
+  await page.locator('#nav-tasks, #tasks li .row-action').first().focus();
+  await page.keyboard.press('/');
   await expect(page.locator('#search')).toBeFocused();
   await page.locator('#search').pressSequentially('fix', { delay: 50 });
   await expect(page.locator('#tasks li')).toHaveCount(1);

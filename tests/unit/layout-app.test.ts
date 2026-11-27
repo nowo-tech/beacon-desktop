@@ -208,8 +208,15 @@ describe('window layouts', () => {
     ui.platform.hooks.windowChanged();
     await tick(20);
     expect(JSON.parse(localStorage.getItem(WINDOW_KEY) ?? '{}').bounds.full).toEqual({ x: 100, y: 50, width: 1300, height: 800 });
-    // Ctrl+Shift+L back to compact: its first position again.
+    // Ctrl+Shift+L is the light / dark theme everywhere (UX batch 3): the window keeps its size.
+    const sets = hooks.set.length;
+    const theme = document.documentElement.getAttribute('data-theme');
     key(document.body, { key: 'L', ctrlKey: true, shiftKey: true });
+    await tick(5);
+    expect(hooks.set).toHaveLength(sets);
+    expect(document.documentElement.getAttribute('data-theme')).toBe(theme === 'dark' ? 'light' : 'dark');
+    // The view toggle back to compact: its first position again.
+    ui.click('#layout-toggle');
     await tick(5);
     expect(hooks.set.at(-1)).toEqual({ x: 760, y: 200, width: 400, height: 640 });
     width.value = 400;

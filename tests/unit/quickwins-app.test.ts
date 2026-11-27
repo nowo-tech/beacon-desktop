@@ -103,7 +103,7 @@ describe('three choices on return from idle', () => {
     ui.$<HTMLFormElement>('#reassign-search-form').requestSubmit();
     await until(() => ui.app.reassignResults !== null);
     await tick();
-    expect(ui.$('#reassign-status').textContent).toBe('1 tareas encontradas.');
+    expect(ui.$('#reassign-status').textContent).toBe('1 tarea encontrada.');
     expect(ui.$<HTMLInputElement>('input[name="reassign-task"]:checked').value).toBe('T-104');
     ui.click('#reassign-save');
     await until(() => ui.app.state.idleCheck.phase === 'watching' && !ui.app.busy);

@@ -122,7 +122,8 @@ describe('shell and chat module', () => {
     expect(ui.$('#mod-setup').hidden).toBe(false);
     expect(ui.$('#tab-time').getAttribute('aria-selected')).toBe('false');
     expect(ui.$('#chat-connect')).not.toBeNull();
-    expect(ui.$('#tb-search').hidden).toBe(true);
+    // UX batch 3 (UXA-3): the global switcher is there before chat is connected (Time's timer actions and views).
+    expect(ui.$('#tb-search').hidden).toBe(false);
     // Ctrl+2 / Ctrl+1 switch modules and remember the last one.
     ui.key({ key: '1', ctrlKey: true });
     expect(ui.shell.module).toBe('chat');
@@ -165,10 +166,16 @@ describe('shell and chat module', () => {
     expect(ui.$('.rail-tab#tab-chat .badge')).not.toBeNull();
     // Realtime: polling first (no hub in the mock); live hides nothing, a lost stream shows the banner.
     await until(() => ui.shell.chat.mode === 'polling', 'polling');
+    // UXA-14: a healthy connection (polling or live) says nothing in the sidebar; Settings → Chat says it.
+    expect(ui.$('#chat-side-foot').hidden).toBe(true);
+    expect(ui.$('#chat-side-foot').textContent).toBe('');
+    expect(ui.shell.chat.connectionStatus()).toEqual({ tone: 'ok', text: 'Checking for new messages every 30 s' });
     ui.platform.hooks.chatMode('live');
-    expect(ui.$('#chat-side-foot').textContent).toBe('Connected');
+    expect(ui.$('#chat-side-foot').hidden).toBe(true);
+    expect(ui.shell.chat.connectionStatus()).toEqual({ tone: 'ok', text: 'Connected' });
     ui.platform.hooks.chatMode('polling');
     expect(ui.$('#chat-banner').hidden).toBe(false);
+    expect(ui.$('#chat-side-foot').hidden).toBe(false);
     expect(ui.$('#chat-side-foot').textContent).toContain('Reconnecting');
   });
 
@@ -394,7 +401,7 @@ describe('shell and chat module', () => {
     expect(ui.shell.root.dataset.density).toBe('compact');
     pick('Selector de organización', 'dropdown');
     expect(ui.shell.prefs.switcher).toBe('dropdown');
-    pick('Cronómetro en marcha', 'title-sidebar');
+    pick('Temporizador en marcha', 'title-sidebar');
     expect(ui.shell.root.dataset.timer).toBe('title-sidebar');
     // Theme: one control only (the Time module's native radios, in Appearance; UXA-2).
     expect(document.querySelectorAll('#shell-settings #theme')).toHaveLength(1);
