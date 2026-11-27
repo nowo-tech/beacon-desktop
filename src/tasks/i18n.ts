@@ -155,6 +155,8 @@ const en = {
   keyBoard: 'Previous / next board',
   keyRows: 'Move between rows (My tasks, List)',
   keyRowCells: 'Move within a row',
+  // UX batch 4: status strip (UXA-7).
+  pausedFor: 'Paused for a moment. Back in {time}.',
 };
 
 export type TasksKey = keyof typeof en;
@@ -314,6 +316,8 @@ const es: Record<TasksKey, string> = {
   keyBoard: 'Tablero anterior / siguiente',
   keyRows: 'Moverse entre filas (Mis tareas, Lista)',
   keyRowCells: 'Moverse dentro de una fila',
+  // UX batch 4: franja de estado (UXA-7).
+  pausedFor: 'En pausa un momento. Volvemos en {time}.',
 };
 
 const CATALOGS: Record<Locale, Record<TasksKey, string>> = { en, es };

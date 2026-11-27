@@ -23,7 +23,6 @@
   "offline": "Sin conexión: {count} acciones se enviarán cuando vuelva la conexión.",
   "offlineOne": "Sin conexión: 1 acción se enviará cuando vuelva la conexión.",
   "offlineZero": "Sin conexión. Tus cambios se enviarán cuando vuelva la conexión.",
-  "offlineStartNote": "Cuando vuelva la conexión, se envían las horas reales.",
   "synced": "Conexión recuperada: {count} acciones enviadas.",
   "syncedOne": "Conexión recuperada: 1 acción enviada.",
   "dropped": "No se han podido aplicar {count} acciones hechas sin conexión.",
@@ -244,7 +243,6 @@
   "savedC": "{time} registrado en {task}. ¿Buen momento para estirar las piernas?",
   "savedShort": "Guardado un registro corto ({time}) en {task}. Si fue sin querer, puedes borrarlo en Beacon.",
   "savedOffline": "{time} en {task} queda guardado en este equipo y se envía a Beacon cuando vuelvas a tener conexión.",
-  "offlineTitle": "Trabajando sin conexión",
   "welcomeTitle": "¡Ya estás dentro!",
   "welcomeText": "Este equipo está conectado a {host}. Elige una tarea y pulsa Iniciar; yo vigilo el reloj.",
   "longRunningTitle": "¿Sigues a tope?",
@@ -473,5 +471,9 @@
   "navTitle": "Tiempo",
   "loginFixedHelp": "Beacon Desktop inicia sesión en Beacon, en {host}. Allí apruebas un código corto una vez; aquí no se escribe ninguna contraseña.",
   "connectFixed": "Iniciar sesión con Beacon",
-  "serverFixedSignedOut": "Beacon Desktop ahora usa siempre {host}, así que se ha cerrado tu sesión de {old} en este equipo. Vuelve a iniciar sesión para seguir."
+  "serverFixedSignedOut": "Beacon Desktop ahora usa siempre {host}, así que se ha cerrado tu sesión de {old} en este equipo. Vuelve a iniciar sesión para seguir.",
+  "pausedFor": "En pausa un momento. Volvemos en {time}.",
+  "welcomeStrip": "Ya estás dentro, {name}. Elige una tarea y pulsa Iniciar.",
+  "welcomeStripOrg": "Ya estás dentro, {name} · {org}. Elige una tarea y pulsa Iniciar.",
+  "trayUpdateAvailable": "Instalar la actualización {version}…"
 }

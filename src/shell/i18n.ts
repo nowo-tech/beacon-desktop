@@ -80,6 +80,13 @@ const en = {
   keyTimeStart: 'Start or stop on a row',
   keyTimeQuick: 'Start a pinned or recent task',
   keyTimeSection: 'Previous / next section',
+  // UX batch 4: toast region with Undo (UXA-8), the first run's time step (UXA-23).
+  toasts: 'Notifications',
+  toastUndo: 'Undo',
+  toastUndoHint: 'Undo with {shortcut}.',
+  toastClose: 'Close',
+  keyUndo: 'Undo the last action',
+  setupTimeSigned: 'Signed in as {name} · {org}. Your timer is in the title bar.',
 };
 
 export type ShellKey = keyof typeof en;
@@ -161,6 +168,13 @@ const es: Record<ShellKey, string> = {
   keyTimeStart: 'Iniciar o parar en una fila',
   keyTimeQuick: 'Iniciar una tarea fijada o reciente',
   keyTimeSection: 'Sección anterior / siguiente',
+  // UX batch 4: avisos con Deshacer (UXA-8), el paso de tiempo de la primera configuración (UXA-23).
+  toasts: 'Notificaciones',
+  toastUndo: 'Deshacer',
+  toastUndoHint: 'Deshaz con {shortcut}.',
+  toastClose: 'Cerrar',
+  keyUndo: 'Deshacer la última acción',
+  setupTimeSigned: 'Has entrado como {name} · {org}. Tu temporizador está en la barra de título.',
 };
 
 const CATALOGS: Record<Locale, Record<ShellKey, string>> = { en, es };

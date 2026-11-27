@@ -506,7 +506,7 @@ describe('shell and chat module', () => {
     await env.control('config', { chatFailNext: { status: 500, error: 'oops' } });
     ui.$<HTMLButtonElement>(`.ctx-tile[data-context="${ORG}"]`).click();
     await until(() => ui.$('#chat-banner').hidden === false, 'the banner');
-    ui.$<HTMLButtonElement>('#chat-banner .btn').click();
+    ui.$<HTMLButtonElement>('#chat-banner #chat-retry').click();
     await until(() => ui.$(`[data-conv="${ENVELOPE}"]`) !== null, 'the list');
     await env.control('config', { chatFailNext: { status: 404, error: 'not_found' } });
     ui.$<HTMLButtonElement>(`[data-conv="${ENVELOPE}"]`).click();

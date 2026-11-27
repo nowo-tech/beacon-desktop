@@ -317,6 +317,7 @@ describe('updates (0.4.0)', () => {
     expect(ui.$('#update-later').textContent).toBe('Más tarde');
     ui.click('#update-now');
     expect(ui.$('#update-after-stop').textContent).toBe('Cuando lo pare');
-    expect(ui.platform.hooks.trayMenu?.checkUpdates).toBe('Buscar actualizaciones…');
+    // UXA-22: the tray names the update to install (the same item opens the update panel).
+    expect(ui.platform.hooks.trayMenu?.checkUpdates).toBe('Instalar la actualización 0.5.0…');
   });
 });

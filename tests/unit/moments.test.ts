@@ -216,9 +216,10 @@ describe('mascot moments', () => {
     (ui.platform as { fetch: typeof fetch }).fetch = (() => Promise.reject(new Error('offline'))) as typeof fetch;
     await ui.app.stop();
     expect(ui.$('#notice span').textContent).toMatch(/^\d+:\d\d on Fix invoice rounding bug is saved on this computer and goes to Beacon when you are back online\.$/);
-    // Offline: a calm card with the reconnecting robot.
-    expect(ui.$('#offline-title').textContent).toBe('Working offline');
-    expect(pose(ui.$('#offline-card [data-moment="offline"]'))).toBe('pose-reconnect');
+    // Offline (UX batch 4, UXA-7): one line in the status strip, no second card or art for a transient state.
+    expect(ui.$('#offline').textContent).toContain('1 action will be sent');
+    expect(ui.$('#time-strip').className).toBe('ss-box warn');
+    expect(ui.$('#offline-card')).toBeNull();
     ui.app.destroy();
   });
 

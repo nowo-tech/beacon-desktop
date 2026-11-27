@@ -27,7 +27,7 @@ for (const scheme of ['light', 'dark'] as const) {
 
     test(`desktop-welcome-${scheme}`, async ({ page }) => {
       await signIn(page, true);
-      await expect(page.getByRole('region', { name: "You're in!" })).toBeVisible();
+      await expect(page.locator('#time-strip-text')).toContainText("You're in");
       await shot(page, `desktop-welcome-${scheme}`);
     });
 
@@ -66,7 +66,6 @@ for (const scheme of ['light', 'dark'] as const) {
       await page.route(`${BEACON}/**`, (route) => route.abort('internetdisconnected'));
       await page.locator('[data-task="T-101"] .row-action').click();
       await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
-      await expect(page.getByRole('region', { name: 'Working offline' })).toBeVisible();
       await expect(page.locator('#offline')).toContainText('1 action will be sent');
       await shot(page, `desktop-offline-${scheme}`);
     });

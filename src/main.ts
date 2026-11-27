@@ -11,6 +11,8 @@ import './chat/chat.css';
 import './tasks/tasks.css';
 // UX batch 6: the Time module in the shell's grammar, the one Settings and the guided first run.
 import './shell/shell.css';
+// UX batch 4: the status strip and the toast region with Undo.
+import './ui/feedback.css';
 
 const isTauri = '__TAURI_INTERNALS__' in window;
 const root = document.getElementById('app');

@@ -23,7 +23,6 @@
   "offline": "Offline: {count} actions will be sent when the connection returns.",
   "offlineOne": "Offline: 1 action will be sent when the connection returns.",
   "offlineZero": "Offline. Your changes will be sent when the connection returns.",
-  "offlineStartNote": "When the connection returns, the times are sent as they happened.",
   "synced": "Back online: {count} actions sent.",
   "syncedOne": "Back online: 1 action sent.",
   "dropped": "{count} offline actions could not be applied.",
@@ -244,7 +243,6 @@
   "savedC": "Logged {time} on {task}. Good moment for a stretch?",
   "savedShort": "Saved a short entry ({time}) on {task}. If it was a slip, you can delete it in Beacon.",
   "savedOffline": "{time} on {task} is saved on this computer and goes to Beacon when you are back online.",
-  "offlineTitle": "Working offline",
   "welcomeTitle": "You're in!",
   "welcomeText": "This computer is connected to {host}. Pick a task and press Start; I'll keep an eye on the clock.",
   "longRunningTitle": "Still going strong?",
@@ -473,5 +471,9 @@
   "navTitle": "Time",
   "loginFixedHelp": "Beacon Desktop signs in to Beacon at {host}. You approve a short code there once; no password is typed here.",
   "connectFixed": "Sign in with Beacon",
-  "serverFixedSignedOut": "Beacon Desktop now always uses {host}, so you were signed out of {old} on this computer. Sign in again to continue."
+  "serverFixedSignedOut": "Beacon Desktop now always uses {host}, so you were signed out of {old} on this computer. Sign in again to continue.",
+  "pausedFor": "Paused for a moment. Back in {time}.",
+  "welcomeStrip": "You're in, {name}. Pick a task and press Start.",
+  "welcomeStripOrg": "You're in, {name} · {org}. Pick a task and press Start.",
+  "trayUpdateAvailable": "Install update {version}…"
 }

@@ -17,6 +17,8 @@ import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
 import type { TasksHost } from '../platform';
 import { type Child, h, patch } from '../ui/dom';
 import { Roving } from '../ui/roving';
+import { formatCountdown, type StripMessage, StatusStrip } from '../ui/statusStrip';
+import type { UndoToasts } from '../ui/toastRegion';
 import { isModuleForbidden, TasksApi, TasksApiError, type TaskFields } from './api';
 import { apiToDateInput, dateInputToApi, dayAfter, daysToNextWeek, dueInfo, duration, groupMine, localDate, parseDuration, parseQuickAdd, priorityLabel, taskRef } from './format';
 import type { TasksText } from './i18n';
@@ -58,11 +60,16 @@ export interface TasksModuleDeps {
   stopTimer(): Promise<void>;
   runningTaskId(): string | null;
   markers(): Markers;
+  /** The shell's toast region (UX batch 4, UXA-8): *Undo* after completing a task or moving a card. */
+  toasts?: UndoToasts;
   storage?: Storage;
   clock?: SyncClock;
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
 }
+
+/** Toast group of this module: dropped on a context switch, a disconnect or a reconnect (BDA13). */
+export const TOAST_GROUP = 'tasks';
 
 type ConnectState = { kind: 'idle'; message: string | null } | { kind: 'starting' } | { kind: 'code'; userCode: string; url: string };
 
@@ -129,8 +136,6 @@ export class TasksModule {
   notice: string | null = null;
   /** What the notice is about (UXA-15): a refused write clears on the next successful write, a 429 on any answer. */
   noticeKind: NoticeKind | null = null;
-  /** The banner message the person dismissed (it stays hidden until the message changes). */
-  private dismissed: string | null = null;
   offline = false;
   contextRefused = false;
   private shown = false;
@@ -145,7 +150,8 @@ export class TasksModule {
   private readonly page: HTMLElement;
   private readonly head: HTMLElement;
   private readonly extras: HTMLElement;
-  private readonly banner: HTMLElement;
+  /** The status strip (UX batch 4, UXA-7): one message, its height kept, so nothing below moves. */
+  private readonly strip: StatusStrip;
   private readonly body: HTMLElement;
   /** My tasks and List rows: one Tab stop, ↑ ↓ between rows, ← → within a row (UXA-10). */
   private readonly rows: Roving;
@@ -165,6 +171,8 @@ export class TasksModule {
    * here even when the panel was closed or shows another task meanwhile. Dropped with the queue entry.
    */
   private readonly written = new Map<string, TaskDetail>();
+  /** Where an *Undo* toast puts a task back (the column before the first of a run of moves). */
+  private readonly undoOrigins = new Map<string, string>();
 
   constructor(private readonly deps: TasksModuleDeps) {
     this.clock = deps.clock ?? realClock;
@@ -178,10 +186,17 @@ export class TasksModule {
     this.quickInput.addEventListener('keydown', (event) => this.onQuickKey(event));
     this.extras = h('div', { class: 'tb-extras' });
     this.toolbar = h('div', { class: 'toolbar', id: 'tasks-toolbar' }, h('div', { class: 'qa' }, h('span', { class: 'qa-ico', attrs: { 'aria-hidden': 'true' } }, chatIcon('plus', 'sm')), this.quickInput, this.quickPreview, h('kbd', { attrs: { 'aria-hidden': 'true' } }, 'N'), this.quickHelp), this.extras);
-    this.banner = h('div', { class: 'tk-banner', id: 'tasks-banner', attrs: { role: 'status', 'aria-live': 'polite' } });
+    this.strip = new StatusStrip({
+      id: 'tasks-banner',
+      dismissLabel: t('dismiss'),
+      announce: (text) => deps.announce(text),
+      onDismiss: (message) => this.dismissedMessage(message),
+      focusAway: () => this.focusAfterBanner(),
+      clock: this.clock,
+    });
     this.body = h('div', { class: 'tk-body', id: 'tasks-body' });
     // UXA-27: the module's content is its `main` landmark (one visible at a time: the other modules' are hidden).
-    this.page = h('main', { class: 'page', id: 'tasks-main', attrs: { 'aria-labelledby': 'tasks-title' } }, this.head, this.toolbar, this.banner, this.body);
+    this.page = h('main', { class: 'page', id: 'tasks-main', attrs: { 'aria-labelledby': 'tasks-title' } }, this.head, this.toolbar, this.strip.root, this.body);
     this.rows = new Roving(this.body, {
       items: '.r-title, .t-title',
       row: 'li.row, tr[data-row]',
@@ -240,6 +255,8 @@ export class TasksModule {
 
   private clearData(): void {
     this.generation += 1;
+    // An undo of the previous organization (or connection) never sends anything here (BDA13 guards).
+    this.deps.toasts?.dismissGroup(TOAST_GROUP);
     this.boards = [];
     this.boardsLoaded = false;
     this.boardDetails.clear();
@@ -546,9 +563,11 @@ export class TasksModule {
   private showNotice(text: string, kind: NoticeKind = 'write'): void {
     this.notice = text;
     this.noticeKind = kind;
-    this.deps.announce(text);
     this.renderBanner();
     if (this.noticeTimer !== null) this.clock.clearTimeout(this.noticeTimer);
+    this.noticeTimer = null;
+    // A pause after a `429` counts down to its end instead (UXA-7).
+    if (kind === 'rate') return;
     this.noticeTimer = this.clock.setTimeout(() => {
       this.noticeTimer = null;
       this.clearNotice();
@@ -796,10 +815,14 @@ export class TasksModule {
     return run;
   }
 
-  /** Moves a card to `columnId` (optimistic on the board; `If-Match` with the card's latest revision). */
-  async move(id: string, columnId: string): Promise<void> {
-    const card = this.findCard(id);
-    if (card === null || card.column?.id === columnId || !this.writable()) return;
+  /**
+   * Moves a card to `columnId` (optimistic on the board; `If-Match` with the card's latest revision). Resolves with the
+   * task as the server returned it, `null` when nothing was moved. `undo: 'move'` (the default) offers *Undo* in the
+   * shell's toast region (UXA-8); `card` is the task when it is no longer shown (the undo of a completed task).
+   */
+  async move(id: string, columnId: string, options: { undo?: 'move' | false; card?: TaskCard } = {}): Promise<TaskDetail | null> {
+    const card = this.findCard(id) ?? options.card ?? null;
+    if (card === null || card.column?.id === columnId || !this.writable()) return null;
     const generation = this.generation;
     const api = this.api;
     const board = this.boardDetails.get(card.boardId);
@@ -825,6 +848,7 @@ export class TasksModule {
       this.renderBody();
       this.body.querySelector<HTMLElement>(`[data-task="${id}"]`)?.focus({ preventScroll: true });
     }
+    let result: TaskDetail | null = null;
     await this.queue(id, async () => {
       if (!this.fresh(generation, api)) return;
       const known = this.findCard(id) ?? card;
@@ -833,10 +857,13 @@ export class TasksModule {
       try {
         const detail = await this.call((client) => client.move(id, { columnId }, revision));
         if (!this.fresh(generation, api)) return;
+        result = detail;
         this.written.set(id, detail);
         this.wrote();
         this.replaceCard(detail);
-        this.deps.announce(this.t('moved', { task: taskRef(card), column: column?.name ?? detail.column?.name ?? '' }));
+        const text = this.t('moved', { task: taskRef(card), column: column?.name ?? detail.column?.name ?? '' });
+        if ((options.undo ?? 'move') === 'move' && from !== undefined) this.offerUndo(detail, from, text, 'move');
+        else this.deps.announce(text);
         if (this.prefs.view !== 'board') await this.loadView().catch(() => undefined);
         this.render();
         this.body.querySelector<HTMLElement>(`[data-task="${id}"]`)?.focus({ preventScroll: true });
@@ -847,9 +874,43 @@ export class TasksModule {
         this.writeFailed(error);
       }
     });
+    return result;
   }
 
-  /** Completes a task: to the board's first `done` column. */
+  /**
+   * *Undo* for a move or a completion (UXA-8): moves the task back to `origin`, through the task's write queue (with the
+   * revision the move returned). Two moves of one card in a row are one toast that goes back to where the card was
+   * before the first. Pinned to this organization and connection (BDA13): after a switch the toast is gone, and an
+   * undo that still fires sends nothing.
+   */
+  private offerUndo(detail: TaskDetail, from: string, text: string, kind: 'move' | 'complete'): void {
+    const toasts = this.deps.toasts;
+    if (toasts === undefined) {
+      this.deps.announce(text);
+      return;
+    }
+    const generation = this.generation;
+    const api = this.api;
+    const id = detail.id;
+    const origin = this.undoOrigins.get(id) ?? from;
+    toasts.offer({
+      key: `tasks:${id}`,
+      group: TOAST_GROUP,
+      text,
+      undo: () => {
+        this.undoOrigins.delete(id);
+        if (!this.fresh(generation, api)) return;
+        void this.move(id, origin, { undo: false, card: this.findCard(id) ?? this.written.get(id) ?? detail }).then((moved) => {
+          if (moved === null || !this.fresh(generation, api)) return;
+          if (kind === 'complete' && this.prefs.view === 'mine') void this.loadView().catch(() => undefined).then(() => this.render());
+        });
+      },
+      onClose: () => this.undoOrigins.delete(id),
+    });
+    this.undoOrigins.set(id, origin);
+  }
+
+  /** Completes a task: to the board's first `done` column, with *Undo* (UXA-8). */
   async complete(id: string): Promise<void> {
     const card = this.findCard(id);
     if (card === null) return;
@@ -863,8 +924,12 @@ export class TasksModule {
     }
     const done = board?.columns.find((column) => column.type === 'done');
     if (done === undefined) return;
-    await this.move(id, done.id);
-    if (this.fresh(generation, api)) this.deps.announce(this.t('completed', { task: taskRef(card) }));
+    const from = card.column?.id;
+    const detail = await this.move(id, done.id, { undo: false });
+    if (detail === null || !this.fresh(generation, api)) return;
+    const text = this.t('completed', { task: taskRef(card) });
+    if (from !== undefined) this.offerUndo(detail, from, text, 'complete');
+    else this.deps.announce(text);
   }
 
   private replaceCard(detail: TaskDetail): void {
@@ -1170,45 +1235,42 @@ export class TasksModule {
     patch(this.extras, nodes);
   }
 
-  /** The one message the banner shows (UXA-15): the most severe first, each on its own. */
-  private bannerMessage(): { text: string; tone: 'danger' | 'warn'; retry: boolean } | null {
+  /**
+   * The one message of the status strip (UXA-15, UXA-7): the most severe first, each on its own. A pause after a `429`
+   * is a calm countdown ("Paused for a moment, back in 0:25"), never an error.
+   */
+  private bannerMessage(): StripMessage | null {
     const t = this.t;
-    if (this.error !== null) return { text: this.error, tone: 'danger', retry: true };
-    if (this.offline) return { text: t('offline'), tone: 'warn', retry: false };
-    if (this.contextRefused) return { text: t('contextRefused', { name: this.deps.contextLabel() }), tone: 'warn', retry: false };
-    if (this.notice !== null) return { text: this.notice, tone: 'warn', retry: false };
+    if (this.error !== null) return { key: `error:${this.error}`, text: this.error, tone: 'danger', action: { id: 'tasks-retry', label: t('retry'), onClick: () => void this.reload() } };
+    if (this.offline) return { key: 'offline', text: t('offline'), tone: 'warn' };
+    if (this.contextRefused) return { key: 'context', text: t('contextRefused', { name: this.deps.contextLabel() }), tone: 'warn' };
+    if (this.notice !== null && this.noticeKind === 'rate' && this.pausedUntil > this.clock.now()) {
+      return {
+        key: 'rate',
+        text: (left) => t('pausedFor', { time: formatCountdown(left) }),
+        tone: 'info',
+        until: this.pausedUntil,
+        onElapsed: () => {
+          this.clearNotice();
+          this.renderBanner();
+        },
+      };
+    }
+    if (this.notice !== null && this.noticeKind !== 'rate') return { key: `notice:${this.notice}`, text: this.notice, tone: 'warn' };
     return null;
   }
 
   private renderBanner(): void {
-    const t = this.t;
-    const message = this.bannerMessage();
-    if (message === null || message.text !== this.dismissed) this.dismissed = null;
-    if (message === null || this.dismissed !== null) {
-      // Keep focus on the page when the banner it was in goes.
-      const had = this.banner.contains(document.activeElement);
-      this.banner.replaceChildren();
-      this.banner.hidden = true;
-      if (had) this.focusAfterBanner();
-      return;
-    }
-    const nodes: Child[] = [h('span', { class: 'tb-ico', attrs: { 'aria-hidden': 'true' } }, chatIcon('alert', 'sm')), h('span', { class: 'tb-msg', attrs: { title: message.text } }, message.text)];
-    if (message.retry) nodes.push(this.button('btn sm', t('retry'), () => void this.reload(), 'tasks-retry'));
-    const dismiss = h('button', { class: 'x-btn sm', id: 'tasks-banner-dismiss', key: 'tasks-banner-dismiss', attrs: { type: 'button', 'aria-label': t('dismiss'), title: t('dismiss') } }, chatIcon('x', 'sm'));
-    dismiss.addEventListener('click', () => this.dismissBanner());
-    nodes.push(dismiss);
-    this.banner.className = `tk-banner ${message.tone}`;
-    patch(this.banner, nodes);
-    this.banner.hidden = false;
+    this.strip.show(this.bannerMessage());
   }
 
-  /** The banner's close button: a notice goes for good, any other message until it changes. */
+  /** The strip's close button: a notice goes for good, any other message until it changes. */
   dismissBanner(): void {
-    const message = this.bannerMessage();
-    if (message === null) return;
-    if (message.text === this.notice) this.clearNotice();
-    else this.dismissed = message.text;
-    this.renderBanner();
+    this.strip.dismiss();
+  }
+
+  private dismissedMessage(message: StripMessage): void {
+    if (message.key.startsWith('notice:') || message.key === 'rate') this.clearNotice();
   }
 
   private focusAfterBanner(): void {

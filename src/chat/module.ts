@@ -13,6 +13,8 @@ import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
 import type { ChatHost, ChatRealtimeMode } from '../platform';
 import { type Child, h } from '../ui/dom';
 import { art, type Pose } from '../ui/mascot';
+import { formatCountdown, pickMessage, StatusStrip, type StripMessage } from '../ui/statusStrip';
+import type { UndoToasts } from '../ui/toastRegion';
 import { ChatApi } from './api';
 import { plainText, renderBlocks } from './body';
 import { Composer } from './composer';
@@ -62,8 +64,16 @@ export interface ChatModuleDeps {
   now?: () => Date;
   /** Device-flow sleep (tests shorten it). */
   sleep?: (ms: number) => Promise<void>;
+  /** The shell's toast region (UX batch 4, UXA-8): *Undo* after discarding or cancelling a message not sent. */
+  toasts?: UndoToasts;
   storage?: Storage;
 }
+
+/** Toast group of this module: dropped on a context switch, "Disconnect chat" and sign-out. */
+export const TOAST_GROUP = 'chat';
+
+/** UXA-13: how long the skeleton of a conversation waits before it says the app is pausing (a `429`). */
+export const PAUSE_NOTE_MS = 1500;
 
 type ConnectState =
   | { kind: 'idle'; message: string | null }
@@ -135,7 +145,13 @@ export class ChatModule {
   /** A render of the timeline skipped while the person selects text in it (UXA-26); done when the selection ends. */
   private deferredRender = false;
   private readonly head: HTMLElement;
-  private readonly banner: HTMLElement;
+  /** The status strip (UX batch 4, UXA-7): one message, its height kept, so the timeline never moves. */
+  private readonly strip: StatusStrip;
+  /** UXA-13: when the open conversation's skeleton appeared (its pause note shows after {@link PAUSE_NOTE_MS}). */
+  private skeletonSince: { uuid: string; at: number } | null = null;
+  private skeletonTimer: unknown = null;
+  /** The pause note's line (same component as the status strip, without a close button). */
+  private readonly pauseStrip: StatusStrip;
   private readonly ask: HTMLElement;
   private readonly foot: HTMLElement;
   private prefs: ViewPrefs;
@@ -172,7 +188,18 @@ export class ChatModule {
     this.prefs = loadPrefs(deps.storage);
     this.side = h('aside', { class: 'side', id: 'chat-side', attrs: { 'aria-label': deps.t('conversations') } });
     this.head = h('header', { class: 'ch-head', id: 'chat-head' });
-    this.banner = h('div', { class: 'ch-banner', id: 'chat-banner', attrs: { role: 'status', 'aria-live': 'polite' } });
+    this.strip = new StatusStrip({
+      id: 'chat-banner',
+      dismissLabel: deps.t('dismissNotice'),
+      announce: (text) => deps.announce(text),
+      onDismiss: (message) => {
+        if (message.key.startsWith('notice:')) this.notice = null;
+        if (message.key.startsWith('error:')) this.error = null;
+      },
+      focusAway: () => (this.openUuid() !== null ? this.scroller.focus({ preventScroll: true }) : this.side.querySelector<HTMLElement>('.conv, #chat-home-link')?.focus()),
+      clock: this.clock,
+    });
+    this.pauseStrip = new StatusStrip({ id: 'chat-pause', dismissLabel: deps.t('dismissNotice'), announce: (text) => deps.announce(text), clock: this.clock });
     this.ask = h('div', { class: 'ch-ask', id: 'chat-ask' });
     this.list = h('ul', { class: 'msg-list', id: 'msg-list', attrs: { role: 'list' } });
     this.scroller = h('div', { class: 'msgs', id: 'msg-scroll', attrs: { tabindex: '-1', role: 'region' } }, this.list);
@@ -182,7 +209,7 @@ export class ChatModule {
     this.home = h('section', { class: 'ch-home', id: 'chat-home', attrs: { 'aria-labelledby': 'chat-home-title', hidden: true } });
     this.home.addEventListener('keydown', (event) => this.onHomeKey(event));
     // UXA-27: the conversation (or the home view) is the module's `main` landmark.
-    this.main = h('main', { class: 'chat-main', id: 'chat-main', attrs: { 'aria-label': deps.t('moduleChat') } }, this.head, this.ask, this.banner, h('div', { class: 'msgs-wrap' }, this.scroller, this.home, this.pill), this.foot);
+    this.main = h('main', { class: 'chat-main', id: 'chat-main', attrs: { 'aria-label': deps.t('moduleChat') } }, this.head, this.ask, this.strip.root, h('div', { class: 'msgs-wrap' }, this.scroller, this.home, this.pill), this.foot);
     this.threadSlot = h('div', { class: 'thread-slot', id: 'thread-slot' });
     this.root = h('div', { class: 'chat', id: 'chat' }, this.side, this.main, this.threadSlot);
     this.sideRows = new Roving(this.side, { items: '.side-scroll .sec-h, .side-scroll .conv, .side-scroll .sec-more', preferred: () => this.side.querySelector<HTMLElement>('.conv[aria-current="true"]') });
@@ -251,6 +278,8 @@ export class ChatModule {
           this.outbox?.setOnline(state !== 'offline');
           this.renderBanner();
           this.renderSideFoot();
+          // A conversation still loading may now say it is pausing (UXA-13), or stop saying so.
+          if (this.skeletonSince !== null) this.renderMessages();
         },
       },
       this.clock,
@@ -308,6 +337,8 @@ export class ChatModule {
     this.api.setContext(context);
     this.history.clear();
     this.outbox?.clear();
+    // An undo of the previous organization never restores anything here (BDA13 guards).
+    this.deps.toasts?.dismissGroup(TOAST_GROUP);
     this.peeked.clear();
     // Unsent text of the previous organization goes too (PRIVACY.md, audit ZDG-L2).
     this.drafts.clear();
@@ -364,6 +395,7 @@ export class ChatModule {
     this.sync = null;
     this.outbox?.clear();
     this.outbox = null;
+    this.deps.toasts?.dismissGroup(TOAST_GROUP);
     this.drafts.clear();
     this.dropComposers();
     this.api = null;
@@ -658,6 +690,66 @@ export class ChatModule {
   jumpUnread(): void {
     const target = this.allConversations().find((row) => row.unread > 0 && row.uuid !== this.openUuid() && !isMuted(row, this.clock.now()));
     if (target !== undefined) void this.open(target.uuid);
+    // UXA-11: the only unread messages are below in the open conversation (the rail badge counts them): go there.
+    else if (this.openUnread() > 0) this.scrollToBottom(true);
+  }
+
+  /**
+   * UXA-13: a conversation whose first page waits for a `Retry-After` pause keeps its skeleton, and after
+   * {@link PAUSE_NOTE_MS} says so in the pane ("Taking a short pause. Loading again in 0:25."), with *Retry* usable once
+   * the pause ends (it loads again by itself then too).
+   */
+  private pauseNote(uuid: string): HTMLElement[] {
+    const now = this.clock.now();
+    if (this.skeletonSince?.uuid !== uuid) {
+      this.skeletonDone();
+      this.skeletonSince = { uuid, at: now };
+      this.skeletonTimer = this.clock.setTimeout(() => {
+        this.skeletonTimer = null;
+        if (this.openUuid() === uuid) this.renderMessages();
+      }, PAUSE_NOTE_MS);
+    }
+    const resumeAt = this.sync?.resumeAt ?? 0;
+    if (this.netState !== 'limited' || now - this.skeletonSince.at < PAUSE_NOTE_MS) return [];
+    const strip = this.pauseStrip;
+    const retry = () => {
+      const sync = this.sync;
+      if (sync === null || this.openUuid() !== uuid) return;
+      void sync
+        .open(uuid)
+        .catch((error: unknown) => this.handleError(error))
+        .then(() => this.renderMessages());
+    };
+    const waiting = resumeAt > now;
+    strip.show({
+      key: `pause:${uuid}:${waiting ? 'wait' : 'ready'}`,
+      text: waiting ? (left: number) => this.t('pauseLoading', { time: formatCountdown(left) }) : this.t('pauseLoadingReady'),
+      tone: 'info',
+      until: waiting ? resumeAt : undefined,
+      onElapsed: () => {
+        if (this.openUuid() !== uuid) return;
+        this.renderMessages();
+        retry();
+      },
+      action: { id: 'chat-pause-retry', label: this.t('retry'), onClick: retry, disabled: waiting },
+      dismissible: false,
+    });
+    return [h('li', { class: 'pause-note', id: 'chat-pause-note' }, strip.root)];
+  }
+
+  /** The open conversation's first page arrived (or it closed): the pause note's clock stops. */
+  private skeletonDone(): void {
+    if (this.skeletonTimer !== null) this.clock.clearTimeout(this.skeletonTimer);
+    this.skeletonTimer = null;
+    this.skeletonSince = null;
+    this.pauseStrip.show(null);
+  }
+
+  /** Unread messages of the open conversation (scrolled away from): part of the rail badge (UXA-11). */
+  private openUnread(): number {
+    const open = this.openUuid();
+    const row = open === null ? null : (this.sync?.store.conversation(open) ?? null);
+    return row === null || isMuted(row, this.clock.now()) ? 0 : row.unread;
   }
 
   back(): void {
@@ -965,7 +1057,10 @@ export class ChatModule {
     homeLink.addEventListener('click', () => void this.goHome());
     nodes.push(homeLink);
     const anyUnread = store.conversations().some((row) => row.unread > 0 && row.uuid !== open && !isMuted(row, this.clock.now()));
-    const jump = h('button', { class: 'jump', id: 'chat-jump', attrs: { type: 'button', disabled: !anyUnread || undefined, 'aria-keyshortcuts': 'Control+J Meta+J' } }, chatIcon('down', 'sm'), h('span', {}, anyUnread ? t('jumpUnread') : t('caughtUp')), h('kbd', {}, `${modKey()} J`));
+    // UXA-11: one truth with the rail badge. Unread only below in the open conversation: "1 new message below".
+    const below = anyUnread ? 0 : this.openUnread();
+    const jumpLabel = anyUnread ? t('jumpUnread') : below === 1 ? t('newBelowOne') : below > 1 ? t('newBelowMany', { count: below }) : t('caughtUp');
+    const jump = h('button', { class: 'jump', id: 'chat-jump', attrs: { type: 'button', disabled: (!anyUnread && below === 0) || undefined, 'aria-keyshortcuts': 'Control+J Meta+J' } }, chatIcon('down', 'sm'), h('span', {}, jumpLabel), h('kbd', {}, `${modKey()} J`));
     jump.addEventListener('click', () => this.jumpUnread());
     nodes.push(jump);
     const scroll = h('nav', { class: 'side-scroll', attrs: { 'aria-labelledby': 'chat-side-title' } });
@@ -1075,29 +1170,46 @@ export class ChatModule {
     if (server !== null) void this.deps.host.openLink(`${server}/dashboard?chat=${uuid}`).catch(() => undefined);
   }
 
-  /** Slim, non-blocking: realtime lost (after it was live) or offline; never for a 429 (quiet backoff). */
+  /**
+   * The status strip (UXA-7): one message, the most severe first. A load error (with *Retry*), then offline or messages
+   * waiting to send, then a refused write, then the calm ones: a `429` pause counting down, reconnecting.
+   */
   private renderBanner(): void {
     const t = this.t;
-    let text: string | null = null;
     const queued = this.outbox?.queuedCount() ?? 0;
     const waiting = this.outbox?.waitingCount() ?? 0;
-    if (this.netState === 'offline') text = queued === 0 ? t('bannerOffline') : queued === 1 ? t('bannerOfflineQueuedOne') : t('bannerOfflineQueued', { count: queued });
-    // Reads work again but the server still does not take the waiting messages (a `5xx`): say so, calmly.
-    else if (waiting > 0) text = queued === 1 ? t('bannerQueuedOne') : t('bannerQueued', { count: queued });
-    else if (this.wasLive && this.mode === 'polling') text = t('bannerReconnecting');
-    const nodes: Child[] = [];
-    if (text !== null) nodes.push(h('span', { class: 'cb-text' }, text));
-    if (this.notice !== null) nodes.push(h('span', { class: 'cb-text' }, chatIcon('alert', 'sm'), this.notice));
-    if (this.error !== null) {
-      const retry = this.button('btn sm', t('retry'), () => {
-        this.error = null;
-        this.renderBanner();
-        void this.sync?.poll();
-      });
-      nodes.push(h('span', { class: 'cb-text' }, this.error), retry);
-    }
-    this.banner.replaceChildren(...(nodes.filter(Boolean) as Node[]));
-    this.banner.hidden = nodes.length === 0;
+    const resumeAt = this.sync?.resumeAt ?? 0;
+    const error = this.error;
+    const message: StripMessage | null = pickMessage([
+      error !== null && {
+        key: `error:${error}`,
+        text: error,
+        tone: 'danger',
+        action: {
+          id: 'chat-retry',
+          label: t('retry'),
+          onClick: () => {
+            this.error = null;
+            this.renderBanner();
+            void this.sync?.poll();
+          },
+        },
+      },
+      this.netState === 'offline' && { key: 'offline', text: queued === 0 ? t('bannerOffline') : queued === 1 ? t('bannerOfflineQueuedOne') : t('bannerOfflineQueued', { count: queued }), tone: 'warn' },
+      // Reads work again but the server still does not take the waiting messages (a `5xx`): say so, calmly.
+      this.netState !== 'offline' && waiting > 0 && { key: 'waiting', text: queued === 1 ? t('bannerQueuedOne') : t('bannerQueued', { count: queued }), tone: 'warn' },
+      this.notice !== null && { key: `notice:${this.notice}`, text: this.notice, tone: 'warn' },
+      this.netState === 'limited' &&
+        resumeAt > this.clock.now() && {
+          key: 'rate',
+          text: (left: number) => t('pausedFor', { time: formatCountdown(left) }),
+          tone: 'info',
+          until: resumeAt,
+          onElapsed: () => this.renderBanner(),
+        },
+      this.wasLive && this.mode === 'polling' && { key: 'reconnecting', text: t('bannerReconnecting'), tone: 'info' },
+    ]);
+    this.strip.show(message);
   }
 
   /** The message box, or why there is none (a read-only token, writes off on the server, a read-only conversation). */
@@ -1156,6 +1268,7 @@ export class ChatModule {
     this.home.hidden = open !== null;
     this.scroller.hidden = open === null;
     if (sync === null || open === null) {
+      this.skeletonDone();
       this.list.replaceChildren();
       delete this.scroller.dataset.conv;
       this.deferredRender = false;
@@ -1165,9 +1278,10 @@ export class ChatModule {
     }
     const timeline = sync.store.timeline(open);
     if (timeline === null) {
-      this.list.replaceChildren(...skeletonMessages(6));
+      this.list.replaceChildren(...this.pauseNote(open), ...skeletonMessages(6));
       return;
     }
+    this.skeletonDone();
     if (this.scroller.dataset.conv === open && this.selectingInList()) {
       this.deferredRender = true;
       return;
@@ -1450,12 +1564,16 @@ export class ChatModule {
       if (offline) actions.push(this.button('btn sm', t('queueSendNow'), () => this.outbox?.retry(pending.key)));
       actions.push(
         this.button('btn sm btn-quiet', t('queueCancel'), () => {
-          const dropped = this.outbox?.discard(pending.key);
+          const outbox = this.outbox;
+          const point = outbox?.undoPoint(pending);
+          const dropped = outbox?.discard(pending.key);
           const target = pending.root === null ? this.composer : this.threadComposer;
           // The words are not lost: back in an empty message box, else announced as cancelled.
-          if (dropped !== null && dropped !== undefined && target !== null && target.field.value.trim() === '') target.setText(dropped.text);
+          const refilled = dropped !== null && dropped !== undefined && target !== null && target.field.value.trim() === '';
+          if (refilled) target.setText(dropped.text);
           else target?.focus();
-          this.deps.announce(t('queueCancelled'));
+          if (dropped !== null && dropped !== undefined && outbox !== null && outbox !== undefined && point !== undefined) this.offerUndo(outbox, dropped, point, t('queueCancelled'), refilled ? target : null);
+          else this.deps.announce(t('queueCancelled'));
         }),
       );
       return h('div', { class: `m-status queued${offline ? ' offline' : ''}`, attrs: { role: 'status' } }, chatIcon('clock', 'xs'), h('span', {}, offline ? t('pendingQueued') : t('pendingWaiting')), ...actions);
@@ -1485,11 +1603,39 @@ export class ChatModule {
       );
     actions.push(
       this.button('btn sm btn-quiet', t('discard'), () => {
-        this.outbox?.discard(pending.key);
+        const outbox = this.outbox;
+        const point = outbox?.undoPoint(pending);
+        const dropped = outbox?.discard(pending.key);
         (pending.root === null ? this.composer : this.threadComposer)?.focus();
+        if (dropped !== null && dropped !== undefined && outbox !== null && outbox !== undefined && point !== undefined) this.offerUndo(outbox, dropped, point, t('messageDiscarded'), null);
       }),
     );
     return h('div', { class: 'm-status failed', attrs: { role: 'alert' } }, chatIcon('alert', 'sm'), h('span', {}, reason), ...actions);
+  }
+
+  /**
+   * *Undo* after discarding or cancelling a message not sent (UX batch 4, UXA-8). The message comes back where it stood,
+   * with its key (the offline queue's order and once-only sending hold). A cancelled message whose words went back into
+   * the empty message box takes them out again if they are still there untouched. Pinned to this outbox: after a context
+   * switch, "Disconnect chat" or sign-out the toast is gone, and an undo that still fires restores nothing.
+   */
+  private offerUndo(outbox: ChatOutbox, pending: Pending, point: ReturnType<ChatOutbox['undoPoint']>, text: string, refilled: Composer | null): void {
+    const toasts = this.deps.toasts;
+    if (toasts === undefined) {
+      this.deps.announce(text);
+      return;
+    }
+    toasts.offer({
+      key: `chat:${pending.key}`,
+      group: TOAST_GROUP,
+      text,
+      fieldText: refilled !== null ? pending.text : undefined,
+      undo: () => {
+        if (this.outbox !== outbox || !outbox.restore(pending, point)) return;
+        const composer = pending.root === null ? this.composer : this.threadComposer;
+        if (refilled !== null && composer === refilled && refilled.field.value === pending.text) refilled.setText('');
+      },
+    });
   }
 
   /** Hover / focus toolbar of a message: quick reactions, the reaction picker, reply in thread, more. */

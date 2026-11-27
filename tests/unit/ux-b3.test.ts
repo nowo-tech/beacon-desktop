@@ -235,11 +235,15 @@ describe('app-wide keys in every module (UX batch 3)', () => {
     expect(sheet()).toEqual(['Anywhere', 'Time']);
     expect(ui.$('#shell-keys').textContent).toContain('Previous / next section');
     expect(ui.$('#shell-keys').textContent).toContain('Move between areas');
+    // Undo toasts (UX batch 4): Ctrl/⌘+Z is listed under Anywhere.
+    expect(ui.$('#shell-keys').textContent).toContain('Undo the last action');
     ui.$<HTMLDialogElement>('#shell-keys').close();
     await withChat(ui);
     ui.$<HTMLElement>('#chat-home-link').focus();
     ui.key({ key: '?' });
     expect(sheet()).toEqual(['Anywhere', 'Chat']);
+    // Ctrl/⌘+J also reaches the new messages below (UX batch 4, UXA-11).
+    expect(ui.$('#shell-keys').textContent).toContain('Jump to unread or new messages');
     ui.$<HTMLDialogElement>('#shell-keys').close();
     await withTasks(ui);
     ui.key({ key: '?' }, document.body);
@@ -250,6 +254,7 @@ describe('app-wide keys in every module (UX batch 3)', () => {
     const es = await onTime({ locale: 'es' });
     es.key({ key: '?' }, document.body);
     expect(sheet()).toEqual(['En cualquier sitio', 'Tiempo']);
+    expect(es.$('#shell-keys').textContent).toContain('Deshacer la última acción');
   });
 
   it('Ctrl/⌘+Shift+L is the theme everywhere; Ctrl/⌘+, and Ctrl/⌘+Shift+S too', async () => {
