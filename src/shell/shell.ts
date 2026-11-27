@@ -318,7 +318,7 @@ export class Shell {
   attach(app: DesktopApp): void {
     this.app = app;
     // UX batch 6 (UXA-1, UXA-2): the Time module drops its own header and Settings; the shell's are the only ones.
-    app.embed({ openSettings: (tab) => this.openSettings(tab as AnyTab | undefined) });
+    app.embed({ openSettings: (tab) => this.openSettings(tab as AnyTab | undefined), localKeys: [SHELL_KEY] });
     // Before the first time API request: the organization used last (Personal on a first launch).
     app.setContext(this.prefs.context);
   }
@@ -410,6 +410,8 @@ export class Shell {
       // preferences are stored at all ("Clear local data" before a sign-out leaves nothing behind).
       this.prefs.context = null;
       if (this.deps.storage?.getItem(SHELL_KEY) !== null && this.deps.storage?.getItem(SHELL_KEY) !== undefined) this.save();
+      // "Clear local data" removed them (UX batch 6): the next sign-in is a first run again.
+      else this.prefs = loadShellPrefs(undefined);
       void this.platform.chat?.setUnreadBadge(0).catch(() => undefined);
     }
     this.root.dataset.bare = signedIn ? 'false' : 'true';
@@ -1018,6 +1020,7 @@ export class Shell {
   /** The one Settings (UXA-2): the rail's gear, Ctrl/⌘+, in every module, the tray, the Time module's own links. */
   openSettings(tab?: AnyTab): void {
     for (const dialog of [this.switcher, this.keys]) if (dialog.open) dialog.close();
+    this.app?.prepareSettings();
     this.settingsDialog.show(tab);
   }
 
@@ -1082,6 +1085,7 @@ export class Shell {
 
   private appearanceSettings(): HTMLElement {
     const t = this.t;
+    const mini = this.miniSetting();
     return h(
       'div',
       { class: 'set-stack' },
@@ -1092,11 +1096,21 @@ export class Shell {
         this.settingRow(t('density'), t('densityHint'), this.segmented(t('density'), [['comfortable', t('densityComfortable')], ['compact', t('densityCompact')]], this.prefs.density, (density) => this.updatePrefs({ density }))),
         this.settingRow(t('switcherStyle'), t('switcherStyleHint'), this.segmented(t('switcherStyle'), [['tiles', t('switcherTiles')], ['dropdown', t('switcherDropdown')]], this.prefs.switcher, (switcher) => this.updatePrefs({ switcher }))),
         this.settingRow(t('timerPlacement'), t('timerPlacementHint'), this.segmented(t('timerPlacement'), [['title', t('timerTitle')], ['title-sidebar', t('timerTitleSidebar')]], this.prefs.timer, (timer) => this.updatePrefs({ timer }))),
+        mini,
       ),
     );
   }
 
-  /** Time tracking rows of the shell (BD-3a: required fields, mini timer), at the top of the Timer tab. */
+  /** The mini timer window (Q2, BD-3a), next to the timer placement it goes with. */
+  private miniSetting(): HTMLElement | null {
+    if (this.platform.miniWindow === null) return null;
+    const t = this.t;
+    const mini = h('button', { class: 'btn sm', id: 'settings-mini', attrs: { type: 'button', 'aria-pressed': this.miniOpen ? 'true' : 'false' } }, chatIcon('pip', 'sm'), this.miniOpen ? t('miniClose') : t('miniOpen'));
+    mini.addEventListener('click', () => void this.toggleMini().then(() => this.renderSettings()));
+    return this.settingRow(t('miniTimer'), t('miniTimerHint'), mini);
+  }
+
+  /** Time tracking rows of the shell (BD-3a: required fields), at the top of the Timer tab. */
   private timeSettings(): HTMLElement {
     const t = this.t;
     const settings = this.app?.state.settings;
@@ -1112,11 +1126,6 @@ export class Shell {
           this.renderSettings();
         })),
       );
-    }
-    if (this.platform.miniWindow !== null) {
-      const mini = h('button', { class: 'btn sm', id: 'settings-mini', attrs: { type: 'button', 'aria-pressed': this.miniOpen ? 'true' : 'false' } }, chatIcon('pip', 'sm'), this.miniOpen ? t('miniClose') : t('miniOpen'));
-      mini.addEventListener('click', () => void this.toggleMini().then(() => this.renderSettings()));
-      time.append(this.settingRow(t('miniTimer'), t('miniTimerHint'), mini));
     }
     return time;
   }

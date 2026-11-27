@@ -147,6 +147,8 @@ export type Section = 'tasks' | 'quick' | 'time';
 export interface TimeHost {
   /** Opens the one Settings (optionally on a tab). */
   openSettings(tab?: string): void;
+  /** The host's own local-storage keys: "Clear local data" removes them too. */
+  localKeys?: readonly string[];
 }
 
 /** Hosted in the shell: the detail pane shows from this window width (CSS px); narrower, sidebar · list only. */
@@ -847,13 +849,17 @@ export class DesktopApp {
 
   /** Hosted: Settings is the shell's dialog; "What we collect" goes back to the main screen behind it. */
   private openHostSettings(tab?: SettingsTab | 'account'): void {
-    if (this.browsers === null) void this.loadBrowsers();
-    void this.loadConnectionSecurity();
     if (this.view === 'settings' || this.view === 'privacy') {
       this.view = 'main';
       this.render();
     }
     this.host?.openSettings(tab);
+  }
+
+  /** Settings is opening: the browsers found here and the connection's protection are asked for (shown when known). */
+  prepareSettings(): void {
+    if (this.browsers === null) void this.loadBrowsers();
+    void this.loadConnectionSecurity();
   }
 
   /** Asks the host how the connection to the server is protected (TLS pinning, docs/PINNING.md). */
@@ -866,7 +872,7 @@ export class DesktopApp {
       // Unknown: nothing is shown.
     }
     this.connectionSecurity = security;
-    if (this.view === 'settings') this.render();
+    if (this.view === 'settings' || this.host !== null) this.render();
   }
 
   /**
@@ -3313,7 +3319,7 @@ export class DesktopApp {
       this.browserChoice = SYSTEM_BROWSER;
     }
     this.clearMeetings();
-    for (const key of [...LOCAL_KEYS, WINDOW_KEY]) this.storage.removeItem(key);
+    for (const key of [...LOCAL_KEYS, WINDOW_KEY, ...(this.host?.localKeys ?? [])]) this.storage.removeItem(key);
     this.windowMemory = loadWindowMemory(this.storage);
     this.section = 'tasks';
     this.selectedTaskId = null;
@@ -4110,7 +4116,12 @@ export class DesktopApp {
     main.list.hidden = section !== 'tasks';
     main.time.hidden = section !== 'time';
     patch(main.time, section === 'time' ? this.renderMyTime() : []);
-    patch(main.footer, [h('span', {}, this.t('signedInAs', { name: this.state.session?.displayName ?? this.state.session?.identifier ?? '' }))]);
+    // Hosted in a narrow window (no sidebar): Beacon's page at the footer instead of the header it no longer has.
+    const dashboard = this.host !== null && !this.fullLayout() ? dashboardUrl(this.state.session?.server) : null;
+    patch(main.footer, [
+      h('span', {}, this.t('signedInAs', { name: this.state.session?.displayName ?? this.state.session?.identifier ?? '' })),
+      dashboard !== null && this.beaconLink(dashboard, this.t('openBeacon'), { id: 'open-beacon', key: 'open-beacon' }),
+    ]);
     this.renderModal(main);
     this.syncScrollerFocus(main.scroller);
   }
@@ -5629,7 +5640,7 @@ export class DesktopApp {
       this.browsers = [];
     }
     await this.loadBrowserChoice();
-    if (this.view === 'settings') this.render();
+    if (this.view === 'settings' || this.host !== null) this.render();
   }
 
   /** The "Open Beacon in" choice the host keeps (the system default when the host cannot say). */
