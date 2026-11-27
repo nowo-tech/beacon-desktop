@@ -117,7 +117,8 @@ pub const OFFICIAL_SERVER: &str = "https://beacon.nowo.tech";
 pub const FIXED_SERVER: bool = !cfg!(debug_assertions);
 
 /// Refusal text when a release build is asked for another server than [`OFFICIAL_SERVER`].
-pub const NOT_THE_OFFICIAL_SERVER: &str = "beacon_server_fixed: Beacon Desktop only connects to https://beacon.nowo.tech";
+pub const NOT_THE_OFFICIAL_SERVER: &str =
+    "beacon_server_fixed: Beacon Desktop only connects to https://beacon.nowo.tech";
 
 /// `url` has the official server's origin (scheme, host and port: `https://beacon.nowo.tech:8443` does not).
 pub fn is_official(url: &url::Url) -> bool {
@@ -130,7 +131,11 @@ pub fn validate_server_url(value: &str) -> Result<url::Url, String> {
 }
 
 /// [`validate_server_url`] with both build rules explicit (tests check the release rule in debug builds).
-pub fn validate_server_url_with(value: &str, allow_loopback_http: bool, fixed: bool) -> Result<url::Url, String> {
+pub fn validate_server_url_with(
+    value: &str,
+    allow_loopback_http: bool,
+    fixed: bool,
+) -> Result<url::Url, String> {
     let url = validate_url_with(value, allow_loopback_http)?;
     if fixed && !is_official(&url) {
         return Err(NOT_THE_OFFICIAL_SERVER.into());
@@ -1317,7 +1322,11 @@ mod tests {
         ] {
             assert_eq!(
                 validate_server_url_with(url, false, true).err().as_deref(),
-                if url.starts_with("http://") { Some("invalid URL") } else { Some(NOT_THE_OFFICIAL_SERVER) },
+                if url.starts_with("http://") {
+                    Some("invalid URL")
+                } else {
+                    Some(NOT_THE_OFFICIAL_SERVER)
+                },
                 "{url}"
             );
         }
@@ -1325,7 +1334,10 @@ mod tests {
         assert!(validate_server_url_with("http://127.0.0.1:8787", true, false).is_ok());
         assert!(validate_server_url_with("https://beacon.example.com", true, false).is_ok());
         assert_eq!(FIXED_SERVER, !cfg!(debug_assertions));
-        assert_eq!(validate_server_url("https://beacon.example.com").is_ok(), cfg!(debug_assertions));
+        assert_eq!(
+            validate_server_url("https://beacon.example.com").is_ok(),
+            cfg!(debug_assertions)
+        );
         assert!(validate_server_url(OFFICIAL_SERVER).is_ok());
     }
 

@@ -2462,13 +2462,28 @@ pub mod tests {
     #[test]
     fn the_official_server_is_never_asked_for() {
         // Release builds: the official server only, never a dialog.
-        assert!(!sign_in_needs_confirm(&url("https://beacon.nowo.tech"), false));
-        assert!(!sign_in_needs_confirm(&url("https://beacon.example.com"), false));
+        assert!(!sign_in_needs_confirm(
+            &url("https://beacon.nowo.tech"),
+            false
+        ));
+        assert!(!sign_in_needs_confirm(
+            &url("https://beacon.example.com"),
+            false
+        ));
         // Debug builds: the official server signs in straight away; an override host still asks.
-        assert!(!sign_in_needs_confirm(&url("https://beacon.nowo.tech/"), true));
+        assert!(!sign_in_needs_confirm(
+            &url("https://beacon.nowo.tech/"),
+            true
+        ));
         assert!(sign_in_needs_confirm(&url("http://127.0.0.1:8787"), true));
-        assert!(sign_in_needs_confirm(&url("https://beacon.nowo.tech.example"), true));
-        assert!(sign_in_needs_confirm(&url("https://beacon.nowo.tech:8443"), true));
+        assert!(sign_in_needs_confirm(
+            &url("https://beacon.nowo.tech.example"),
+            true
+        ));
+        assert!(sign_in_needs_confirm(
+            &url("https://beacon.nowo.tech:8443"),
+            true
+        ));
     }
 
     #[test]
