@@ -50,6 +50,11 @@
 #mod-time .tasks li:hover .row-action.play, #mod-time .tasks li:focus-within .row-action.play, #mod-time .tasks li.selected .row-action.play, #mod-time .row-action.play.on { opacity: 1; }
 #mod-time .row-action.play:hover { background: var(--moss-soft); border-color: var(--moss-line); }
 #mod-time .row-action.play.on { color: var(--signal); background: var(--signal-soft); border-color: color-mix(in srgb, var(--signal-dot) 40%, transparent); }
+/* A narrow window puts the rail at the bottom (chat.css): the Time module's toasts sit above it, never over its tabs
+   and the Settings gear. */
+@media (max-width: 760px) {
+  .shell #app .toasts { bottom: calc(56px + 1rem); }
+}
 @media (hover: none) {
   #mod-time .row-action.play { opacity: 1; }
 }

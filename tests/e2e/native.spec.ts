@@ -93,8 +93,6 @@ test('a friendly message goes out as a desktop notification, not as a toast; the
 });
 
 test('denied by the OS: the toast stays and Settings says so', async ({ page }) => {
-  // The fixed clock holds CSS animations at their first frame: Settings (a dialog since UX batch 6) opens without one.
-  await page.emulateMedia({ reducedMotion: 'reduce' });
   await quietClock(page);
   await signIn(page);
   await page.evaluate(() => void ((window as unknown as Tt).__timeTrack.hooks.notificationPermission = 'denied'));
