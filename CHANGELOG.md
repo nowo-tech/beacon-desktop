@@ -77,7 +77,9 @@ Pre-release audit BDA13 of the 0.13.0 candidate (nothing here affects 0.12.0 or 
 - **BDA13-L3**: a notification click opens the conversation in the organization it was notified for, switching back
   through the usual flow (a running timer is asked about), instead of "not available here" after a switch.
 - **BDA13-L4**: quick edits of one task (two fields, two ticks of one checklist item) go out one after the other, each
-  with the revision the previous one returned, so your own first edit is no longer "Changed by someone else". A
+  with the revision the previous one returned (also when the panel was closed or shows another task meanwhile,
+  BDA13-V2), so your own first edit is no longer "Changed by someone else". An assignee change cut by an organization
+  switch sends nothing more (BDA13-V1). A
   refused move puts the card back at once, even when the reload after it fails (offline).
 - **BDA13-I1**: a link never switches the organization without asking, and a burst of links brings the window
   forward at most once a second.

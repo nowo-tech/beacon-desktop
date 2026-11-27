@@ -88,6 +88,9 @@ function loadPrefs(storage: Storage | undefined): ViewPrefs {
   }
 }
 
+/** A queued write whose context is gone (BDA13-V1): nothing is sent, nothing shown. */
+class StaleWrite extends Error {}
+
 interface ColumnPage {
   tasks: TaskCard[];
   nextCursor: string | null;
@@ -140,6 +143,11 @@ export class TasksModule {
   private dragging: string | null = null;
   /** Writes per task, one after the other (audit BDA13-L4): each reads the revision the previous one returned. */
   private readonly writes = new Map<string, Promise<void>>();
+  /**
+   * The task as the last write of the queue returned it (audit BDA13-V2): the next queued write reads its revision from
+   * here even when the panel was closed or shows another task meanwhile. Dropped with the queue entry.
+   */
+  private readonly written = new Map<string, TaskDetail>();
 
   constructor(private readonly deps: TasksModuleDeps) {
     this.clock = deps.clock ?? realClock;
@@ -221,6 +229,7 @@ export class TasksModule {
     this.cursor = null;
     this.error = null;
     this.contextRefused = false;
+    this.written.clear();
   }
 
   /** "Disconnect tasks" (Settings): the tasks token only; time and chat stay. */
@@ -662,7 +671,9 @@ export class TasksModule {
     const run = previous.then(work).catch(() => undefined);
     this.writes.set(id, run);
     void run.then(() => {
-      if (this.writes.get(id) === run) this.writes.delete(id);
+      if (this.writes.get(id) !== run) return;
+      this.writes.delete(id);
+      this.written.delete(id);
     });
     return run;
   }
@@ -698,10 +709,13 @@ export class TasksModule {
     }
     await this.queue(id, async () => {
       if (!this.fresh(generation, api)) return;
-      const revision = this.findCard(id)?.revision ?? card.revision;
+      const known = this.findCard(id) ?? card;
+      const written = this.written.get(id);
+      const revision = written !== undefined && written.revision > known.revision ? written.revision : known.revision;
       try {
         const detail = await this.call((client) => client.move(id, { columnId }, revision));
         if (!this.fresh(generation, api)) return;
+        this.written.set(id, detail);
         this.replaceCard(detail);
         this.deps.announce(this.t('moved', { task: taskRef(card), column: column?.name ?? detail.column?.name ?? '' }));
         if (this.prefs.view !== 'board') await this.loadView().catch(() => undefined);
@@ -748,21 +762,34 @@ export class TasksModule {
     if (this.detail?.id === detail.id) this.detail = detail;
   }
 
-  /** The task as known now (the open panel first): queued writes read their revision from here. */
+  /**
+   * The newest known state of a task for a queued write: the open panel, the last answer of its write queue (BDA13-V2)
+   * or the snapshot taken when the write was queued, whichever has the highest revision.
+   */
   private latestDetail(fallback: TaskDetail): TaskDetail {
-    return this.detail?.id === fallback.id ? this.detail : fallback;
+    let latest = fallback;
+    for (const candidate of [this.detail?.id === fallback.id ? this.detail : null, this.written.get(fallback.id) ?? null]) {
+      if (candidate !== null && candidate.revision > latest.revision) latest = candidate;
+    }
+    return latest;
   }
 
-  /** A write from the detail panel, queued per task; a stale answer (another context) is dropped. */
-  private writeDetail(detail: TaskDetail, work: (latest: TaskDetail) => Promise<TaskDetail>, after?: () => void): Promise<void> {
+  /**
+   * A write from the detail panel, queued per task; a stale answer (another context) is dropped. `work` sends through
+   * `call`, pinned to the generation the write was queued in (BDA13-V1): after a switch in the middle of a multi-call
+   * write (the assignee change), nothing more goes out under the new context.
+   */
+  private writeDetail(detail: TaskDetail, work: (latest: TaskDetail, call: <T>(request: (api: TasksApi) => Promise<T>) => Promise<T>) => Promise<TaskDetail>, after?: () => void): Promise<void> {
     if (!this.writable()) return Promise.resolve();
     const generation = this.generation;
     const api = this.api;
+    const pinned = <T>(request: (client: TasksApi) => Promise<T>): Promise<T> => (this.fresh(generation, api) ? this.call(request) : Promise.reject(new StaleWrite()));
     return this.queue(detail.id, async () => {
       if (!this.fresh(generation, api)) return;
       try {
-        const saved = await work(this.latestDetail(detail));
+        const saved = await work(this.latestDetail(detail), pinned);
         if (!this.fresh(generation, api)) return;
+        this.written.set(saved.id, saved);
         this.replaceCard(saved);
         this.render();
         after?.();
@@ -779,19 +806,19 @@ export class TasksModule {
   async save(fields: TaskFields): Promise<void> {
     const detail = this.detail;
     if (detail === null) return;
-    await this.writeDetail(detail, (latest) => this.call((client) => client.patch(latest.id, fields, latest.revision)));
+    await this.writeDetail(detail, (latest, call) => call((client) => client.patch(latest.id, fields, latest.revision)));
   }
 
   /** The single assignee picker: removes the other assignees, adds the chosen one (`''`: nobody). */
   async assign(userId: string): Promise<void> {
     const detail = this.detail;
     if (detail === null) return;
-    await this.writeDetail(detail, async (latest) => {
+    await this.writeDetail(detail, async (latest, call) => {
       let current = latest;
       for (const member of latest.members.filter((item) => item.role === 'assignee' && item.user.id !== userId)) {
-        current = await this.call((client) => client.member(current.id, member.user.id, 'assignee', current.revision, true));
+        current = await call((client) => client.member(current.id, member.user.id, 'assignee', current.revision, true));
       }
-      if (userId !== '' && !current.assignees.some((person) => person.id === userId)) current = await this.call((client) => client.member(current.id, userId, 'assignee', current.revision));
+      if (userId !== '' && !current.assignees.some((person) => person.id === userId)) current = await call((client) => client.member(current.id, userId, 'assignee', current.revision));
       return current;
     });
   }
@@ -801,10 +828,10 @@ export class TasksModule {
     if (detail === null || !detail.checklists.some((list) => list.items.some((entry) => entry.id === itemId))) return;
     await this.writeDetail(
       detail,
-      async (latest) => {
+      async (latest, call) => {
         const item = latest.checklists.flatMap((list) => list.items).find((entry) => entry.id === itemId);
         if (item === undefined) throw new ApiError(404, 'not_found', 'The checklist item is gone.');
-        return this.call((client) => client.patchChecklistItem(latest.id, itemId, { done }, item.revision));
+        return call((client) => client.patchChecklistItem(latest.id, itemId, { done }, item.revision));
       },
       () => this.drawerSlot.querySelector<HTMLElement>(`[data-key="item-${itemId}"]`)?.focus(),
     );

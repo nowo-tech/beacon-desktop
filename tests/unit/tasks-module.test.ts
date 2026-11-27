@@ -456,6 +456,45 @@ describe('tasks module: answers from before an organization switch (BDA13-M1) an
     expect(ui.$('#tasks-banner').textContent).not.toContain('Changed by someone else');
   });
 
+  it('an assignee change interrupted by a switch sends nothing more under the new context (BDA13-V1)', async () => {
+    const ui = await connected();
+    (document.querySelector('[data-task="t-141"]') as HTMLButtonElement).click();
+    await until(() => document.querySelector('#task-detail .comment') !== null, 'the detail');
+    const gate = hold((url, init) => init.method === 'DELETE' && route(url).startsWith('tasks/t-141/members/'));
+    const assigning = ui.tasks.assign('u-maya');
+    await until(() => gate.hit, 'the first member call');
+    await switchTo(ui, 'personal');
+    gate.release();
+    await assigning;
+    await settle();
+    const state = (await env.control('state')) as { requests: { method: string; path: string }[] };
+    expect(state.requests.filter((request) => request.path.includes('/members/') && request.method === 'DELETE')).toHaveLength(1);
+    expect(state.requests.filter((request) => request.path.includes('/members/') && request.method === 'PUT')).toHaveLength(0);
+    expect((await writes()).filter((write) => write.kind === 'member').map((write) => write.method)).toEqual(['DELETE']);
+    expect(ui.tasks.detail).toBeNull();
+    expect(ui.$('#tasks-banner').textContent).not.toContain('Not saved');
+  });
+
+  it('a queued edit uses the last saved revision even when the panel shows another task meanwhile (BDA13-V2)', async () => {
+    const ui = await connected();
+    (document.querySelector('[data-task="t-141"]') as HTMLButtonElement).click();
+    await until(() => document.querySelector('#task-detail .comment') !== null, 'the detail');
+    const gate = hold((url, init) => init.method === 'PATCH' && route(url) === 'tasks/t-141');
+    const first = ui.tasks.save({ priority: 'urgent' });
+    const second = ui.tasks.save({ estimateMinutes: 45 });
+    await until(() => gate.hit, 'the first edit');
+    // The panel moves to another task while the first edit is on its way.
+    await ui.tasks.openTask('t-144');
+    expect(ui.tasks.detail?.id).toBe('t-144');
+    gate.release();
+    await Promise.all([first, second]);
+    const patches = (await writes()).filter((write) => write.kind === 'patch' && write.taskId === 't-141');
+    expect(patches).toHaveLength(2);
+    expect(Number(patches[1].ifMatch?.replaceAll('"', ''))).toBe(Number(patches[0].ifMatch?.replaceAll('"', '')) + 1);
+    expect(ui.$('#tasks-banner').textContent).not.toContain('Changed by someone else');
+    expect(ui.tasks.mine.find((task) => task.id === 't-141')?.priority).toBe('urgent');
+  });
+
   it('a refused move puts the card back even when the reload fails (offline)', async () => {
     const ui = await connected();
     (ui.$('[data-view="board"]') as HTMLButtonElement).click();
