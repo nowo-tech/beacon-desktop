@@ -152,6 +152,20 @@ Only the latest release receives fixes. The server can force an update with `min
   `body`); a reference type becomes a CSS class only when it is a
   known one.
 
+### Window chrome (UX batch 7)
+
+- **Own title bar, four extra window permissions, main window only.** On Windows and Linux the main window has no
+  system frame (`decorations: false`, set in Rust, `chrome_for` in `src-tauri/src/lib.rs`) and the app draws its own
+  title bar; macOS keeps the system's traffic lights over it (`TitleBarStyle::Overlay`). `capabilities/default.json`
+  gains exactly what that bar needs: `core:window:allow-start-dragging` (the `data-tauri-drag-region` bar),
+  `allow-minimize`, `allow-toggle-maximize` (the buttons; the double click uses `allow-internal-toggle-maximize`,
+  already in `core:window:default`) and `allow-close`. Closing still only hides the window to the tray: Rust prevents
+  the close (`WindowEvent::CloseRequested`), and no destroy permission is granted. The prompt and mini windows get no
+  window permission at all (a Rust test checks all of this). The window cannot move or resize itself beyond what it
+  could before (`set_size` / `set_position` for Compact / Full view).
+- **Fallback.** `BEACON_DESKTOP_SYSTEM_TITLEBAR=1` keeps the system title bar on Windows and Linux (an environment
+  variable read once at start-up by Rust; the webview cannot change it).
+
 ## Known limitations
 
 - **Tasks token not revoked on the server (BDA13-L2, Low).** Sign-out and "Disconnect tasks" delete the tasks token

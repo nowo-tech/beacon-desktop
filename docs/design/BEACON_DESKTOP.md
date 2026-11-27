@@ -474,6 +474,42 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
 - **Branding**: product name "Beacon Desktop" in titles and About; app icon from the Beacon mascot family (owner
   approved the mascot head for TTD on 0.8.x); Q-BD-17 on the exact display name.
 
+### 5.1 Window chrome and the update pill (UX batch 7, owner approval 2026-11-27)
+
+- **One title bar** (UXA-45). The app's 44 px title bar is the window's only one:
+  - **Windows / Linux**: no system frame (`decorations: false`, decided in Rust, `chrome_for`). The bar is the drag
+    region (`data-tauri-drag-region="deep"`: buttons, links and fields inside it stay clickable); a double click
+    maximises / restores; dragging to a screen edge snaps as with any window, and `Win+←/→/↑/Z` work. The app draws
+    minimise · maximise / restore · close at the right edge in that order (`src/shell/windowControls.ts`): Windows 11
+    caption buttons (46 px, the bar's full height, close red `#c42b1c` with white text on hover), Linux round 24 px
+    buttons (Adwaita / Breeze). They are real buttons in a group named "Window", the last Tab stops of the bar, named
+    "Maximize" or "Restore" as the window is, with tooltips. Close hides the window to the tray, as the system button
+    did; the system's own resize borders, `Alt+F4`, `Alt+Space` and the taskbar menu keep working.
+  - **macOS**: the system title bar overlays the app's (`TitleBarStyle::Overlay`, hidden title), traffic lights
+    inset at 16 × 16 pt so they sit centred in the 44 px bar; the bar keeps 76 px free on the left and drags the window.
+  - **Signed out**, the bar stays (brand and the window buttons only) so the sign-in window can still be moved and
+    closed. With the system's frame (fallback) the signed-out screen has no app bar, as before.
+  - **Not possible with Tauri 2.12**: the Windows 11 Snap Layouts flyout when hovering maximise (it needs the system's
+    `HTMAXBUTTON` hit test on a native caption button; tauri-apps/tauri#4531). Snapping by dragging and `Win+Z`
+    still work.
+  - **Linux fallback**: some desktops may handle an undecorated window badly (for example a Wayland compositor that
+    gives it no resize border or shadow, or a tiling window manager that draws its own frame; not yet tried on a real
+    GNOME / KDE Wayland session, only in the browser build). Start the app with
+    `BEACON_DESKTOP_SYSTEM_TITLEBAR=1` (for example in the `.desktop` file's `Exec=env BEACON_DESKTOP_SYSTEM_TITLEBAR=1
+    …`) to keep the system title bar; the app then draws no buttons of its own. The same variable works on Windows.
+  - The **mini timer** and the "Still there?" windows keep their own chrome.
+- **Update pill** (UXA-22). An installable update shows as a pill at the left of the title bar's tools ("Update",
+  named "Update to version X"), never as a card above the task list. It opens the same update card in a popover
+  panel under it (What's new, Update now, Later; light dismiss and `Esc` give the focus back to the pill). The pill
+  follows the install: "Update after stop" while it waits for the timer, "Updating 45%", then "Restarting…". A manual
+  "Check for updates…" that finds one opens the panel. "Later" hides pill and panel until a manual check or the next
+  launch. The forced update keeps its full screen, with its way out (Remind me later), unchanged.
+- **Title bar at 900 px** (UXA-9). Below 1100 px the search collapses to its icon (same name and `Ctrl+K`) and the
+  brand to its mark before anything else; the organization keeps at least 12 characters and the running task at
+  least a few before an ellipsis.
+- **Tray** (UXA-41). *Quick add task…* (while tasks are connected) opens the window on Tasks with quick add focused.
+  Empty submenus (Switch to, Today's meetings) are not shown.
+
 ## 6. Monitoring screenshots and the update feed: two different S3 paths
 
 They are unrelated and must not be confused:

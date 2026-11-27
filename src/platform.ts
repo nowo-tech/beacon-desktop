@@ -88,6 +88,8 @@ export interface TrayMenu {
   meetings?: TrayMenuItem[];
   /** Chat (BD-3b): "Open chat" (`open-chat`) and "Pause / Resume chat notifications" (`pause-chat` / `resume-chat`). */
   chat?: TrayMenuItem[];
+  /** Tasks (UX batch 7, UXA-41): "Quick add task…" (`quick-add-task`: the window opens on Tasks, quick add focused). */
+  tasks?: TrayMenuItem[];
   settings: string;
   quit: string;
 }
@@ -182,6 +184,31 @@ export interface WindowHost {
   onChange(handler: () => void): void;
   /** Shows, restores and focuses the main window (a dialog it must answer, BD-3a). */
   bringForward?(): Promise<void>;
+}
+
+/**
+ * Who draws the main window's title bar (UX batch 7, UXA-45; src-tauri/src/lib.rs `chrome_for`): `custom`, the app
+ * (Windows / Linux without a system frame: drag region and its own minimise / maximise / close); `overlay`, macOS
+ * traffic lights over the app's bar; `native`, the system's bar above the app's (`BEACON_DESKTOP_SYSTEM_TITLEBAR=1`, a
+ * plain browser).
+ */
+export type ChromeMode = 'custom' | 'overlay' | 'native';
+
+/** The main window's own buttons (capabilities core:window:allow-minimize / allow-toggle-maximize / allow-close). */
+export interface WindowChromeHost {
+  mode(): Promise<ChromeMode>;
+  minimize(): Promise<void>;
+  toggleMaximize(): Promise<void>;
+  /** Closes the window: the host hides it to the tray (the app keeps running). */
+  close(): Promise<void>;
+  isMaximized(): Promise<boolean>;
+  /** The window was maximised or restored (by the buttons, a double click, a snap or the OS). */
+  onMaximizedChange(handler: (maximized: boolean) => void): void;
+}
+
+/** A chrome mode from untrusted input (`native` otherwise). */
+export function chromeMode(value: unknown): ChromeMode {
+  return value === 'custom' || value === 'overlay' ? value : 'native';
 }
 
 /** The mini timer window (owner Q2, BD-3a, src-tauri/src/mini.rs), as seen from the main window. */
@@ -335,6 +362,8 @@ export interface Platform {
   readonly miniWindow: MiniHost | null;
   /** Size and position of the main window ("Compact view" / "Full view"). */
   readonly windowHost: WindowHost;
+  /** The title bar's window buttons (UX batch 7); absent: the system draws them. */
+  readonly chrome?: WindowChromeHost;
   /** Native window theme (title bar, menus): `null` follows the system. */
   setWindowTheme(theme: 'light' | 'dark' | null): Promise<void>;
   autostartEnabled(): Promise<boolean>;
@@ -401,6 +430,11 @@ export interface BrowserHooks {
   installStepMs: number;
   /** Number of successful fake installs (the real app relaunches instead). */
   installed: number;
+  /**
+   * Fake window chrome (UX batch 7): its mode (`native` unless the page set `window.__beaconChrome` before it loaded),
+   * whether it is maximised and every button pressed (`minimize`, `toggle-maximize`, `close`).
+   */
+  chrome: { mode: ChromeMode; maximized: boolean; calls: string[] };
   /** Fake main window: its bounds (`null` = maximised), the screens and every `setBounds` asked for. */
   window: { bounds: Rect | null; screens: Screens; set: Rect[] };
   /** The fake window was moved or resized. */
@@ -488,7 +522,9 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
   const hintHandlers: ((hint: unknown) => void)[] = [];
   const modeHandlers: ((mode: ChatRealtimeMode) => void)[] = [];
   const linkHandlers: (() => void)[] = [];
+  const maximizedHandlers: ((maximized: boolean) => void)[] = [];
   const hooks: BrowserHooks = {
+    chrome: { mode: chromeMode((globalThis as { __beaconChrome?: unknown }).__beaconChrome), maximized: false, calls: [] },
     chatToken: null,
     chatConnectBegins: 0,
     chatRealtime: null,
@@ -689,6 +725,18 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     },
     setTray: async (status) => void (hooks.tray = status),
     setTrayMenu: async (menu) => void (hooks.trayMenu = menu),
+    chrome: {
+      mode: async () => hooks.chrome.mode,
+      minimize: async () => void hooks.chrome.calls.push('minimize'),
+      toggleMaximize: async () => {
+        hooks.chrome.calls.push('toggle-maximize');
+        hooks.chrome.maximized = !hooks.chrome.maximized;
+        maximizedHandlers.forEach((handler) => handler(hooks.chrome.maximized));
+      },
+      close: async () => void hooks.chrome.calls.push('close'),
+      isMaximized: async () => hooks.chrome.maximized,
+      onMaximizedChange: (handler) => void maximizedHandlers.push(handler),
+    },
     setShortcut: async (accelerator, slot = 'open') => {
       const other = slot === 'resume' ? hooks.shortcut : hooks.resumeShortcut;
       if (hooks.refusedShortcuts.includes(accelerator) || other?.toLowerCase() === accelerator.toLowerCase()) throw new Error(`${accelerator} is already registered`);

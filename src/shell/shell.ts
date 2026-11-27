@@ -9,8 +9,9 @@
  * switcher as rail tiles or a dropdown, and a timer never keeps running in another organization (Q4).
  */
 import type { DesktopApp } from '../ui/app';
-import { type Child, h } from '../ui/dom';
-import type { DeepLink, Platform } from '../platform';
+import { type Child, h, patch } from '../ui/dom';
+import { type ChromeMode, type DeepLink, hostOs, type Platform } from '../platform';
+import { windowControls } from './windowControls';
 import { ChatNotifier, chatClickTarget, PAUSE_HOUR_MS, parseChatClick, tomorrowMorning } from '../chat/notifications';
 import type { Locale } from '../lib/i18n';
 import type { ThemePreference } from '../lib/theme';
@@ -129,6 +130,12 @@ export class Shell {
   unreadCapped = false;
   private readonly t: ChatText;
   private readonly titlebar: HTMLElement;
+  /** The title bar's own content, rebuilt on every render (the window buttons stay, so they keep the focus). */
+  private readonly titleMain: HTMLElement;
+  /** Who draws the title bar (UX batch 7, UXA-45): until the host answers, the system (nothing changes). */
+  chrome: ChromeMode = 'native';
+  /** The update offer's panel, opened from the title bar's pill (UX batch 7, UXA-22). */
+  private readonly updatePop: HTMLElement;
   private readonly rail: HTMLElement;
   private readonly chatPanel: HTMLElement;
   private readonly timePanel: HTMLElement;
@@ -165,7 +172,8 @@ export class Shell {
     this.prefs = loadShellPrefs(deps.storage);
     this.notifier = new ChatNotifier(deps.storage, () => this.now());
     this.timeRoot = h('div', { class: 'time-root', id: 'app', attrs: { 'aria-busy': 'true' } });
-    this.titlebar = h('header', { class: 'titlebar', id: 'titlebar' });
+    this.titleMain = h('div', { class: 'tb-main' });
+    this.titlebar = h('header', { class: 'titlebar', id: 'titlebar' }, this.titleMain);
     this.rail = h('nav', { class: 'rail', id: 'rail', attrs: { 'aria-label': this.t('modules') } });
     const host = platform.chat;
     if (host === undefined) throw new Error('This host has no chat support.');
@@ -297,7 +305,8 @@ export class Shell {
     this.keys = h('dialog', { class: 'sh-dialog', id: 'shell-keys', attrs: { 'aria-labelledby': 'shell-keys-title', closedby: 'any' } });
     this.confirm = h('dialog', { class: 'sh-dialog', id: 'shell-confirm', attrs: { 'aria-labelledby': 'shell-confirm-title' } });
     this.allocation = new AllocationDialog(this.t, (text) => this.announce(text), () => this.now());
-    this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.tasksPanel, this.timePanel, this.setup.root), this.live, this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog);
+    this.updatePop = this.buildUpdatePop();
+    this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.tasksPanel, this.timePanel, this.setup.root), this.live, this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog, this.updatePop);
     platform.miniWindow?.onAction((action) => void this.onMiniAction(action));
     platform.onTray((action) => void this.onTrayAction(action));
     platform.onNotificationAction((id) => {
@@ -316,6 +325,139 @@ export class Shell {
     globalThis.addEventListener?.('focus', visible);
     document.addEventListener('visibilitychange', visible);
     this.applyDensity();
+    void this.initChrome();
+  }
+
+  // ---- window chrome and the update pill (UX batch 7) ---------------------------------------------------------------
+
+  /**
+   * Custom title bar (UXA-45): on Windows / Linux without a system frame the title bar is the drag region (double click
+   * maximises, the OS snaps it) and draws its own window buttons; on macOS the traffic lights overlay its left end.
+   */
+  private async initChrome(): Promise<void> {
+    const host = this.platform.chrome;
+    const mode = host === undefined ? 'native' : await host.mode().catch(() => 'native' as const);
+    this.chrome = mode;
+    document.documentElement.dataset.chrome = mode;
+    if (mode === 'native' || host === undefined) return;
+    // `deep`: the whole bar drags, except its buttons and links (Tauri's drag script skips clickable elements).
+    this.titlebar.setAttribute('data-tauri-drag-region', 'deep');
+    if (mode === 'custom') this.titlebar.append(windowControls(host, hostOs(), this.t).root);
+    this.renderTitlebar();
+  }
+
+  private buildUpdatePop(): HTMLElement {
+    const pop = h('div', { class: 'update-pop', id: 'update-pop', attrs: { role: 'dialog', 'aria-labelledby': 'update-title', popover: 'auto', hidden: !supportsPopover() } });
+    // The pill is the popover's invoker (`popovertarget`): the browser toggles it, light dismiss and Escape included.
+    pop.addEventListener('beforetoggle', (event) => {
+      if ((event as ToggleEvent).newState !== 'open') return;
+      const app = this.app;
+      if (app === null || !app.updateVisible() || this.root.dataset.bare === 'true') event.preventDefault();
+      else patch(pop, [app.updatePanel()]);
+    });
+    pop.addEventListener('toggle', (event) => {
+      if ((event as ToggleEvent).newState === 'closed') this.updatePopClosed();
+      else {
+        this.syncPill();
+        this.focusUpdateAction();
+      }
+    });
+    pop.addEventListener('keydown', (event) => {
+      // Without the Popover API (tests), Escape closes it like a popover would.
+      if (event.key === 'Escape' && !supportsPopover()) {
+        event.preventDefault();
+        this.closeUpdate();
+      }
+    });
+    return pop;
+  }
+
+  /** Whether the update panel is open. */
+  updateOpen(): boolean {
+    return supportsPopover() ? this.updatePop.matches(':popover-open') : !this.updatePop.hidden;
+  }
+
+  /** Opens the update panel (the pill, or a manual "Check for updates…" that found one) and focuses its first action. */
+  openUpdate(): void {
+    const app = this.app;
+    if (app === null || !app.updateVisible() || this.root.dataset.bare === 'true') return;
+    patch(this.updatePop, [app.updatePanel()]);
+    if (!this.updateOpen()) {
+      if (supportsPopover()) this.updatePop.showPopover();
+      else this.updatePop.hidden = false;
+    }
+    this.syncPill();
+    this.focusUpdateAction();
+  }
+
+  private focusUpdateAction(): void {
+    if (this.updatePop.contains(document.activeElement)) return;
+    this.updatePop.querySelector<HTMLElement>('#update-now, #update-after-stop, #update-anyway')?.focus();
+  }
+
+  closeUpdate(): void {
+    if (!this.updateOpen()) return;
+    if (supportsPopover()) this.updatePop.hidePopover();
+    else {
+      this.updatePop.hidden = true;
+      this.updatePopClosed();
+    }
+  }
+
+  private updatePopClosed(): void {
+    this.syncPill();
+    // Focus goes back to the pill (or to the search when the offer is gone).
+    const active = document.activeElement;
+    if (active === null || active === document.body || this.updatePop.contains(active)) {
+      (this.titlebar.querySelector<HTMLElement>('#tb-update') ?? this.titlebar.querySelector<HTMLElement>('#tb-search:not([hidden])'))?.focus();
+    }
+  }
+
+  /** After a Time render: the panel follows the update's stage, and closes when there is nothing left to show. */
+  private renderUpdate(): void {
+    const app = this.app;
+    if (app === null || !this.updateOpen()) return;
+    if (!app.updateVisible() || this.root.dataset.bare === 'true') {
+      this.closeUpdate();
+      return;
+    }
+    patch(this.updatePop, [app.updatePanel()]);
+  }
+
+  private syncPill(): void {
+    this.titlebar.querySelector('#tb-update')?.setAttribute('aria-expanded', this.updateOpen() ? 'true' : 'false');
+  }
+
+  /** The title bar's update pill (UXA-22): the offer, "after stop", then the download's progress. */
+  private updatePill(): HTMLElement | null {
+    const app = this.app;
+    if (app === null || app.update === null || !app.updateVisible()) return null;
+    const t = this.t;
+    const version = app.update.version;
+    const stage = app.updateStage;
+    const percent = app.updatePercent();
+    const [text, label] =
+      stage === 'downloading'
+        ? [percent === null ? t('updatePillDownloadingShort') : t('updatePillDownloading', { percent }), percent === null ? t('updatePillDownloadingShort') : t('updatePillDownloading', { percent })]
+        : stage === 'installing'
+          ? [t('updatePillInstalling'), t('updatePillInstalling')]
+          : stage === 'after-stop'
+            ? [t('updatePillAfterStop'), t('updatePillAfterStopLabel', { version })]
+            : [t('updatePill'), t('updatePillLabel', { version })];
+    const busy = stage === 'downloading' || stage === 'installing';
+    const pill = h(
+      'button',
+      {
+        class: 'tb-update',
+        id: 'tb-update',
+        attrs: { type: 'button', 'aria-haspopup': 'dialog', 'aria-controls': 'update-pop', 'aria-expanded': this.updateOpen() ? 'true' : 'false', 'aria-label': label, title: label, 'data-stage': stage },
+      },
+      busy ? h('span', { class: 'tu-ring', attrs: { 'aria-hidden': 'true' } }) : chatIcon('down', 'sm'),
+      h('span', { class: 'tu-text', attrs: { 'aria-hidden': 'true' } }, text),
+    );
+    if (supportsPopover()) pill.setAttribute('popovertarget', 'update-pop');
+    else pill.addEventListener('click', () => (this.updateOpen() ? this.closeUpdate() : this.openUpdate()));
+    return pill;
   }
 
   /** Attaches the Time module (its constructor needs `timeRoot`) and follows its renders. */
@@ -425,6 +567,7 @@ export class Shell {
     if (signedIn) this.timeContexts();
     if (!signedIn && this.miniOpen) void this.closeMini();
     this.renderTitlebar();
+    this.renderUpdate();
     this.syncTicker();
     this.pushMini();
     if (signedIn) this.renderSettings();
@@ -497,6 +640,12 @@ export class Shell {
   }
 
   /** The tray's chat items (AppDeps.trayChat): "Open chat", pause / resume chat notifications. */
+  /** The tray's tasks items (AppDeps.trayTasks, UXA-41): "Quick add task…" while tasks are connected. */
+  trayTasks(): { id: string; label: string }[] {
+    if (this.tasks === null || !this.tasks.connected || this.tasksHidden) return [];
+    return [{ id: 'quick-add-task', label: this.t('trayQuickAdd') }];
+  }
+
   trayChat(): { id: string; label: string }[] {
     if (!this.chat.connected) return [];
     const t = this.t;
@@ -513,6 +662,11 @@ export class Shell {
 
   private async onTrayAction(action: string): Promise<void> {
     if (action === 'open-chat') this.show('chat');
+    else if (action === 'quick-add-task' && this.tasks !== null && !this.tasksHidden) {
+      // The host showed the window: Tasks, quick add focused (the connect card when tasks are not connected).
+      this.show('tasks');
+      this.tasks.focusQuickAdd();
+    }
     else if (action === 'pause-chat') this.pauseNotifications(this.now() + PAUSE_HOUR_MS);
     else if (action === 'resume-chat') this.pauseNotifications(null);
   }
@@ -681,6 +835,15 @@ export class Shell {
     const current = this.currentContext();
     const brand = h('div', { class: 'brand' }, h('span', { class: 'brand-mark', attrs: { 'aria-hidden': 'true' } }, chatIcon('beacon')), h('span', {}, t('appName')));
     const left = h('div', { class: 'tb-left' }, brand);
+    // Signed out with our own chrome (UX batch 7): a bare bar, the brand and the window buttons only (drag, close).
+    if (this.root?.dataset.bare === 'true') {
+      this.titleMain.replaceChildren(left);
+      document.title = t('appName');
+      return;
+    }
+    // The bar is rebuilt on every render: the focused tool keeps the focus.
+    const active = document.activeElement;
+    const focused = active instanceof HTMLElement && this.titleMain.contains(active) && active.id !== '' ? active.id : null;
     if (current !== null) {
       const badge = contextBadge(current.context, current.index);
       if (this.prefs.switcher === 'dropdown' && this.contexts.length > 1) {
@@ -708,7 +871,7 @@ export class Shell {
     const search = h('button', { class: 'tb-search', id: 'tb-search', attrs: { type: 'button', 'aria-haspopup': 'dialog', 'aria-keyshortcuts': 'Control+K Meta+K' } }, chatIcon('search', 'sm'), h('span', {}, t('searchJump')), h('kbd', {}, `${modKey()} K`));
     search.addEventListener('click', () => this.openSwitcher());
     search.hidden = !this.chat.connected;
-    const right = h('div', { class: 'tb-right' }, this.timerPill());
+    const right = h('div', { class: 'tb-right' }, this.updatePill(), this.timerPill());
     const dark = document.documentElement.getAttribute('data-theme') === 'dark' || (document.documentElement.getAttribute('data-theme') === null && globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches === true);
     const theme = this.iconButton('tb-btn', dark ? 'sun' : 'moon', dark ? t('themeLight') : t('themeDark'), () => void this.setTheme(dark ? 'light' : 'dark'), 'tb-theme');
     const help = this.iconButton('tb-btn', 'keyboard', t('shortcuts'), () => this.openKeys(), 'tb-help');
@@ -719,7 +882,8 @@ export class Shell {
       right.append(mini);
     }
     right.append(theme, help);
-    this.titlebar.replaceChildren(left, h('div', { class: 'tb-mid' }, search), right);
+    this.titleMain.replaceChildren(left, h('div', { class: 'tb-mid' }, search), right);
+    if (focused !== null) this.titleMain.querySelector<HTMLElement>(`[id="${focused}"]`)?.focus();
     document.title = current !== null ? `${current.context.label} · ${t('appName')}` : t('appName');
   }
 
@@ -1599,4 +1763,9 @@ function hostOf(server: string | null): string {
   } catch {
     return server;
   }
+}
+
+/** The Popover API (the update panel); test DOMs without it get a `hidden` panel with the same keys. */
+function supportsPopover(): boolean {
+  return typeof HTMLElement !== 'undefined' && typeof (HTMLElement.prototype as { showPopover?: unknown }).showPopover === 'function';
 }

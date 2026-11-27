@@ -460,6 +460,10 @@ required" screen send you to the Store listing instead.
   `allow-unlisten` (its view) and `mini_view`, `mini_action` (`start`, `stop`, `expand`, `close`; anything else is
   refused). The main window opens, updates and closes it (`mini_open`, `mini_update`, `mini_close`) and may bring
   itself forward (`core:window:allow-show`, `allow-unminimize`, `allow-set-focus`) for a dialog it must answer.
+- Window chrome (UX batch 7): the main window draws its own title bar on Windows and Linux (no system frame) and
+  overlays the macOS one, so `default.json` adds `core:window:allow-start-dragging`, `allow-minimize`,
+  `allow-toggle-maximize` and `allow-close` for the main window only (close hides it to the tray, as before).
+  `BEACON_DESKTOP_SYSTEM_TITLEBAR=1` keeps the system title bar (see `docs/design/BEACON_DESKTOP.md` §5.1).
 - Defence in depth: every command also checks the calling window's label (`main` for the keychain, updater, tray,
   shortcut, heartbeat, notifications and opening / focusing / closing the prompt; `prompt` for reading its view,
   answering and "Open Beacon Desktop"). Answers are allow-listed (`{ action, note?, taskId? }`), pose ids are looked up in

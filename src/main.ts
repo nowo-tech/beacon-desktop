@@ -36,6 +36,10 @@ if (root !== null && new URLSearchParams(location.search).get('window') === 'pro
     onRender: () => shell.onAppRender(),
     beforeSignOut: () => shell.chat.revokeOnServer(),
     trayChat: () => shell.trayChat(),
+    trayTasks: () => shell.trayTasks(),
+    // UX batch 7: the update offer is a pill in the shell's title bar.
+    updateInShell: true,
+    showUpdate: () => shell.openUpdate(),
     askAllocation: (request) => shell.askAllocation(request),
     onContextRefused: (context) => void shell.timeContextRefused(context),
     contextLabel: () => shell.contextLabel(),

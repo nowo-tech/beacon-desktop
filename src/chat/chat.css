@@ -66,7 +66,10 @@
 #shell-mount { height: 100vh; height: 100dvh; overflow: hidden; }
 .shell { height: 100%; overflow: hidden; display: grid; grid-template-rows: 44px minmax(0, 1fr); }
 .shell[data-bare='true'] { grid-template-rows: minmax(0, 1fr); }
-.shell[data-bare='true'] > .titlebar, .shell[data-bare='true'] .rail { display: none; }
+.shell[data-bare='true'] .rail { display: none; }
+/* Signed out: no title bar, unless the app draws the window's chrome (UX batch 7): then a bare one (drag, buttons). */
+:root:not([data-chrome='custom'], [data-chrome='overlay']) .shell[data-bare='true'] > .titlebar { display: none; }
+:root:is([data-chrome='custom'], [data-chrome='overlay']) .shell[data-bare='true'] { grid-template-rows: 44px minmax(0, 1fr); }
 .shell > .body { display: grid; grid-template-columns: 64px minmax(0, 1fr); min-height: 0; }
 .shell[data-bare='true'] > .body { grid-template-columns: minmax(0, 1fr); }
 .shell .module { min-width: 0; min-height: 0; position: relative; }
@@ -91,12 +94,17 @@ svg.i.lg { width: 20px; height: 20px; }
 
 /* ---------- Title bar ---------- */
 .titlebar {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 440px) minmax(0, 1fr); align-items: center; gap: 12px;
-  background: var(--chrome); color: var(--chrome-ink); padding: 0 8px 0 12px; border-bottom: 1px solid var(--chrome-line);
+  display: flex; align-items: stretch; min-width: 0;
+  background: var(--chrome); color: var(--chrome-ink); border-bottom: 1px solid var(--chrome-line);
   user-select: none;
 }
+.tb-main {
+  flex: 1; min-width: 0;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 440px) minmax(0, 1fr); align-items: center; gap: 12px;
+  padding: 0 8px 0 12px;
+}
 /* macOS: room for the traffic lights when the native title bar overlays the window. */
-:root[data-os='mac'] .titlebar { padding-left: 76px; }
+:root[data-os='mac'] .tb-main { padding-left: 76px; }
 .titlebar :focus-visible, .rail :focus-visible { outline-color: var(--focus-chrome); }
 .tb-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .brand { display: flex; align-items: center; gap: 8px; font: 700 var(--fs-sm)/1 var(--font-display); white-space: nowrap; }
@@ -451,7 +459,7 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
   .thread { position: absolute; right: 0; top: 0; bottom: 0; z-index: 20; box-shadow: var(--shadow-lg); max-width: 100%; }
 }
 @media (max-width: 760px) {
-  .titlebar { grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; padding: 0 6px 0 10px; }
+  .tb-main { grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; padding: 0 6px 0 10px; }
   .brand span:last-child, .tb-search kbd, .tp-task { display: none; }
   .tb-search span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .titlebar .tb-search { width: 32px; padding: 0; justify-content: center; }
@@ -551,3 +559,74 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .notif-ask h3 { margin: 0 0 2px; font-size: var(--fs-md); color: var(--ink); }
 .notif-ask p { margin: 0 0 8px; color: var(--ink-2); font-size: var(--fs-sm); }
 .notif-ask .row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ---------- UX batch 7: window chrome, update pill, title bar at 900 px ---------- */
+/*
+ * Window buttons (UXA-45), drawn only without a system frame (Windows / Linux; :root[data-chrome='custom']). Windows 11
+ * caption buttons: 46 px wide, the bar's full height, flush right, close red on hover. Linux: round Adwaita-style
+ * buttons. Colours from the chrome tokens; the close hover keeps white on #c42b1c (5.6:1).
+ */
+.win-controls { display: flex; align-items: stretch; flex: none; }
+.titlebar .wc-btn { display: inline-grid; place-items: center; width: 46px; height: 100%; border-radius: 0; color: var(--chrome-ink); }
+.titlebar .wc-btn:hover { background: var(--chrome-hover); }
+.titlebar .wc-btn:active { background: rgb(255 255 255 / 12%); }
+.titlebar .wc-close:hover, .titlebar .wc-close:active { background: #c42b1c; color: #ffffff; }
+.titlebar .wc-btn:focus-visible { outline-offset: -3px; }
+.wc-glyph { fill: none; stroke: currentColor; stroke-width: 1; shape-rendering: crispEdges; }
+.win-controls[data-os='linux'] { align-items: center; gap: 8px; padding: 0 10px 0 4px; }
+.titlebar .win-controls[data-os='linux'] .wc-btn { width: 24px; height: 24px; border-radius: 50%; background: rgb(255 255 255 / 9%); }
+.titlebar .win-controls[data-os='linux'] .wc-btn:hover { background: rgb(255 255 255 / 16%); }
+.titlebar .win-controls[data-os='linux'] .wc-close:hover { background: #c42b1c; }
+.titlebar .win-controls[data-os='linux'] .wc-btn:focus-visible { outline-offset: 2px; }
+.win-controls[data-os='linux'] .wc-glyph { width: 8px; height: 8px; stroke-width: 1.4; shape-rendering: auto; }
+/* The custom bar ends at the window's edge: the buttons take its last pixels. */
+:root[data-chrome='custom'] .tb-main { padding-right: 4px; }
+
+/* Update pill (UXA-22, owner approval): the offer lives in the title bar, the card opens from it. */
+.titlebar .tb-update {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px 0 8px; margin-right: 4px; flex: none;
+  border-radius: 999px; background: rgb(125 208 168 / 16%); border: 1px solid rgb(125 208 168 / 42%); color: #bff0d6;
+  font-size: var(--fs-sm); font-weight: 600; white-space: nowrap;
+}
+.titlebar .tb-update:hover { background: rgb(125 208 168 / 24%); }
+.titlebar .tb-update[aria-expanded='true'] { background: rgb(125 208 168 / 28%); }
+.titlebar .tb-update[data-stage='downloading'], .titlebar .tb-update[data-stage='installing'] { font-variant-numeric: tabular-nums; min-width: 9.5em; }
+.tu-ring { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgb(191 240 214 / 35%); border-top-color: #bff0d6; animation: tu-spin 900ms linear infinite; flex: none; }
+@keyframes tu-spin { to { transform: rotate(360deg); } }
+/*
+ * The panel: a popover under the pill at the window's top right (the pill sits at the bar's right end, so no anchor
+ * positioning is needed and WebKit without it places it the same). The card inside keeps the Time module's look.
+ */
+.update-pop {
+  position: fixed; inset: 48px 8px auto auto; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; overflow: visible;
+  width: min(400px, calc(100vw - 16px)); max-height: calc(100vh - 60px);
+}
+.update-pop[hidden] { display: none; }
+@supports not selector(:popover-open) { .update-pop:not([hidden]) { display: block; } }
+.update-pop > .update-card { margin: 0; box-shadow: 0 2px 8px rgb(0 0 0 / 18%), 0 18px 48px rgb(0 0 0 / 24%); max-height: inherit; overflow: auto; }
+
+/* With the pill, the right group gets more room than the search, so the running task keeps its name. */
+@media (min-width: 1101px) {
+  .tb-main:has(#tb-update) { grid-template-columns: minmax(0, 1fr) minmax(200px, 360px) minmax(0, 1.4fr); }
+}
+
+/* UXA-9: below 1100 px the search becomes its icon (same Ctrl+K) and the brand its mark, before any name is cut. */
+@media (max-width: 1100px) {
+  .tb-main { grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
+  .titlebar .brand > span:last-child, .titlebar .tb-search kbd { display: none; }
+  .titlebar .tb-search span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .titlebar .tb-search { width: 32px; padding: 0; justify-content: center; }
+  .tb-ctx, .titlebar .tb-ctx-btn { min-width: min(12ch, 100%); }
+  .tb-ctx b { min-width: 6ch; }
+  .timer-pill { min-width: 9em; }
+  .tp-task { max-width: 140px; min-width: 4ch; }
+}
+@media (max-width: 760px) {
+  .titlebar .wc-btn { width: 40px; }
+  .titlebar .tb-update { padding: 0 8px; }
+  .titlebar .tb-update .tu-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .timer-pill { min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tu-ring { animation: none; border-color: #bff0d6; }
+}

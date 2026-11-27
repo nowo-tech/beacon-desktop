@@ -10,6 +10,8 @@ for (const scheme of ['light', 'dark'] as const) {
     await signIn(page);
     await control('config', { update: UPDATE });
     await app(page).check();
+    // UX batch 7: the card opens from the title bar's update pill.
+    await page.locator('#tb-update').click();
     await expect(page.locator('#update')).toBeVisible();
     await page.locator('#update-notes-toggle').click();
     await expect(page.locator('#update-notes')).toContainText('A calmer update card');
@@ -28,6 +30,7 @@ test('desktop-update-running', async ({ page }) => {
   await expect(page.locator('#timer-task')).toHaveText('Fix invoice rounding bug');
   await control('config', { update: UPDATE });
   await app(page).check();
+  await page.locator('#tb-update').click();
   await page.locator('#update-now').click();
   await expect(page.locator('#update-running')).toContainText('A timer is running on Fix invoice rounding bug.');
   await shot(page, 'desktop-update-running');
