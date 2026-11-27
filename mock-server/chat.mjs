@@ -1,7 +1,9 @@
 /**
- * Mock of ChatKit's client API v1 (`/api/chat/v1`, ChatKitBundle 2.4.0) for development and e2e: read routes only,
+ * Mock of ChatKit's client API v1 (`/api/chat/v1`, ChatKitBundle 2.4.0 reads, 2.5.0 writes) for development and e2e:
  * `X-Beacon-Context` required, `tokens/1` bodies, reactions `{emoji, count, mine}`, threads, read marks, an opaque
- * cursor and `realtime` (disabled here: the app polls). Sample data only; every person and company is fictional.
+ * cursor and `realtime` (disabled here: the app polls); writes (send, thread reply, reactions) need `chat:write`, an
+ * `Idempotency-Key` (replays answer the first write with `replayed: true`), and are off with `chatWritesOff`.
+ * Sample data only; every person and company is fictional.
  *
  * Control (through the main server's /__mock/*): `chat/post` adds a message (`{conversation, author, text}`),
  * `chat/react` changes a reaction; both bump an `events` counter the tests read.
@@ -10,6 +12,9 @@ import { randomUUID } from 'node:crypto';
 
 export const CHAT_PREFIX = '/api/chat/v1';
 export const CHAT_SCOPES = ['chat:read', 'chat:write'];
+const QUICK = ['👍', '👀', '✅', '🎉', '🙏'];
+const ACCEPTED = [...QUICK, '💚', '🚀', '❤️', '😂'];
+const KEY = /^[A-Za-z0-9_.:-]{1,80}$/;
 
 const ORG = 'org:6a0e1f8e-1b2c-4d3e-8f90-a1b2c3d4e5f6';
 const ORG2 = 'org:7b1f2a9f-2c3d-4e4f-9a01-b2c3d4e5f6a7';
@@ -43,7 +48,7 @@ function seed() {
   const at = (minutesAgo) => new Date(base.getTime() - minutesAgo * 60_000).toISOString();
   const conversations = [
     { uuid: uuid(1), context: ORG, kind: 'channel', title: 'envelope-v2', subtitle: 'Parser rewrite and benchmarks', channelKey: 'room:1', unread: 3 },
-    { uuid: uuid(2), context: ORG, kind: 'channel', title: 'incidents', subtitle: 'Production incidents', channelKey: 'room:2', unread: 0 },
+    { uuid: uuid(2), context: ORG, kind: 'channel', title: 'incidents', subtitle: 'Production incidents', channelKey: 'room:2', unread: 0, readOnly: true },
     { uuid: uuid(3), context: ORG, kind: 'channel', title: 'random', subtitle: 'Anything goes', channelKey: 'room:3', unread: 2, mutedUntil: '2099-01-01T00:00:00Z' },
     { uuid: uuid(4), context: ORG, kind: 'channel', title: 'Envelope v2', subtitle: 'Project channel', channelKey: 'project:aa000000-0000-4000-8000-000000000001', unread: 1 },
     { uuid: uuid(5), context: ORG, kind: 'channel', title: 'Website relaunch', subtitle: 'Project channel', channelKey: 'project:aa000000-0000-4000-8000-000000000002', unread: 0 },
@@ -108,7 +113,7 @@ function seed() {
     const list = messages.get(row.uuid);
     return [row.uuid, list.length === 0 ? null : list[Math.max(0, list.length - 1 - row.unread)].id];
   }));
-  return { conversations, messages, threads: new Map([[root.uuid, threadReplies]]), reads, nextId: id, events: 0, reads_posted: [], logouts: 0 };
+  return { conversations, messages, threads: new Map([[root.uuid, threadReplies]]), reads, nextId: Math.max(id, 5003), events: 0, reads_posted: [], logouts: 0, keys: new Map(), writes: [] };
 }
 
 export function createChatMock({ send, error }) {
@@ -135,7 +140,7 @@ export function createChatMock({ send, error }) {
       peerStatus: conversation.peerStatus ?? 'offline',
       channelKey: conversation.channelKey ?? null,
       ticket: conversation.ticket ? { number: '1042', topicLabel: 'Billing', status: 'open', statusLabel: conversation.ticket.statusLabel, readOnly: false } : null,
-      canSend: true,
+      canSend: conversation.readOnly !== true,
       unread: list.filter((message) => message.id > read && !message.mine).length,
       archived: false,
       mutedUntil: conversation.mutedUntil ?? null,
@@ -145,11 +150,78 @@ export function createChatMock({ send, error }) {
     };
   };
 
+  /** ChatKit 2.5 writes: scope, writes switch, posting rights, key, then the write (or the replay of the first one). */
+  function write(req, res, session, conversation, list, match, payload, headers, state) {
+    const bearer = (req.headers.authorization ?? '').slice(7).trim();
+    if (state.config.chatWritesOff) return error(res, 404, 'not_found', 'Not found.');
+    if (!session.scopes.includes('chat:write')) return error(res, 403, 'insufficient_scope', 'Needs chat:read chat:write.', { 'WWW-Authenticate': 'Bearer error="insufficient_scope", scope="chat:read chat:write"' });
+    const key = req.headers['idempotency-key'];
+    if (key === undefined || key === '') return error(res, 400, 'idempotency_key_required', 'Idempotency-Key required.');
+    if (!KEY.test(key)) return error(res, 400, 'idempotency_key_invalid', 'Invalid Idempotency-Key.');
+    if (conversation.readOnly) return error(res, 403, 'read_only', 'Read-only conversation.');
+    const reaction = match[4]?.startsWith('/reactions/') ? match[4].slice('/reactions/'.length) : null;
+    const fingerprint = JSON.stringify([req.method, match[3] ?? null, match[4] ?? null, payload]);
+    const stored = data.keys.get(`${bearer}|${conversation.uuid}|${key}`);
+    if (stored !== undefined) {
+      if (stored.fingerprint !== fingerprint) return error(res, 422, 'idempotency_mismatch', 'Key used for another write.');
+      data.writes.push({ key, replayed: true });
+      return send(res, stored.status === 201 ? 200 : stored.status, { ...stored.body, replayed: true }, headers);
+    }
+    const remember = (status, answer) => {
+      data.keys.set(`${bearer}|${conversation.uuid}|${key}`, { fingerprint, status, body: answer });
+      data.writes.push({ key, replayed: false, method: req.method, kind: reaction !== null ? 'reaction' : match[4] === '/thread' ? 'reply' : 'send' });
+      data.events += 1;
+      return send(res, status, { ...answer, replayed: false }, headers);
+    };
+    if (reaction !== null) {
+      if (req.method !== 'PUT' && req.method !== 'DELETE') return error(res, 405, 'method_not_allowed', 'Method not allowed.');
+      let emoji;
+      try {
+        emoji = decodeURIComponent(reaction);
+      } catch {
+        return error(res, 422, 'invalid_reaction', 'Invalid reaction.');
+      }
+      if (!ACCEPTED.includes(emoji)) return error(res, 422, 'invalid_reaction', 'Invalid reaction.');
+      const target = list.find((item) => item.uuid === match[3]) ?? [...data.threads.values()].flat().find((item) => item.uuid === match[3]);
+      if (!target) return error(res, 404, 'not_found', 'Not found.');
+      const current = target.reactions.find((item) => item.emoji === emoji);
+      if (req.method === 'PUT' && !current?.mine) {
+        if (current) Object.assign(current, { count: current.count + 1, mine: true });
+        else target.reactions.push({ emoji, count: 1, mine: true });
+      } else if (req.method === 'DELETE' && current?.mine) {
+        if (current.count <= 1) target.reactions.splice(target.reactions.indexOf(current), 1);
+        else Object.assign(current, { count: current.count - 1, mine: false });
+      }
+      return remember(200, { reactions: target.reactions.map((item) => ({ ...item })) });
+    }
+    if (req.method !== 'POST') return error(res, 405, 'method_not_allowed', 'Method not allowed.');
+    if (Object.keys(payload).some((field) => field !== 'text')) return error(res, 422, 'unsupported_field', 'Unsupported field.');
+    if (typeof payload.text !== 'string') return error(res, 422, 'invalid_text', 'Invalid text.');
+    const value = payload.text.trim();
+    if (value === '') return error(res, 422, 'empty_text', 'Empty text.');
+    if ([...value].length > 4000) return error(res, 422, 'text_too_long', 'Too long.');
+    data.nextId += 1;
+    const message = { id: data.nextId, uuid: randomUUID(), kind: 'user', author: PEOPLE.me, mine: true, createdAt: new Date().toISOString(), edited: false, deleted: false, moderated: false, pinned: false, mentionsMe: false, reactions: [], body: body(...value.split(/\n{2,}/).map((part) => para(...part.split('\n').flatMap((line, i) => (i === 0 ? [text(line)] : [{ type: 'break' }, text(line)]))))), previews: [] };
+    if (match[4] === '/thread') {
+      const root = list.find((item) => item.uuid === match[3]);
+      if (!root) return error(res, 404, 'not_found', 'Not found.');
+      if (root.kind !== 'user') return error(res, 422, 'not_threadable', 'Not threadable.');
+      const replies = data.threads.get(root.uuid) ?? [];
+      data.threads.set(root.uuid, replies);
+      replies.push({ ...message, threadRootUuid: root.uuid });
+      return remember(201, { message: { ...message, threadRootUuid: root.uuid }, root: { ...root, thread: { count: replies.length, lastReplyAt: message.createdAt } } });
+    }
+    if (match[3] !== undefined) return error(res, 405, 'method_not_allowed', 'Method not allowed.');
+    list.push(message);
+    data.reads.set(conversation.uuid, message.id);
+    return remember(201, { message });
+  }
+
   return {
     reset() {
       data = seed();
     },
-    state: () => ({ events: data.events, reads: data.reads_posted, logouts: data.logouts }),
+    state: () => ({ events: data.events, reads: data.reads_posted, logouts: data.logouts, writes: data.writes }),
     post({ conversation, author = 'maya', text: value = 'New message', thread = false }) {
       const conv = data.conversations.find((item) => item.uuid === conversation) ?? data.conversations[0];
       data.nextId += 1;
@@ -187,7 +259,22 @@ export function createChatMock({ send, error }) {
       const headers = { 'Cache-Control': 'no-store, private' };
       const inContext = (uuidValue) => data.conversations.find((item) => item.uuid === uuidValue && item.context === context);
       if (req.method === 'GET' && route === 'me') {
-        return send(res, 200, { apiVersion: 1, user: PEOPLE.me, scopes: session.scopes, context, contexts: CONTEXTS, features: { realtime: false, realtimeEvents: 'ids', send: false, search: false, attachments: false }, limits: { conversationsPageMax: 100, messagesPageMax: 100 } }, headers);
+        const writes = !state.config.chatWritesOff;
+        return send(
+          res,
+          200,
+          {
+            apiVersion: 1,
+            user: PEOPLE.me,
+            scopes: session.scopes,
+            context,
+            contexts: CONTEXTS,
+            features: { realtime: false, realtimeEvents: 'ids', send: writes, threadReply: writes, reactions: writes, editOwn: writes, deleteOwn: writes, cards: false, search: false, attachments: false, serverLogout: true },
+            limits: { conversationsPageMax: 100, messagesPageMax: 100, textMaxLength: 4000, editWindowSeconds: 900, idempotencyKeyMaxLength: 80 },
+            reactions: { quick: QUICK, accepted: ACCEPTED },
+          },
+          headers,
+        );
       }
       if (req.method === 'GET' && route === 'realtime') return send(res, 200, { enabled: false, hubUrl: null, token: null, topic: null, expiresAt: null, events: 'ids' }, headers);
       if (req.method === 'GET' && route === 'conversations') {
@@ -199,11 +286,12 @@ export function createChatMock({ send, error }) {
         const unreadTotal = rows.filter((item) => item.mutedUntil === null).reduce((sum, item) => sum + item.unread, 0);
         return send(res, 200, { conversations: page, nextCursor: next, unreadTotal: offset === 0 ? unreadTotal : null, unreadTotalCapped: offset === 0 ? false : null }, headers);
       }
-      const match = /^conversations\/([0-9a-f-]{36})(?:\/(messages|read)(?:\/([0-9a-f-]{36})(\/thread)?)?)?$/.exec(route);
+      const match = /^conversations\/([0-9a-f-]{36})(?:\/(messages|read)(?:\/([0-9a-f-]{36})(\/thread|\/reactions\/[^/]+)?)?)?$/.exec(route);
       if (!match) return error(res, 404, 'not_found', 'Not found.');
       const conversation = inContext(match[1]);
       if (!conversation) return error(res, 404, 'not_found', 'Not found.');
       const list = data.messages.get(conversation.uuid);
+      if (req.method !== 'GET' && match[2] === 'messages') return write(req, res, session, conversation, list, match, body, headers, state);
       if (req.method === 'GET' && match[2] === undefined) return send(res, 200, { conversation: { ...row(conversation), membersCount: 6, permissions: { send: true } } }, headers);
       if (req.method === 'POST' && match[2] === 'read') {
         const id = Number(body.messageId);

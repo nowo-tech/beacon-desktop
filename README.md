@@ -100,7 +100,7 @@ a ghost Windows removes when the mouse passes over it.
    never sees it. A system notification confirms every sign-in. If the app ever signs you out because the saved
    server no longer matches the session, revoke the old device there too.
 
-## Chat (0.10.0, read-only)
+## Chat (0.10.0; sending from 0.12.0)
 
 Beacon chat sits next to the timer: **Chat** and **Time** on the left rail (`Ctrl/Cmd+1`, `Ctrl/Cmd+2`).
 
@@ -108,10 +108,13 @@ Beacon chat sits next to the timer: **Chat** and **Time** on the left rail (`Ctr
    for the person signed in to time tracking). Approve it in the browser page that opens.
 2. Pick the organization on the rail (or in the title-bar dropdown, Settings → Organization switcher). The app sends
    it with every request; your web context in Beacon does not change.
-3. Read conversations, threads and reactions. Replying, reacting and notifications come in 0.11.0: use "Open in
-   Beacon" meanwhile.
+3. Read conversations, threads and reactions. From 0.12.0 (Beacon with ChatKitBundle 2.5) write in the message box
+   (Enter sends, Shift+Enter adds a line), reply in threads (`R` on a message) and react (`E`, or the chips). An
+   approval made with 0.10 / 0.11 reads only: the box offers **Allow sending**, a new approval for reading and
+   sending. A message that could not be sent shows *Retry* (it is never posted twice) or why the server refused it.
+   Notifications come later: use "Open in Beacon" meanwhile.
 
-Messages stay in memory only. "Disconnect chat" (Settings) revokes the chat approval (Beacon with ChatKit 2.4.1; older
+Messages, drafts and unsent messages stay in memory only. "Disconnect chat" (Settings) revokes the chat approval (Beacon with ChatKit 2.4.1; older
 servers: revoke the device in Beacon, Account → Security) and removes it from this computer, keeping time tracking
 signed in. Needs Beacon with
 TimeTrackBundle 2.2 and ChatKitBundle 2.4. Shortcuts: `?` in Chat.

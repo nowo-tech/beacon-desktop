@@ -227,7 +227,7 @@ describe('shell and chat module', () => {
     // Context menu: Copy text / Copy link / Open thread.
     root.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
     const menu = document.querySelector('.ctx-menu') as HTMLElement;
-    expect([...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(['Copy text', 'Copy link', '3 replies, open thread']);
+    expect([...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(['Copy text', 'Copy link', '3 replies, open thread', 'Add reaction']);
     menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     (menu.querySelectorAll('[role="menuitem"]')[1] as HTMLElement).click();
     await until(() => ui.platform.hooks.copied.length > 0, 'the copied link');

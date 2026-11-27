@@ -5,6 +5,48 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+BD-3b, first part (design `docs/design/BEACON_DESKTOP.md` §7.2): chat writes, 0.12.0 candidate. Needs ChatKitBundle
+**2.5** (`client_api.writes`) and a chat token approved for sending (`chat:write`); everything is feature-detected
+through `GET me`, so a 2.4 server or a read-only token keeps the 0.10 read-only view.
+
+### Added
+
+- **Message box** (approved prototype) under every conversation the person may post in: formatting toolbar (bold,
+  italic, inline code, code block, list, link; `Ctrl/⌘+B / I / E`, `Ctrl/⌘+Shift+C`), Enter to send, Shift+Enter for
+  a new line (never while an IME is composing), a real Send button, a counter in the last 500 characters of the
+  server's limit (4000), and a field that grows up to about eight lines. `C` focuses it, `↑` in an empty box moves to
+  the last message. Unsent text is kept per conversation, in memory only.
+- **Sending** (`POST conversations/{uuid}/messages`) with one `Idempotency-Key` per message: the message shows at
+  once, quieter, until the server answers; it then shows the server's copy until the next catch-up brings it with
+  anything written in between. A `429` or a lock conflict (`409`) waits and retries by itself with the same key (up to
+  three times); a lost connection or a `5xx` shows *Not sent* with *Retry* (same key: never posted twice) and
+  *Discard*; a refusal of the request itself (`403 read_only`, `422 text_too_long` …) shows why, with *Edit* (the
+  text goes back to the box; a new attempt is a new key) and *Discard*. No offline queue (design §3.3).
+- **Thread replies** (`POST …/messages/{uuid}/thread`): a message box in the thread panel; `R` on a message (or
+  *Reply in thread* in its toolbar and menu) opens the thread with the box focused; `Esc` in the box closes the
+  thread. The root's reply count updates from the answer.
+- **Reactions** (`PUT` / `DELETE …/reactions/{emoji}`): chips are toggles (`aria-pressed`), a hover / focus toolbar on
+  every message (two quick reactions, *Add reaction*, *Reply in thread*, *More*), and a reaction picker (`E` on a
+  message, arrow keys, the server's quick row and accepted list). The change shows at once and goes back if the server
+  refuses it. `Shift+F10` / the context-menu key opens the message menu from the keyboard.
+- **"Allow sending"**: a chat token approved before 0.12.0 (read only) shows why there is no message box and offers a
+  new approval for reading and sending; "Connect chat" asks for `chat:read chat:write`, and for `chat:read` only when
+  the server's chat family does not know `chat:write`.
+- Read-only conversations (read-only channel, closed ticket, `canSend: false`) and servers with writes off say so
+  where the box would be.
+
+### Fixed
+
+- The message menu (right-click: *Copy text*, *Copy link*, *Open thread*) did nothing in Chromium webviews (Windows):
+  closing it removed it twice, which throws there, so the chosen action never ran. It is removed once now, and focus
+  goes back to the message even when the list was drawn again meanwhile.
+- The thread panel keeps its scroll position and the focused message when it is drawn again (a new reply, a hint).
+
+### Changed
+
+- Rust (`beacon_fetch`): `PUT`, `PATCH` and `DELETE` are accepted for the chat client API only (deny by default for
+  every other route), and the `Idempotency-Key` request header is passed through.
+
 ## [0.11.0] - 2026-11-27
 
 BD-3a (design `docs/design/BEACON_DESKTOP.md` §7.1): time context, mini timer and required fields. Works with

@@ -1,5 +1,6 @@
 /**
- * ChatKit client API v1 (`/api/chat/v1`, ChatKitBundle 2.4.0): read routes only (BD-2). Bearer only, no cookies, no
+ * ChatKit client API v1 (`/api/chat/v1`): read routes (ChatKitBundle 2.4.0, BD-2) and writes (2.5.0, BD-3b: send, thread
+ * reply, reactions, each with an `Idempotency-Key`). Bearer only, no cookies, no
  * redirects; the tenant goes in `X-Beacon-Context` on every request (design §4.4). In the Tauri app the token is
  * `SESSION_HANDLE`: Rust adds the real chat token to chat routes only (src-tauri/src/secret.rs).
  *
@@ -20,8 +21,12 @@ import {
   parseMe,
   parseMessage,
   parseMessagesPage,
+  parseReactions,
   parseThreadPage,
+  parseWritten,
+  type Reaction,
   type ThreadPage,
+  type Written,
 } from './types';
 
 export const CHAT_PREFIX = '/api/chat/v1';
@@ -30,6 +35,20 @@ export const CONTEXT_HEADER = 'X-Beacon-Context';
 export const MAX_LIMIT = 100;
 
 const CODE_PATTERN = /^[a-z][a-z0-9_]*$/;
+/** ChatKit's key grammar (1–80 characters of `[A-Za-z0-9_.:-]`). */
+export const IDEMPOTENCY_KEY = /^[A-Za-z0-9_.:-]{1,80}$/;
+
+/** A fresh key for one write (a UUID v4). Reused only to retry that same write. */
+export function newIdempotencyKey(): string {
+  return globalThis.crypto.randomUUID();
+}
+
+/** Whether a failed write may be sent again with the same key (ChatKit: timeout, lost answer, `5xx`, `409`, `429`). */
+export function retryable(error: unknown): boolean {
+  return error instanceof ApiError && (error.isNetwork || error.status === 409 || error.status === 429 || error.status >= 500);
+}
+
+type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 export interface ChatApiConfig {
   baseUrl: string;
@@ -126,15 +145,43 @@ export class ChatApi {
     return typeof data?.readUpTo === 'number' ? data.readUpTo : null;
   }
 
+  /** Sends a message (`POST …/messages {text}`, `chat:write`). `201`, or `200` for a replay of the same key. */
+  async send(uuid: string, text: string, key: string): Promise<Written> {
+    return this.written(await this.write('POST', `conversations/${uuidPath(uuid)}/messages`, key, { text }));
+  }
+
+  /** Replies in the thread of `root` (`POST …/messages/{root}/thread {text}`); the answer carries the updated root. */
+  async reply(uuid: string, root: string, text: string, key: string): Promise<Written> {
+    return this.written(await this.write('POST', `conversations/${uuidPath(uuid)}/messages/${uuidPath(root)}/thread`, key, { text }));
+  }
+
+  /** Sets (`on`) or removes the reader's reaction; idempotent on the server. Answers the message's reactions after it. */
+  async react(uuid: string, messageUuid: string, emoji: string, on: boolean, key: string): Promise<Reaction[]> {
+    const reactions = parseReactions(await this.write(on ? 'PUT' : 'DELETE', `conversations/${uuidPath(uuid)}/messages/${uuidPath(messageUuid)}/reactions/${encodeURIComponent(emoji)}`, key));
+    if (reactions === null) throw new ApiError(200, 'invalid_response', 'The server returned an invalid response.');
+    return reactions;
+  }
+
+  private written(data: unknown): Written {
+    const written = parseWritten(data, this.origin);
+    if (written === null) throw new ApiError(200, 'invalid_response', 'The server returned an invalid response.');
+    return written;
+  }
+
+  private write(method: Method, path: string, key: string, body?: unknown): Promise<unknown> {
+    if (!IDEMPOTENCY_KEY.test(key)) throw new ApiError(0, 'idempotency_key_invalid', 'Invalid idempotency key.');
+    return this.request(method, path, {}, body, { 'Idempotency-Key': key });
+  }
+
   private get(path: string, query: Query = {}): Promise<unknown> {
     return this.request('GET', path, query);
   }
 
-  private async request(method: 'GET' | 'POST', path: string, query: Query, body?: unknown): Promise<unknown> {
+  private async request(method: Method, path: string, query: Query, body?: unknown, extra: Record<string, string> = {}): Promise<unknown> {
     if (this.token === null) throw new ApiError(401, 'invalid_token', 'Chat is not connected.');
     const url = new URL(`${this.server}${CHAT_PREFIX}/${path}`);
     for (const [key, value] of Object.entries(query)) if (value !== undefined) url.searchParams.set(key, String(value));
-    const headers: Record<string, string> = { Accept: 'application/json', Authorization: `Bearer ${this.token}` };
+    const headers: Record<string, string> = { Accept: 'application/json', Authorization: `Bearer ${this.token}`, ...extra };
     if (this.context !== null) headers[CONTEXT_HEADER] = this.context;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     let response: Response;

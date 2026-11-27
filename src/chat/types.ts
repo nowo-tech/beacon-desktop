@@ -1,5 +1,5 @@
 /**
- * ChatKit client API v1 (ChatKitBundle 2.4.0, `docs/API.md`, `docs/openapi/chat-client-v1.yaml`): the shapes the app
+ * ChatKit client API v1 (ChatKitBundle 2.4.0 reads, 2.5.0 writes; `docs/API.md`, `docs/openapi/chat-client-v1.yaml`): the shapes the app
  * reads, and parsers that check every field. Anything malformed is dropped or replaced by a safe default, so a server
  * answer can never put a non-string where the UI expects text, or a URL scheme the app would open.
  */
@@ -23,9 +23,27 @@ export interface ChatMe {
   scopes: string[];
   context: string | null;
   contexts: Context[];
-  features: { realtime: boolean; realtimeEvents: 'full' | 'ids' | null; send: boolean; search: boolean; attachments: boolean };
-  limits: { conversationsPageMax: number; messagesPageMax: number };
+  features: {
+    realtime: boolean;
+    realtimeEvents: 'full' | 'ids' | null;
+    /** 2.5: the write routes are on for this token (also needs `chat:write` in `scopes`). */
+    send: boolean;
+    threadReply: boolean;
+    reactions: boolean;
+    search: boolean;
+    attachments: boolean;
+  };
+  limits: { conversationsPageMax: number; messagesPageMax: number; textMaxLength: number };
+  /** 2.5: the quick reaction row and every emoji the server accepts (`422 invalid_reaction` otherwise). */
+  reactions: { quick: string[]; accepted: string[] };
 }
+
+/** The write scope of the chat family (ChatKit 2.5; Beacon registers it next to `chat:read`). */
+export const WRITE_SCOPE = 'chat:write';
+/** Longest text of a write when the server does not say (ChatKit's `limits.textMaxLength`). */
+export const TEXT_MAX = 4000;
+/** Quick reactions when the server lists none (ChatKit's default quick row). */
+export const DEFAULT_QUICK = ['👍', '✅', '👀', '🎉', '💚', '🚀', '🙏'];
 
 export interface Conversation {
   uuid: string;
@@ -42,6 +60,8 @@ export interface Conversation {
   lastMessageId: number | null;
   preview: string | null;
   ticketStatus: string | null;
+  /** The reader may post here (`false`: read-only channel, blocked direct message, closed ticket). */
+  canSend: boolean;
   membersCount?: number;
 }
 
@@ -159,6 +179,11 @@ export function parseMe(raw: unknown): ChatMe {
     .map((item) => ({ key: str(item.key), label: str(item.label).trim() || str(item.key) }))
     .filter((item) => CONTEXT_KEY.test(item.key));
   const realtimeEvents = features.realtimeEvents === 'ids' || features.realtimeEvents === 'full' ? features.realtimeEvents : null;
+  const reactions = isObject(value.reactions) ? value.reactions : {};
+  const emojis = (raw: unknown): string[] => [...new Set(list(raw).filter((item): item is string => isEmoji(item)))].slice(0, 200);
+  const accepted = emojis(reactions.accepted);
+  const quick = emojis(reactions.quick).filter((item) => accepted.length === 0 || accepted.includes(item));
+  const textMax = int(limits.textMaxLength, TEXT_MAX);
   return {
     user: parsePerson(value.user),
     scopes: list(value.scopes).filter((item): item is string => typeof item === 'string'),
@@ -168,13 +193,44 @@ export function parseMe(raw: unknown): ChatMe {
       realtime: bool(features.realtime),
       realtimeEvents,
       send: bool(features.send),
+      threadReply: bool(features.threadReply),
+      reactions: bool(features.reactions),
       search: bool(features.search),
       attachments: bool(features.attachments),
     },
     limits: {
       conversationsPageMax: Math.min(Math.max(int(limits.conversationsPageMax, 100), 1), 100),
       messagesPageMax: Math.min(Math.max(int(limits.messagesPageMax, 100), 1), 100),
+      textMaxLength: textMax > 0 ? Math.min(textMax, TEXT_MAX) : TEXT_MAX,
     },
+    reactions: { quick: quick.length > 0 ? quick.slice(0, 12) : accepted.length === 0 ? DEFAULT_QUICK : accepted.slice(0, 7), accepted },
+  };
+}
+
+/** A reaction emoji as the API carries it: a short, non-blank string without control characters (at most 64 UTF-8 bytes, ChatKit's limit). */
+export function isEmoji(value: unknown): value is string {
+  if (typeof value !== 'string' || value.trim() === '' || value !== value.trim()) return false;
+  if ([...value].some((char) => (char.codePointAt(0) ?? 0) < 0x20 || char === '\u007f')) return false;
+  return new TextEncoder().encode(value).length <= 64;
+}
+
+/** What the person may write with this token on this server (scope and features; a row's `canSend` comes on top). */
+export interface WriteAccess {
+  /** The token was approved for reading only (no `chat:write`): connecting again asks for sending. */
+  needsApproval: boolean;
+  send: boolean;
+  threadReply: boolean;
+  reactions: boolean;
+}
+
+export function writeAccess(me: ChatMe | null): WriteAccess {
+  const scoped = me !== null && me.scopes.includes(WRITE_SCOPE);
+  const offered = me !== null && me.features.send;
+  return {
+    needsApproval: me !== null && offered && !scoped,
+    send: scoped && offered,
+    threadReply: scoped && offered && me.features.threadReply,
+    reactions: scoped && me.features.reactions,
   };
 }
 
@@ -201,6 +257,8 @@ export function parseConversation(raw: unknown): Conversation | null {
     lastMessageId: intOrNull(raw.lastMessageId),
     preview: last !== null && !bool(last.deleted) ? strOrNull(last.preview) : null,
     ticketStatus: ticket !== null ? strOrNull(ticket.statusLabel) : null,
+    // Older servers (2.4) send no `canSend`: they offer no writes either, so `true` changes nothing there.
+    canSend: raw.canSend !== false && !(ticket !== null && ticket.readOnly === true),
     membersCount: typeof raw.membersCount === 'number' ? int(raw.membersCount) : undefined,
   };
 }
@@ -320,10 +378,7 @@ export function parseMessage(raw: unknown, origin: string): Message | null {
     mentionsMe: bool(raw.mentionsMe) || raw.mentionAll === 'channel' || raw.mentionAll === 'here',
     threadRootUuid: isUuid(raw.threadRootUuid) ? raw.threadRootUuid.toLowerCase() : null,
     thread,
-    reactions: list(raw.reactions)
-      .filter(isObject)
-      .map((item) => ({ emoji: str(item.emoji), count: int(item.count), mine: bool(item.mine) }))
-      .filter((item) => item.emoji !== '' && [...item.emoji].length <= 16 && item.count > 0),
+    reactions: reactionsOf(raw.reactions),
     blocks: deleted ? null : parseBlocks(raw.body, origin),
   };
 }
@@ -333,6 +388,33 @@ const messages = (raw: unknown, origin: string): Message[] => list(raw).map((ite
 export function parseMessagesPage(raw: unknown, origin: string): MessagesPage {
   const value = isObject(raw) ? raw : {};
   return { messages: messages(value.messages, origin), hasMore: bool(value.hasMore), readUpTo: intOrNull(value.readUpTo) };
+}
+
+/** A write's answer (`201` / `200` replay): the message as the reader sees it, and the root of a thread reply. */
+export interface Written {
+  message: Message;
+  root: Message | null;
+  replayed: boolean;
+}
+
+export function parseWritten(raw: unknown, origin: string): Written | null {
+  const value = isObject(raw) ? raw : {};
+  const message = parseMessage(value.message, origin);
+  if (message === null) return null;
+  return { message, root: parseMessage(value.root, origin), replayed: bool(value.replayed) };
+}
+
+/** A reaction write's answer: the message's reactions after the change (never who reacted). */
+export function parseReactions(raw: unknown): Reaction[] | null {
+  if (!isObject(raw) || !Array.isArray(raw.reactions)) return null;
+  return reactionsOf(raw.reactions);
+}
+
+function reactionsOf(raw: unknown): Reaction[] {
+  return list(raw)
+    .filter(isObject)
+    .map((item) => ({ emoji: str(item.emoji), count: int(item.count), mine: bool(item.mine) }))
+    .filter((item) => item.emoji !== '' && [...item.emoji].length <= 16 && item.count > 0);
 }
 
 export function parseThreadPage(raw: unknown, origin: string): ThreadPage | null {
