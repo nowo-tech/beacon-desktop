@@ -286,7 +286,24 @@ export class ChatSync {
     });
   }
 
-  private async refreshThread(uuid: string, root: string): Promise<void> {
+  /**
+   * A write through the same budget as every read (the token bucket, a running `Retry-After` pause, `401` handling).
+   * Throws {@link RateLimited} without sending while paused.
+   */
+  write<T>(work: (api: ChatApi) => Promise<T>): Promise<T> {
+    return this.call(() => work(this.api));
+  }
+
+  /** Whether `generation` (taken before a write) is still the running one: no context switch or disconnect since. */
+  isCurrent(generation: number): boolean {
+    return this.current(generation);
+  }
+
+  get currentGeneration(): number {
+    return this.generation;
+  }
+
+  async refreshThread(uuid: string, root: string): Promise<void> {
     const thread = this.store.thread(root);
     const newest = thread?.replies[thread.replies.length - 1]?.id;
     const generation = this.generation;

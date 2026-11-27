@@ -19,8 +19,10 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - With meeting reminders (TimeTrack 1.14), the request for your own meetings of today and tomorrow (`GET
   me/meetings`: the time window and time zone only). Nothing about your meetings is sent back.
 - With chat connected (0.10.0): the organization you show (`personal` or the organization's id) with every chat
-  request, the conversations and threads you open, and a read mark for the newest message you have seen. Chat is
-  read-only in this version: nothing you type is sent.
+  request, the conversations and threads you open, and a read mark for the newest message you have seen.
+- With chat connected and sending approved (0.12.0, `chat:write`): the messages and thread replies you send and the
+  reactions you add or remove, each with a random id of that write (`Idempotency-Key`) so a retry is never posted
+  twice. Nothing is sent while you type: only when you press Enter or Send.
 - Nothing else: no screenshots, keystrokes, applications, window titles, URLs, activity or idle state. With meeting
   detection on, which meeting app holds the microphone is checked on this computer and never sent (below).
 
@@ -35,7 +37,8 @@ mismatch is logged locally with the server name only, never a token.
 
 - The session token, in the OS keychain; with chat connected, the chat token too (a second entry).
 - Chat messages are **never written to disk**: they stay in memory while the app runs and are forgotten on an
-  organization switch, "Disconnect chat" and sign-out. On disk only view settings: the organization last shown, the
+  organization switch, "Disconnect chat" and sign-out. The same goes for what you type and have not sent (drafts per
+  conversation) and for messages that could not be sent yet. On disk only view settings: the organization last shown, the
   last conversation per organization (its id), collapsed sidebar sections, the thread panel width, density and the
   switcher style.
 - Server URL, your e-mail, the running timer, queued offline actions (with the time each happened), the tasks you pin

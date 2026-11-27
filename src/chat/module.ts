@@ -1,6 +1,7 @@
 /**
- * The Chat module (BD-2, read-only): connect card and device flow, sidebar with sections, timeline with infinite
- * scroll, read-only thread panel and reaction chips, read marks, realtime hints with polling fallback.
+ * The Chat module: connect card and device flow, sidebar with sections, timeline with infinite scroll, thread panel,
+ * read marks, realtime hints with polling fallback (BD-2); the composer, thread replies and reactions (BD-3b, ChatKit
+ * 2.5 writes, feature-detected through `GET me` and the token's `chat:write` scope).
  *
  * UX rules (owner, 2026-11-25): the cached state paints at once and refreshes quietly; no layout shift (older pages and
  * new messages keep the reading position; at the bottom the view sticks to it, scrolled up a "N new messages" pill
@@ -13,13 +14,15 @@ import type { ChatHost, ChatRealtimeMode } from '../platform';
 import { type Child, h } from '../ui/dom';
 import { ChatApi } from './api';
 import { plainText, renderBlocks } from './body';
+import { Composer } from './composer';
 import { dayLabel, History, rows, step } from './format';
 import type { ChatText } from './i18n';
 import { type ChatIconName, chatIcon } from './icons';
+import { ChatOutbox, type Pending } from './outbox';
 import { isMuted, type SectionId, sectionOf } from './store';
 import { ChatSync, type SyncClock, realClock } from './sync';
 import type { ChatMe, Context, Conversation, Message } from './types';
-import { parseHint } from './types';
+import { parseHint, writeAccess } from './types';
 
 export interface ChatModuleDeps {
   t: ChatText;
@@ -134,6 +137,17 @@ export class ChatModule {
   private loadingOlder = false;
   /** Contexts the server refused (`403`) in this run: never used or remembered again. */
   private readonly refused = new Set<string>();
+  /** Writes in flight or not sent (memory only). */
+  outbox: ChatOutbox | null = null;
+  /** Unsent text per conversation (`<uuid>|` main, `<uuid>|<root>` thread): memory only, gone on disconnect. */
+  private readonly drafts = new Map<string, string>();
+  private composer: Composer | null = null;
+  private composerKey: string | null = null;
+  private threadComposer: Composer | null = null;
+  private threadComposerKey: string | null = null;
+  /** A short, non-blocking notice in the banner (a refused reaction); cleared after a few seconds. */
+  private notice: string | null = null;
+  private noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly deps: ChatModuleDeps) {
     this.clock = deps.clock ?? realClock;
@@ -157,6 +171,9 @@ export class ChatModule {
         if (this.stick) this.scroller.scrollTop = this.scroller.scrollHeight;
       }).observe(this.scroller);
     }
+    // The hover / focus toolbar sits above a message; with no room above (the first visible row under the header) it
+    // goes inside the row instead of being cut off.
+    for (const type of ['pointerover', 'focusin'] as const) this.root.addEventListener(type, (event) => placeActions(event.target));
     this.list.addEventListener('keydown', (event) => this.onMessageKey(event, this.list));
     this.list.addEventListener('contextmenu', (event) => this.onContextMenu(event));
     this.list.addEventListener('focusin', (event) => this.roving(event, this.list));
@@ -208,6 +225,18 @@ export class ChatModule {
       },
       this.clock,
     );
+    this.outbox = new ChatOutbox(
+      this.sync,
+      {
+        changed: (conversation, root) => this.outboxChanged(conversation, root),
+        sent: (pending) => this.deps.announce(pending.root === null ? this.t('messageSent') : this.t('replySent')),
+        failed: () => this.deps.announce(this.t('messageNotSent')),
+        reactionFailed: (error) => {
+          if (!(error instanceof ApiError && error.status === 401)) this.showNotice(this.t('reactionFailed'));
+        },
+      },
+      this.clock,
+    );
     this.sync.visible = this.shown;
     this.render();
     try {
@@ -247,6 +276,10 @@ export class ChatModule {
     this.context = context;
     this.api.setContext(context);
     this.history.clear();
+    this.outbox?.clear();
+    // Unsent text of the previous organization goes too (PRIVACY.md, audit ZDG-L2).
+    this.drafts.clear();
+    this.dropComposers();
     this.error = null;
     this.render();
     try {
@@ -297,6 +330,10 @@ export class ChatModule {
     this.savePrefs(true);
     this.sync?.reset();
     this.sync = null;
+    this.outbox?.clear();
+    this.outbox = null;
+    this.drafts.clear();
+    this.dropComposers();
     this.api = null;
     this.me = null;
     this.connected = false;
@@ -396,6 +433,103 @@ export class ChatModule {
     this.connect = { kind: 'idle', message: null };
     this.render();
     this.root.querySelector<HTMLElement>('#chat-connect')?.focus();
+  }
+
+  /**
+   * "Allow sending" (a token approved for reading only, BD-2): the read token is given up (revoked on the server, best
+   * effort) and a new approval asks for reading and sending. The time session is never touched.
+   */
+  async allowSending(): Promise<void> {
+    await this.disconnect().catch(() => undefined);
+    await this.connectChat();
+  }
+
+  // ---- writes (BD-3b) -------------------------------------------------------------------------------------------------
+
+  private access() {
+    return writeAccess(this.me);
+  }
+
+  /** Whether the person may write in `row` now (token scope, server features and the row's own `canSend`). */
+  private canWrite(row: Conversation | null): boolean {
+    return row !== null && this.access().send && row.canSend;
+  }
+
+  private canReact(row: Conversation | null, message: Message): boolean {
+    return row !== null && this.access().reactions && row.canSend && !message.deleted && message.kind !== 'system' && message.blocks !== null;
+  }
+
+  private canReply(row: Conversation | null, message: Message): boolean {
+    return row !== null && this.access().threadReply && row.canSend && !message.deleted && message.kind !== 'system' && !message.author.bot;
+  }
+
+  private outboxChanged(conversation: string, root: string | null): void {
+    if (conversation !== this.openUuid()) return;
+    if (root === null) {
+      this.renderMessages();
+      // Reactions change thread rows too.
+      if (this.sync?.threadRoot !== null) this.renderThread();
+    } else if (root === this.sync?.threadRoot) this.renderThread();
+  }
+
+  private showNotice(text: string): void {
+    this.notice = text;
+    this.renderBanner();
+    if (this.noticeTimer !== null) clearTimeout(this.noticeTimer);
+    this.noticeTimer = setTimeout(() => {
+      this.notice = null;
+      this.noticeTimer = null;
+      this.renderBanner();
+    }, 6000);
+  }
+
+  private dropComposers(): void {
+    this.composer = null;
+    this.composerKey = null;
+    this.threadComposer = null;
+    this.threadComposerKey = null;
+  }
+
+  /** Sends from a composer: answers whether the text was taken (the field is cleared). */
+  private sendText(conversation: string, root: string | null, text: string): boolean {
+    if (this.outbox === null || !this.canWrite(this.sync?.store.conversation(conversation) ?? null)) return false;
+    this.outbox.send(conversation, root, text);
+    this.drafts.delete(`${conversation}|${root ?? ''}`);
+    if (root === null) this.scrollToBottom();
+    return true;
+  }
+
+  /** `C`: the message box of the open conversation (the thread's when focus is in the thread panel). */
+  focusComposer(): boolean {
+    const inThread = document.activeElement instanceof HTMLElement && this.threadSlot.contains(document.activeElement);
+    const target = inThread && this.threadComposer !== null ? this.threadComposer : this.composer;
+    if (target === null || !target.root.isConnected) return false;
+    target.focus();
+    return true;
+  }
+
+  /** `R` / "Reply in thread": opens the thread and puts the caret in its message box. */
+  async replyInThread(root: string): Promise<void> {
+    await this.openThread(root, true);
+  }
+
+  /** Toggles the reader's reaction; the change is announced (the chip itself is not a live region). */
+  react(messageUuid: string, emoji: string): void {
+    const open = this.openUuid();
+    const message = open === null ? null : (this.sync?.store.findMessage(open, messageUuid) ?? null);
+    if (open === null || message === null || this.outbox === null) return;
+    const on = !message.reactions.some((reaction) => reaction.emoji === emoji && reaction.mine);
+    void this.outbox.react(open, messageUuid, emoji);
+    this.deps.announce(on ? this.t('reactionAdded', { emoji }) : this.t('reactionRemoved', { emoji }));
+  }
+
+  /** The reaction picker (quick row plus the message's own reactions), anchored to `anchor`. */
+  openReactionMenu(anchor: HTMLElement, message: Message, back: HTMLElement): void {
+    const quick = this.me?.reactions.quick ?? [];
+    const accepted = this.me?.reactions.accepted ?? [];
+    const shown = [...new Set([...quick, ...message.reactions.map((reaction) => reaction.emoji)])].filter((emoji) => accepted.length === 0 || accepted.includes(emoji));
+    const mine = new Set(message.reactions.filter((reaction) => reaction.mine).map((reaction) => reaction.emoji));
+    showEmojiMenu(anchor, shown, mine, this.t, (emoji) => this.react(message.uuid, emoji), back);
   }
 
   // ---- visibility, realtime -------------------------------------------------------------------------------------------
@@ -514,19 +648,21 @@ export class ChatModule {
     }
   }
 
-  async openThread(root: string): Promise<void> {
+  async openThread(root: string, focusComposer = false): Promise<void> {
     const sync = this.sync;
     const open = sync?.openUuid ?? null;
     if (sync === null || open === null) return;
     const promise = sync.openThread(open, root);
     this.renderThread();
+    if (focusComposer) this.threadComposer?.focus();
     try {
       await promise;
     } catch (error) {
       this.handleError(error);
     }
     this.renderThread();
-    this.threadSlot.querySelector<HTMLElement>('.thread .msgs')?.focus({ preventScroll: true });
+    if (focusComposer && this.threadComposer !== null) this.threadComposer.focus();
+    else this.threadSlot.querySelector<HTMLElement>('.thread .msgs')?.focus({ preventScroll: true });
   }
 
   closeThread(): boolean {
@@ -559,6 +695,9 @@ export class ChatModule {
       this.forward();
       return true;
     }
+    if (!mod && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'c' && !(event.target instanceof HTMLElement && event.target.closest('li.msg') !== null)) {
+      return this.focusComposer();
+    }
     if (event.key === 'Escape' && !mod) {
       if (this.closeThread()) return true;
       if (this.openUuid() !== null) {
@@ -578,9 +717,15 @@ export class ChatModule {
       const store = this.sync?.store;
       if (store !== undefined) this.deps.onUnread(store.badgeCount(this.clock.now()), store.unreadTotalCapped);
     } else if (scope === 'messages') {
+      const open = this.openUuid();
+      if (open !== null) this.outbox?.settle(open);
       this.renderMessages();
       this.scheduleRead();
-    } else this.renderThread();
+    } else {
+      const open = this.openUuid();
+      if (open !== null) this.outbox?.settle(open);
+      this.renderThread();
+    }
   }
 
   private arrived(count: number, author: string | null): void {
@@ -856,6 +1001,7 @@ export class ChatModule {
     else if (this.wasLive && this.mode === 'polling') text = t('bannerReconnecting');
     const nodes: Child[] = [];
     if (text !== null) nodes.push(h('span', { class: 'cb-text' }, text));
+    if (this.notice !== null) nodes.push(h('span', { class: 'cb-text' }, chatIcon('alert', 'sm'), this.notice));
     if (this.error !== null) {
       const retry = this.button('btn sm', t('retry'), () => {
         this.error = null;
@@ -868,11 +1014,40 @@ export class ChatModule {
     this.banner.hidden = nodes.length === 0;
   }
 
+  /** The message box, or why there is none (a read-only token, writes off on the server, a read-only conversation). */
   private renderFoot(): void {
+    const t = this.t;
     const open = this.openUuid();
     this.foot.hidden = open === null;
     if (open === null) return;
-    this.foot.replaceChildren(h('p', { class: 'readonly-note' }, chatIcon('lock', 'xs'), this.t('readOnlyNote')));
+    const row = this.sync?.store.conversation(open) ?? null;
+    const access = this.access();
+    if (access.needsApproval) {
+      const allow = this.button('btn sm primary', t('allowSending'), () => void this.allowSending(), 'chat-allow-sending');
+      this.composerKey = null;
+      this.foot.replaceChildren(h('div', { class: 'readonly-note approve' }, chatIcon('lock', 'xs'), h('span', {}, t('needsApproval')), allow));
+      return;
+    }
+    if (!this.canWrite(row) || row === null) {
+      this.composerKey = null;
+      this.foot.replaceChildren(h('p', { class: 'readonly-note' }, chatIcon('lock', 'xs'), access.send ? t('cannotPost') : t('readOnlyNote')));
+      return;
+    }
+    const key = `${open}|`;
+    if (this.composer === null || this.composerKey !== key) {
+      this.composer = new Composer({
+        t,
+        id: 'composer',
+        placeholder: row.kind === 'channel' ? t('composerChannel', { title: row.title }) : t('composerMessage', { title: row.title }),
+        maxLength: this.me?.limits.textMaxLength ?? 4000,
+        draft: this.drafts.get(key) ?? '',
+        onSend: (text) => this.sendText(open, null, text),
+        onDraft: (text) => (text === '' ? this.drafts.delete(key) : this.drafts.set(key, text)),
+        onArrowUp: () => this.list.querySelector<HTMLElement>('li.msg:last-of-type')?.focus(),
+      });
+      this.composerKey = key;
+    }
+    if (this.foot.firstChild !== this.composer.root) this.foot.replaceChildren(this.composer.root);
   }
 
   private renderPill(): void {
@@ -913,10 +1088,11 @@ export class ChatModule {
     const items: Node[] = [];
     if (timeline.hasMore) items.push(...skeletonMessages(2, true));
     else if (row !== null) items.push(h('li', { class: 'conv-start' }, this.convIcon(row, ''), h('span', {}, t('startOfConversation', { title: row.title }))));
-    for (const item of rows(timeline.messages, this.dividerAt, this.now(), t, this.deps.locale)) {
+    const [shown, pending] = this.withPending(open, null, timeline.messages);
+    for (const item of rows(shown, this.dividerAt, this.now(), t, this.deps.locale)) {
       if (item.day !== null) items.push(h('li', { class: 'day-div', attrs: { 'aria-hidden': 'true' } }, h('span', {}, item.day)));
       if (item.firstUnread) items.push(h('li', { class: 'new-div', id: 'new-div', attrs: { 'aria-hidden': 'true' } }, t('newDivider')));
-      const node = this.messageItem(item.message, item.continued, false);
+      const node = this.messageItem(item.message, item.continued, false, pending.get(item.message.uuid));
       if (item.firstUnread) node.setAttribute('aria-label', `${t('newMessages')}. ${node.getAttribute('aria-label') ?? ''}`);
       items.push(node);
     }
@@ -936,6 +1112,96 @@ export class ChatModule {
     this.renderPill();
   }
 
+  /** The loaded messages plus the writes not in them yet (as typed, or the server's copy once sent). */
+  private withPending(conversation: string, root: string | null, loaded: Message[]): [Message[], Map<string, Pending>] {
+    const pending = new Map<string, Pending>();
+    const author = this.me?.user;
+    if (this.outbox === null || author === undefined) return [loaded, pending];
+    const present = new Set(loaded.map((message) => message.uuid));
+    const extra: Message[] = [];
+    for (const item of this.outbox.pending(conversation, root)) {
+      const view = ChatOutbox.view(item, author);
+      if (present.has(view.uuid)) continue;
+      pending.set(view.uuid, item);
+      extra.push(view);
+    }
+    return [extra.length === 0 ? loaded : [...loaded, ...extra], pending];
+  }
+
+  private pendingStatus(pending: Pending): HTMLElement | null {
+    const t = this.t;
+    if (pending.state === 'sent') return null;
+    if (pending.state === 'sending' || pending.state === 'waiting') {
+      return h('div', { class: 'm-status', attrs: { role: 'status' } }, h('span', { class: 'spin', attrs: { 'aria-hidden': 'true' } }), pending.state === 'sending' ? t('pendingSending') : t('pendingWaiting'));
+    }
+    const reason =
+      pending.error === 'read_only'
+        ? t('pendingReadOnly')
+        : pending.error === 'text_too_long'
+          ? t('pendingTooLong')
+          : pending.error === 'empty_text'
+            ? t('pendingEmpty')
+            : pending.error === 'not_threadable'
+              ? t('pendingNotThreadable')
+              : pending.canRetry
+                ? t('pendingFailed')
+                : t('pendingRefused');
+    const actions: HTMLElement[] = [];
+    if (pending.canRetry) actions.push(this.button('btn sm', t('retry'), () => this.outbox?.retry(pending.key)));
+    else
+      actions.push(
+        this.button('btn sm', t('editMessage'), () => {
+          const dropped = this.outbox?.discard(pending.key);
+          if (dropped === null || dropped === undefined) return;
+          const target = dropped.root === null ? this.composer : this.threadComposer;
+          target?.setText(dropped.text);
+        }),
+      );
+    actions.push(
+      this.button('btn sm btn-quiet', t('discard'), () => {
+        this.outbox?.discard(pending.key);
+        (pending.root === null ? this.composer : this.threadComposer)?.focus();
+      }),
+    );
+    return h('div', { class: 'm-status failed', attrs: { role: 'alert' } }, chatIcon('alert', 'sm'), h('span', {}, reason), ...actions);
+  }
+
+  /** Hover / focus toolbar of a message: quick reactions, the reaction picker, reply in thread, more. */
+  private messageActions(message: Message, inThread: boolean, item: HTMLElement): HTMLElement | null {
+    const t = this.t;
+    const row = this.sync?.store.conversation(this.openUuid()) ?? null;
+    const reacts = this.canReact(row, message);
+    const replies = !inThread && this.canReply(row, message);
+    if (!reacts && !replies) return null;
+    const bar = h('div', { class: 'm-actions', attrs: { role: 'toolbar', 'aria-label': t('messageActions') } });
+    const add = (button: HTMLButtonElement) => {
+      button.tabIndex = -1;
+      bar.append(button);
+    };
+    if (reacts) {
+      for (const emoji of (this.me?.reactions.quick ?? []).slice(0, 2)) {
+        const quick = h('button', { class: 'm-act', attrs: { type: 'button', 'aria-label': t('reactWith', { emoji }), title: t('reactWith', { emoji }) } }, h('span', { class: 'e', attrs: { 'aria-hidden': 'true' } }, emoji));
+        quick.addEventListener('click', () => this.react(message.uuid, emoji));
+        add(quick);
+      }
+      const picker = h('button', { class: 'm-act', attrs: { type: 'button', 'aria-label': t('addReaction'), title: `${t('addReaction')} (E)`, 'aria-haspopup': 'menu' } }, chatIcon('smile', 'sm'));
+      picker.addEventListener('click', () => this.openReactionMenu(picker, message, item));
+      add(picker);
+    }
+    if (replies) {
+      const reply = h('button', { class: 'm-act', attrs: { type: 'button', 'aria-label': t('replyInThread'), title: `${t('replyInThread')} (R)` } }, chatIcon('thread', 'sm'));
+      reply.addEventListener('click', () => void this.replyInThread(message.uuid));
+      add(reply);
+    }
+    const more = h('button', { class: 'm-act', attrs: { type: 'button', 'aria-label': t('moreActions'), title: t('moreActions'), 'aria-haspopup': 'menu' } }, chatIcon('more', 'sm'));
+    more.addEventListener('click', () => {
+      const box = more.getBoundingClientRect();
+      this.messageMenu(message, item, box.left, box.bottom + 4);
+    });
+    add(more);
+    return bar;
+  }
+
   private topVisible(): HTMLElement | null {
     const top = this.scroller.getBoundingClientRect().top;
     for (const item of this.list.querySelectorAll<HTMLElement>('li.msg')) if (item.getBoundingClientRect().bottom > top) return item;
@@ -947,11 +1213,12 @@ export class ChatModule {
     return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(this.deps.locale, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(date);
   }
 
-  private messageItem(message: Message, continued: boolean, inThread: boolean): HTMLElement {
+  private messageItem(message: Message, continued: boolean, inThread: boolean, pending?: Pending): HTMLElement {
     const t = this.t;
     const time = this.time(message.createdAt);
     const classes = ['msg'];
     if (continued) classes.push('cont');
+    if (pending !== undefined && pending.state !== 'sent') classes.push('pending', pending.state);
     if (message.mentionsMe && !message.mine) classes.push('mentioned');
     if (message.kind === 'system') classes.push('system');
     const item = h('li', {
@@ -990,7 +1257,10 @@ export class ChatModule {
       if (message.edited) body.append(h('span', { class: 'edited' }, t('edited')));
       column.append(body);
     }
-    if (message.reactions.length > 0) {
+    const row = this.sync?.store.conversation(this.openUuid()) ?? null;
+    if (pending === undefined && this.canReact(row, message)) {
+      if (message.reactions.length > 0) column.append(this.reactionButtons(message, item));
+    } else if (message.reactions.length > 0) {
       column.append(
         h(
           'div',
@@ -1022,8 +1292,39 @@ export class ChatModule {
       link.addEventListener('click', () => void this.openThread(message.uuid));
       column.append(link);
     }
+    if (pending !== undefined) {
+      const status = this.pendingStatus(pending);
+      if (status !== null) column.append(status);
+    }
     item.append(column);
+    if (pending === undefined) {
+      const actions = this.messageActions(message, inThread, item);
+      if (actions !== null) item.append(actions);
+    }
     return item;
+  }
+
+  /** Reaction chips as toggles (`aria-pressed`) plus "Add reaction"; out of the tab order (E and the menu reach them). */
+  private reactionButtons(message: Message, item: HTMLElement): HTMLElement {
+    const t = this.t;
+    const group = h('div', { class: 'reacts', attrs: { role: 'group', 'aria-label': t('reactions') } });
+    for (const reaction of message.reactions) {
+      const chip = h(
+        'button',
+        {
+          class: reaction.mine ? 'react mine' : 'react',
+          attrs: { type: 'button', tabindex: '-1', title: reaction.emoji, 'aria-pressed': reaction.mine ? 'true' : 'false', 'aria-label': reaction.mine ? t('reactionMine', { emoji: reaction.emoji, count: reaction.count }) : t('reactionLabel', { emoji: reaction.emoji, count: reaction.count }) },
+        },
+        h('span', { class: 'e', attrs: { 'aria-hidden': 'true' } }, reaction.emoji),
+        h('span', { attrs: { 'aria-hidden': 'true' } }, String(reaction.count)),
+      );
+      chip.addEventListener('click', () => this.react(message.uuid, reaction.emoji));
+      group.append(chip);
+    }
+    const add = h('button', { class: 'react add', attrs: { type: 'button', tabindex: '-1', 'aria-label': t('addReaction'), title: `${t('addReaction')} (E)`, 'aria-haspopup': 'menu' } }, chatIcon('smile', 'sm'));
+    add.addEventListener('click', () => this.openReactionMenu(add, message, item));
+    group.append(add);
+    return group;
   }
 
   private setRovingStop(list: HTMLElement, focused: string | undefined): void {
@@ -1043,17 +1344,37 @@ export class ChatModule {
     if (!(item instanceof HTMLElement) || event.target !== item || event.altKey || event.ctrlKey || event.metaKey) return;
     const items = [...list.querySelectorAll<HTMLElement>('li.msg')];
     const index = items.indexOf(item);
+    const key = event.key.toLowerCase();
+    const message = this.messageOf(item);
     let next: HTMLElement | undefined;
     if (event.key === 'ArrowDown') next = items[index + 1];
     else if (event.key === 'ArrowUp') next = items[index - 1];
     else if (event.key === 'Home') next = items[0];
     else if (event.key === 'End') next = items[items.length - 1];
-    else if ((event.key === 'Enter' || event.key.toLowerCase() === 'r') && list === this.list) {
+    else if (event.key === 'Enter' && list === this.list) {
       const link = item.querySelector<HTMLButtonElement>('.thread-link');
       if (link !== null) {
         event.preventDefault();
         link.click();
       }
+      return;
+    } else if (key === 'r' && !event.shiftKey && list === this.list && message !== null) {
+      event.preventDefault();
+      const row = this.sync?.store.conversation(this.openUuid()) ?? null;
+      if (this.canReply(row, message)) void this.replyInThread(message.uuid);
+      else if (message.thread !== null) void this.openThread(message.uuid);
+      return;
+    } else if (key === 'e' && !event.shiftKey && message !== null) {
+      const row = this.sync?.store.conversation(this.openUuid()) ?? null;
+      if (!this.canReact(row, message)) return;
+      event.preventDefault();
+      // Under the message's own "Add reaction" button (top right), as when it is clicked.
+      this.openReactionMenu(item.querySelector<HTMLElement>(':scope > .m-actions [aria-haspopup="menu"]') ?? item, message, item);
+      return;
+    } else if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && message !== null) {
+      event.preventDefault();
+      const box = item.getBoundingClientRect();
+      this.messageMenu(message, item, box.left + 24, box.top + 24);
       return;
     } else return;
     event.preventDefault();
@@ -1063,20 +1384,38 @@ export class ChatModule {
     }
   }
 
-  /** Right-click on a message: Copy text, Copy link, Open thread (the webview's own menu is off in the app). */
+  /** The loaded message an item shows (timeline or thread); pending writes have none. */
+  private messageOf(item: HTMLElement): Message | null {
+    const open = this.openUuid();
+    const uuid = item.dataset.uuid;
+    if (open === null || uuid === undefined || item.classList.contains('pending')) return null;
+    return this.sync?.store.findMessage(open, uuid) ?? null;
+  }
+
+  /** Right-click on a message (the webview's own menu is off in the app). */
   private onContextMenu(event: MouseEvent): void {
     const item = (event.target as HTMLElement).closest?.('li.msg');
-    if (!(item instanceof HTMLElement) || this.sync === null) return;
-    const open = this.openUuid();
-    const message = this.sync.store.timeline(open)?.messages.find((entry) => entry.uuid === item.dataset.uuid);
-    if (message === undefined || open === null) return;
+    if (!(item instanceof HTMLElement)) return;
+    const message = this.messageOf(item);
+    if (message === null) return;
     event.preventDefault();
+    this.messageMenu(message, item, event.clientX, event.clientY);
+  }
+
+  /** Copy text, Copy link, Reply in thread / Open thread, Add reaction. */
+  private messageMenu(message: Message, item: HTMLElement, x: number, y: number): void {
+    const open = this.openUuid();
+    if (open === null) return;
     const t = this.t;
     const server = this.deps.server();
+    const row = this.sync?.store.conversation(open) ?? null;
+    const inThread = this.threadSlot.contains(item);
     const entries: [string, () => void][] = [[t('copyText'), () => void this.deps.copy(plainText(message.blocks, 4000))]];
     if (server !== null) entries.push([t('copyLink'), () => void this.deps.copy(`${server}/dashboard?chat=${open}&message=${message.uuid}`)]);
-    if (message.thread !== null) entries.push([t('openThread', { count: message.thread.count === 1 ? t('reply') : t('replies', { count: message.thread.count }) }), () => void this.openThread(message.uuid)]);
-    showMenu(event.clientX, event.clientY, entries, item);
+    if (!inThread && message.thread === null && this.canReply(row, message)) entries.push([t('replyInThread'), () => void this.replyInThread(message.uuid)]);
+    else if (!inThread && message.thread !== null) entries.push([t('openThread', { count: message.thread.count === 1 ? t('reply') : t('replies', { count: message.thread.count }) }), () => void this.openThread(message.uuid)]);
+    if (this.canReact(row, message)) entries.push([t('addReaction'), () => this.openReactionMenu(item, message, item)]);
+    showMenu(x, y, entries, item);
   }
 
   private renderThread(): void {
@@ -1086,10 +1425,20 @@ export class ChatModule {
     this.root.classList.toggle('thread-open', root !== null);
     if (sync === null || root === null) {
       this.threadSlot.replaceChildren();
+      this.threadComposer = null;
+      this.threadComposerKey = null;
       return;
     }
+    // The panel is rebuilt: keep the reading position (or the bottom) and the focus in its message box.
+    const previous = this.threadSlot.querySelector<HTMLElement>('.thread .msgs');
+    const wasBottom = previous === null || previous.scrollHeight - previous.scrollTop - previous.clientHeight < 48;
+    const previousTop = previous?.scrollTop ?? 0;
+    const field = this.threadComposer?.field;
+    const typing = field !== undefined && document.activeElement === field ? [field.selectionStart, field.selectionEnd] : null;
+    const focusedItem = document.activeElement instanceof HTMLElement && this.threadSlot.contains(document.activeElement) ? (document.activeElement.closest<HTMLElement>('li.msg')?.dataset.uuid ?? null) : null;
     const page = sync.store.thread(root);
-    const row = sync.store.conversation(sync.openUuid);
+    const open = sync.openUuid;
+    const row = sync.store.conversation(open);
     const panel = h('aside', { class: 'thread', id: 'thread', attrs: { 'aria-labelledby': 'thread-title' } });
     panel.style.width = `${this.prefs.threadWidth}px`;
     const handle = h('div', { class: 'th-resize', attrs: { role: 'separator', tabindex: '0', 'aria-orientation': 'vertical', 'aria-label': t('resizeThread'), 'aria-valuemin': String(THREAD_MIN), 'aria-valuemax': String(THREAD_MAX), 'aria-valuenow': String(this.prefs.threadWidth) } });
@@ -1105,23 +1454,60 @@ export class ChatModule {
       close,
     );
     const scroller = h('div', { class: 'msgs', attrs: { tabindex: '-1', role: 'region', 'aria-labelledby': 'thread-title' } });
+    const parts: Node[] = [handle, head];
     if (page === null) {
       scroller.append(h('ul', { class: 'msg-list' }, ...skeletonMessages(3)));
+      parts.push(scroller);
     } else {
-      const pinned = h('div', { class: 'th-root' }, h('ul', { class: 'msg-list', attrs: { role: 'list' } }, this.messageItem(page.root, false, true)));
+      const rootList = h('ul', { class: 'msg-list', attrs: { role: 'list' } }, this.messageItem(page.root, false, true));
+      rootList.addEventListener('contextmenu', (event) => this.onContextMenu(event));
+      rootList.addEventListener('keydown', (event) => this.onMessageKey(event, rootList));
+      const pinned = h('div', { class: 'th-root' }, rootList);
       const count = page.replyCount === 0 ? t('noReplies') : page.replyCount === 1 ? t('reply') : t('replies', { count: page.replyCount });
       const list = h('ul', { class: 'msg-list', attrs: { role: 'list' } });
-      for (const item of rows(page.replies, null, this.now(), t, this.deps.locale)) list.append(this.messageItem(item.message, item.continued, true));
+      const [shown, pending] = open === null ? [page.replies, new Map<string, Pending>()] : this.withPending(open, root, page.replies);
+      for (const item of rows(shown, null, this.now(), t, this.deps.locale)) list.append(this.messageItem(item.message, item.continued, true, pending.get(item.message.uuid)));
       list.addEventListener('keydown', (event) => this.onMessageKey(event, list));
       list.addEventListener('focusin', (event) => this.roving(event, list));
-      this.setRovingStop(list, undefined);
+      list.addEventListener('contextmenu', (event) => this.onContextMenu(event));
+      this.setRovingStop(list, focusedItem ?? undefined);
       scroller.append(list);
-      panel.append(handle, head, pinned, h('div', { class: 'th-count', attrs: { role: 'presentation' } }, count), scroller);
-      this.threadSlot.replaceChildren(panel);
-      return;
+      parts.push(pinned, h('div', { class: 'th-count', attrs: { role: 'presentation' } }, count), scroller);
     }
-    panel.append(handle, head, scroller);
+    const composer = open === null ? null : this.threadComposerFor(open, root, row, page?.root ?? null);
+    if (composer !== null) parts.push(h('div', { class: 'th-foot' }, composer.root));
+    panel.append(...parts);
     this.threadSlot.replaceChildren(panel);
+    scroller.scrollTop = wasBottom ? scroller.scrollHeight : previousTop;
+    if (typing !== null && composer !== null) {
+      composer.field.focus({ preventScroll: true });
+      composer.field.setSelectionRange(typing[0], typing[1]);
+    } else if (focusedItem !== null) this.threadSlot.querySelector<HTMLElement>(`li.msg[data-uuid="${focusedItem}"]`)?.focus({ preventScroll: true });
+  }
+
+  /** The thread's message box (kept across re-renders), or `null` when replying is not possible here. */
+  private threadComposerFor(open: string, root: string, row: Conversation | null, rootMessage: Message | null): Composer | null {
+    if (!this.canWrite(row) || !this.access().threadReply || (rootMessage !== null && !this.canReply(row, rootMessage))) {
+      this.threadComposer = null;
+      this.threadComposerKey = null;
+      return null;
+    }
+    const key = `${open}|${root}`;
+    if (this.threadComposer === null || this.threadComposerKey !== key) {
+      this.threadComposer = new Composer({
+        t: this.t,
+        id: 'thread-composer',
+        placeholder: this.t('composerReply'),
+        maxLength: this.me?.limits.textMaxLength ?? 4000,
+        draft: this.drafts.get(key) ?? '',
+        onSend: (text) => this.sendText(open, root, text),
+        onDraft: (text) => (text === '' ? this.drafts.delete(key) : this.drafts.set(key, text)),
+        onArrowUp: () => this.threadSlot.querySelector<HTMLElement>('.thread .msgs li.msg:last-of-type')?.focus(),
+        onEscape: () => this.closeThread(),
+      });
+      this.threadComposerKey = key;
+    }
+    return this.threadComposer;
   }
 
   private wireResize(handle: HTMLElement, panel: HTMLElement): void {
@@ -1200,9 +1586,12 @@ function skeletonMessages(count: number, older = false): HTMLElement[] {
 export function showMenu(x: number, y: number, entries: [string, () => void][], back: HTMLElement): HTMLElement {
   document.querySelector('.ctx-menu')?.remove();
   const menu = h('div', { class: 'menu ctx-menu', attrs: { role: 'menu' } });
+  let shown = true;
   const close = () => {
+    if (!shown) return;
+    shown = false;
     menu.remove();
-    back.focus({ preventScroll: true });
+    refocus(back);
   };
   for (const [label, run] of entries) {
     const item = h('button', { attrs: { type: 'button', role: 'menuitem', tabindex: '-1' } }, label);
@@ -1225,11 +1614,88 @@ export function showMenu(x: number, y: number, entries: [string, () => void][], 
     }
   });
   menu.addEventListener('focusout', (event) => {
-    if (!menu.contains(event.relatedTarget as Node | null)) menu.remove();
+    // Removing the menu (a pick, Esc) moves focus out too: remove it once (a second remove throws in Chromium).
+    if (shown && !menu.contains(event.relatedTarget as Node | null)) {
+      shown = false;
+      menu.remove();
+    }
   });
   menu.style.left = `${Math.min(x, (globalThis.innerWidth || 800) - 240)}px`;
   menu.style.top = `${Math.min(y, (globalThis.innerHeight || 600) - 40 * entries.length - 16)}px`;
   document.body.append(menu);
   menu.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  return menu;
+}
+
+/** Toolbar room above the row (its height minus what overlaps the row): below it, the toolbar moves inside the row. */
+const ACTIONS_ROOM = 16;
+
+/** Puts a message's toolbar inside its row when the row's top is too close to its scroller's (or panel's) top. */
+export function placeActions(target: EventTarget | null): void {
+  const item = target instanceof Element ? target.closest<HTMLElement>('li.msg') : null;
+  const box = item?.closest<HTMLElement>('.msgs, .th-root');
+  if (item === null || item === undefined || box === null || box === undefined || item.querySelector(':scope > .m-actions') === null) return;
+  item.classList.toggle('actions-in', item.getBoundingClientRect().top - box.getBoundingClientRect().top < ACTIONS_ROOM);
+}
+
+/** Focus back to `element`, or to the same message drawn again since (the list re-renders on new data). */
+function refocus(element: HTMLElement): void {
+  if (element.isConnected) {
+    element.focus({ preventScroll: true });
+    return;
+  }
+  const uuid = element.dataset.uuid;
+  if (uuid !== undefined) document.querySelector<HTMLElement>(`li.msg[data-uuid="${uuid}"]`)?.focus({ preventScroll: true });
+}
+
+/**
+ * The reaction picker: one row of emoji (`menuitemcheckbox`, checked when the reader has it), ← → / ↑ ↓ / Home / End,
+ * Enter or Space toggles and closes, Esc closes; focus returns to `back`.
+ */
+export function showEmojiMenu(anchor: HTMLElement, emojis: string[], mine: Set<string>, t: ChatText, pick: (emoji: string) => void, back: HTMLElement): HTMLElement {
+  document.querySelector('.ctx-menu')?.remove();
+  const menu = h('div', { class: 'menu ctx-menu emoji-menu', attrs: { role: 'menu', 'aria-label': t('reactions'), 'aria-orientation': 'horizontal' } });
+  let shown = true;
+  const close = (focusBack: boolean) => {
+    if (!shown) return;
+    shown = false;
+    menu.remove();
+    if (focusBack) refocus(back);
+  };
+  for (const emoji of emojis) {
+    const item = h('button', { attrs: { type: 'button', role: 'menuitemcheckbox', tabindex: '-1', 'aria-checked': mine.has(emoji) ? 'true' : 'false', 'aria-label': t('reactWith', { emoji }), title: t('reactWith', { emoji }) } }, h('span', { attrs: { 'aria-hidden': 'true' } }, emoji));
+    item.addEventListener('click', () => {
+      close(true);
+      pick(emoji);
+    });
+    menu.append(item);
+  }
+  menu.addEventListener('keydown', (event) => {
+    const items = [...menu.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')];
+    const index = items.indexOf(document.activeElement as HTMLElement);
+    let next = -1;
+    if (event.key === 'Escape' || event.key === 'Tab') {
+      event.preventDefault();
+      event.stopPropagation();
+      close(true);
+      return;
+    }
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (index + 1) % items.length;
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (index - 1 + items.length) % items.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = items.length - 1;
+    if (next < 0) return;
+    event.preventDefault();
+    items[next]?.focus();
+  });
+  menu.addEventListener('focusout', (event) => {
+    if (!menu.contains(event.relatedTarget as Node | null)) close(false);
+  });
+  const box = anchor.getBoundingClientRect();
+  const width = Math.min(40 * emojis.length + 12, 420);
+  menu.style.left = `${Math.max(8, Math.min(box.left, (globalThis.innerWidth || 800) - width - 8))}px`;
+  menu.style.top = `${box.bottom + 48 > (globalThis.innerHeight || 600) ? Math.max(8, box.top - 48) : box.bottom + 4}px`;
+  document.body.append(menu);
+  menu.querySelector<HTMLElement>('[role="menuitemcheckbox"]')?.focus();
   return menu;
 }

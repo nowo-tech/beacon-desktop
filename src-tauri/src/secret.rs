@@ -286,6 +286,29 @@ pub fn route_of(url: &url::Url, base: &str) -> Route {
     }
 }
 
+/// Whether `s` is a UUID (8-4-4-4-12 hex digits).
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.char_indices().all(|(at, c)| match at {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
+/// `<base>/api/chat/v1/conversations/{uuid}/messages/{uuid}/reactions/{emoji}` exactly (the raw path, one non-empty
+/// emoji segment that is not `.` or `..`): the only route the UI may send `PUT` / `DELETE` to (audit ZDG-L1).
+pub fn is_reaction_path(url: &url::Url, base: &str) -> bool {
+    let Some(rest) = url.path().strip_prefix(&format!("{base}{CHAT_PREFIX}")) else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('/').collect();
+    matches!(
+        parts.as_slice(),
+        ["conversations", conversation, "messages", message, "reactions", emoji]
+            if is_uuid(conversation) && is_uuid(message) && !emoji.is_empty() && *emoji != "." && *emoji != ".."
+    )
+}
+
 /// The scope family of a `device/token` answer (`scopeFamily`, contract v0.5). Absent: `time` (older servers).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
@@ -807,6 +830,11 @@ impl Session {
     /// The route of `url` against the bound server's base path.
     pub fn route(&self, url: &url::Url) -> Result<Route, String> {
         Ok(route_of(url, &self.lock()?.base))
+    }
+
+    /// Whether `url` is the reaction route of the bound server's chat API ([`is_reaction_path`]).
+    pub fn is_reaction_route(&self, url: &url::Url) -> Result<bool, String> {
+        Ok(is_reaction_path(url, &self.lock()?.base))
     }
 
     /// Whether a token is stored (`secret_status`). A keychain that cannot be read is an error.

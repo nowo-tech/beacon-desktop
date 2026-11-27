@@ -3,7 +3,7 @@
  * on a context switch, "Disconnect chat" and sign-out. Bounded so a long session stays within the memory budget:
  * at most {@link MAX_MESSAGES} messages per conversation and {@link MAX_CACHED} conversations with messages loaded.
  */
-import type { Conversation, ConversationsPage, Message, MessagesPage, ThreadPage } from './types';
+import type { Conversation, ConversationsPage, Message, MessagesPage, Reaction, ThreadPage } from './types';
 
 export const MAX_MESSAGES = 600;
 export const MAX_CACHED = 12;
@@ -171,6 +171,45 @@ export class ChatStore {
       if (thread.root.uuid === message.uuid) this.threads.set(root, { ...thread, root: message });
       else if (thread.replies.some((reply) => reply.uuid === message.uuid)) this.threads.set(root, { ...thread, replies: mergeMessages(thread.replies, [message]) });
     }
+  }
+
+  /** A message of `uuid` as loaded (timeline, thread root or reply), or `null`. */
+  findMessage(uuid: string, messageUuid: string): Message | null {
+    const inTimeline = this.timelines.get(uuid)?.messages.find((message) => message.uuid === messageUuid);
+    if (inTimeline !== undefined) return inTimeline;
+    for (const thread of this.threads.values()) {
+      if (thread.root.uuid === messageUuid) return thread.root;
+      const reply = thread.replies.find((message) => message.uuid === messageUuid);
+      if (reply !== undefined) return reply;
+    }
+    return null;
+  }
+
+  /**
+   * Replaces a loaded message's reactions (a reaction write's answer, or its optimistic change) wherever it is shown:
+   * the timeline, a thread root or a thread reply. Never adds a message (a reply never lands in the timeline).
+   */
+  setReactions(uuid: string, messageUuid: string, reactions: Reaction[]): void {
+    const change = (message: Message): Message => (message.uuid === messageUuid ? { ...message, reactions } : message);
+    const timeline = this.timelines.get(uuid);
+    if (timeline?.messages.some((message) => message.uuid === messageUuid) === true) this.timelines.set(uuid, { ...timeline, messages: timeline.messages.map(change) });
+    for (const [root, thread] of this.threads) {
+      if (thread.root.uuid === messageUuid || thread.replies.some((reply) => reply.uuid === messageUuid)) this.threads.set(root, { ...thread, root: change(thread.root), replies: thread.replies.map(change) });
+    }
+  }
+
+  /** A message is in the loaded timeline (`root` null) or in the open thread of `root`. */
+  has(uuid: string, messageUuid: string, root: string | null): boolean {
+    if (root === null) return this.timelines.get(uuid)?.messages.some((message) => message.uuid === messageUuid) === true;
+    return this.threads.get(root)?.replies.some((message) => message.uuid === messageUuid) === true;
+  }
+
+  /** The updated root of a thread reply: replaces it where it is loaded (its reply count), never adds it. */
+  replaceMessage(uuid: string, message: Message): void {
+    const timeline = this.timelines.get(uuid);
+    if (timeline?.messages.some((item) => item.uuid === message.uuid) === true) this.timelines.set(uuid, { ...timeline, messages: timeline.messages.map((item) => (item.uuid === message.uuid ? message : item)) });
+    const thread = this.threads.get(message.uuid);
+    if (thread !== undefined) this.threads.set(message.uuid, { ...thread, root: message, replyCount: Math.max(thread.replyCount, message.thread?.count ?? 0) });
   }
 
   setReadUpTo(uuid: string, readUpTo: number | null): void {

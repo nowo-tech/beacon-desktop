@@ -5,8 +5,9 @@ repository name, secret or release changes with it.
 
 **Implementation status:** BD-1 shipped in 0.9.0. BD-2 (chat read-only) shipped in 0.10.0
 (CHANGELOG `[0.10.0]`). BD-3a (time context, mini timer, required fields, §7.1) shipped in 0.11.0
-(CHANGELOG `[0.11.0]`). Where the build differs from this text: the modules follow the
-approved prototype (Chat `Ctrl/Cmd+1`, Time `Ctrl/Cmd+2`, Tasks off); `GET me` is asked with the last context or
+(CHANGELOG `[0.11.0]`). BD-3b part 1 (chat send, thread replies, reactions, §7.2) shipped in 0.12.0
+(CHANGELOG `[0.12.0]`); notifications, mute and the tasks module follow. Where the build differs from this text: the
+modules follow the approved prototype (Chat `Ctrl/Cmd+1`, Time `Ctrl/Cmd+2`, Tasks off); `GET me` is asked with the last context or
 `personal` (ChatKit needs a context on every request under a context policy) and falls back to `personal` on
 `403 context_forbidden`; the realtime hub must be on the signed-in origin (Beacon's default; another host is refused and
 the app polls); "Disconnect chat" and sign-out call ChatKit 2.4.1 `POST /api/chat/v1/logout` best effort before the
@@ -515,6 +516,39 @@ start / stop / both, inherit the task's last activity type). File inventory:
 | `mock-server/server.mjs` | changed | Context policy, activity types, subjects, `timer/allocate`, `409 activity_type_required`, tasks per context |
 | `src/lib/replay.ts`, `src/lib/queue.ts` | changed (ZCD) | Queued actions carry their context and allocation; replay per context; a replay 409 is kept (`blocked`) |
 | `tests/e2e/bd3a.spec.ts` | new (ZCD) | Two organizations + offline queue; mini timer keyboard focus |
+
+### 7.2 BD-3b, part 1: chat writes (app 0.12.0 candidate)
+
+Send, thread reply and reactions against **ChatKitBundle 2.5** (released; Beacon runs 2.8 with `client_api.writes:
+true` and the `chat` family granting `chat:read chat:write`). Checked against the released sources (ChatKit v2.8.0
+`docs/API.md` → Writes, `docs/openapi/chat-client-v1.yaml` 1.4.0), which differ from §3.2's sketch in two places:
+
+- A thread reply is `POST conversations/{uuid}/messages/{messageUuid}/thread {text}`, not a `threadOf` field.
+- A write body has **one field, `text`** (2.6 adds `cards`, 2.7 `attachments`, both behind `me.features`); any other
+  field is `422 unsupported_field`. Every write needs an `Idempotency-Key` (1–80 of `[A-Za-z0-9_.:-]`), deduplicated
+  per token and conversation for 24 h.
+
+**Not in ChatKit's client API yet** (2.8.0): `PUT` / `DELETE conversations/{uuid}/mute`, `GET notifications/preview/
+{messageUuid}`, the per-organization preview maximum (Q-BD-9) and the Web Push suppression (Q-BD-14). The
+notifications and mute part of BD-3 waits for them (ChatKit + Beacon work); see the open questions of the PR.
+
+Behaviour: feature detection (`me.scopes` has `chat:write`, `me.features.send / threadReply / reactions`, the row's
+`canSend`), one key per write kept until the write is sent or discarded, automatic retries after `429` / `409` (same
+key, at most three), *Retry* (same key) after a network error or a `5xx`, *Edit* / *Discard* after a refusal, no
+offline queue (§3.3), the sent message shown from the write's answer until the catch-up brings it (the timeline is
+never patched directly, so `after=` never skips a message). Drafts and unsent messages are memory only (Q-BD-15).
+
+| File | New / changed | Role |
+|---|---|---|
+| `src/chat/composer.ts` | new | Message box: formatting toolbar (one tab stop), IME-safe Enter, submit button, counter, `field-sizing` with a fallback |
+| `src/chat/markdown.ts` | new | The composer's Markdown subset as `tokens/1` (pending rows; the mock loads the same module) |
+| `src/chat/outbox.ts` | new | Writes in memory: keys, states (sending / waiting / failed / sent), retries, settle after catch-up, optimistic reactions |
+| `src/chat/api.ts`, `src/chat/types.ts` | changed | `send`, `reply`, `react` with `Idempotency-Key`; `me.features` 2.5, `limits.textMaxLength`, `reactions.quick / accepted`, `canSend`, `writeAccess()` |
+| `src/chat/module.ts`, `src/chat/store.ts`, `src/chat/sync.ts` | changed | Composer and thread box, pending rows, reaction toggles, hover toolbar, picker (`E`), reply (`R`), `C`, `Shift+F10`, "Allow sending" |
+| `src/api/client.ts` | changed | "Connect chat" asks for `chat:read chat:write`, falls back to `chat:read` on `invalid_scope` |
+| `src-tauri/src/net.rs`, `src-tauri/src/secret.rs` | changed | `PUT` / `DELETE` only on the anchored reaction route (`is_reaction_path`, audit ZDG-L1); `idempotency-key` request header allowed |
+| `mock-server/chat.mjs`, `mock-server/server.mjs` | changed | Write routes with key replay / mismatch, `read_only`, writes off, read-only chat family |
+| `tests/unit/chat-writes.test.ts`, `tests/unit/shell-writes.test.ts`, `tests/e2e/chat-writes.spec.ts`, `tests/screenshots/bd3b.spec.ts` | new | API, outbox, composer, module, e2e with axe, owner screenshots |
 
 ## 8. Open questions
 

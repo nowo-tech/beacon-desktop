@@ -280,6 +280,32 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .react { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border-radius: 11px; border: 1px solid var(--line); background: var(--surface-2); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; cursor: default; }
 .react.mine { background: var(--moss-soft); border-color: var(--moss); color: var(--moss-strong); }
 .react .e { font-size: 13px; line-height: 1; }
+/* BD-3b: chips are toggles when the reader may react. */
+#mod-chat button.react { cursor: pointer; transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease); }
+#mod-chat button.react:hover { border-color: var(--ink-3); }
+#mod-chat button.react.mine:hover { border-color: var(--moss-strong); }
+#mod-chat .react.add { width: 28px; padding: 0; color: var(--ink-3); opacity: 0; }
+.msg:hover .react.add, .msg:focus-within .react.add, .msg:focus .react.add { opacity: 1; }
+.m-actions { position: absolute; top: -14px; right: 18px; display: flex; gap: 1px; padding: 2px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line-strong); box-shadow: var(--shadow-md); opacity: 0; pointer-events: none; transform: translateY(2px); transition: opacity 120ms var(--ease), transform 120ms var(--ease); z-index: 3; }
+.msg:hover .m-actions, .msg:focus-within .m-actions, .msg:focus .m-actions { opacity: 1; pointer-events: auto; transform: none; }
+.msg:first-child .m-actions, .msg.actions-in .m-actions { top: 4px; }
+#mod-chat .m-act { height: 28px; min-width: 28px; padding: 0 6px; color: var(--ink-2); display: inline-flex; align-items: center; justify-content: center; gap: 5px; font-size: var(--fs-xs); font-weight: 600; }
+#mod-chat .m-act:hover { background: var(--hover); color: var(--ink); }
+.m-act .e { font-size: 15px; line-height: 1; }
+/* Writes that are not on the server yet: quieter until sent; a failed one says why, with Retry / Edit / Discard. */
+.msg.pending.sending .m-body, .msg.pending.waiting .m-body { opacity: 0.62; }
+.m-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; color: var(--ink-3); font-size: var(--fs-xs); }
+.m-status.failed { color: var(--danger); font-weight: 600; }
+.m-status.failed .btn.sm { font-weight: 600; }
+#mod-chat .m-status .btn-quiet { border-color: transparent; background: transparent; color: var(--ink-2); }
+#mod-chat .m-status .btn-quiet:hover { background: var(--hover); }
+.m-status .spin { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--moss); animation: spin 900ms linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.emoji-menu { display: flex; gap: 2px; min-width: 0; }
+.emoji-menu [role='menuitemcheckbox'] { width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--r-sm); font-size: 18px; line-height: 1; }
+.emoji-menu [role='menuitemcheckbox']:hover, .emoji-menu [role='menuitemcheckbox']:focus { background: var(--hover); outline: none; }
+.emoji-menu [role='menuitemcheckbox']:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.emoji-menu [aria-checked='true'] { background: var(--moss-soft); box-shadow: inset 0 0 0 1px var(--moss-line); }
 #mod-chat .thread-link { display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; padding: 3px 8px 3px 6px; border: 1px solid transparent; color: var(--moss); font-size: var(--fs-sm); font-weight: 600; }
 #mod-chat .thread-link:hover { border-color: var(--line); background: var(--surface); }
 .thread-link .tl-meta { color: var(--ink-3); font-weight: 400; font-size: var(--fs-xs); }
@@ -299,6 +325,28 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .ch-foot { flex: none; padding: 8px 20px 12px; }
 .ch-foot[hidden] { display: none; }
 .readonly-note { margin: 0; display: flex; align-items: center; gap: 6px; padding: 10px 12px; border: 1px dashed var(--line-strong); border-radius: var(--r-md); color: var(--ink-3); font-size: var(--fs-sm); background: var(--surface-2); }
+.readonly-note.approve { color: var(--ink-2); border-style: solid; border-color: var(--moss-line); background: var(--moss-soft); }
+.readonly-note.approve span { flex: 1; }
+
+/* ---------- Composer (BD-3b, prototype) ---------- */
+.composer { border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--surface); position: relative; transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+.composer:focus-within { border-color: var(--ink-3); box-shadow: 0 0 0 3px color-mix(in srgb, var(--moss) 16%, transparent); }
+.composer .fmt { display: flex; align-items: center; gap: 1px; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+#mod-chat .composer .fmt button { width: 28px; height: 26px; border-radius: var(--r-xs); color: var(--ink-3); display: grid; place-items: center; }
+#mod-chat .composer .fmt button:hover { background: var(--hover); color: var(--ink); }
+.composer .fmt .sep { width: 1px; height: 16px; background: var(--line); margin: 0 4px; }
+.composer .c-field { display: block; box-sizing: border-box; width: 100%; border: 0; resize: none; outline: none; background: transparent; padding: 10px 12px 4px; margin: 0; font: inherit; font-size: var(--fs-md); line-height: 1.5; color: var(--ink); field-sizing: content; min-block-size: calc(1lh + 14px); max-block-size: 180px; overflow-y: auto; }
+.composer .c-field::placeholder { color: var(--ink-3); opacity: 1; }
+.composer .c-field[aria-invalid='true'] { color: var(--ink); }
+.composer .c-foot { display: flex; align-items: center; gap: 8px; padding: 4px 6px 6px 12px; }
+.composer .hint { flex: 1; min-width: 0; color: var(--ink-3); font-size: var(--fs-2xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.composer .count { font-size: var(--fs-2xs); color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.composer .count.over { color: var(--danger); font-weight: 700; }
+#mod-chat .composer .send { width: 32px; height: 28px; border-radius: var(--r-sm); background: var(--moss); color: var(--on-moss); display: grid; place-items: center; transition: background var(--dur) var(--ease); }
+#mod-chat .composer .send:hover { background: var(--moss-strong); }
+#mod-chat .composer .send[disabled] { background: var(--surface-3); color: var(--ink-3); cursor: default; }
+.th-foot { padding: 8px 16px 12px; border-top: 1px solid var(--line); }
+.th-foot .composer-wrap { padding: 0; }
 #mod-chat .new-pill { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 14px; background: var(--moss); color: var(--on-moss); font-size: var(--fs-xs); font-weight: 600; box-shadow: var(--shadow-md); animation: fade 160ms var(--ease); }
 .new-pill[hidden] { display: none !important; }
 .empty-li { list-style: none; }
@@ -308,7 +356,10 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 
 /* ---------- Thread panel ---------- */
 .thread-slot { display: contents; }
-.thread { position: relative; border-left: 1px solid var(--line); background: var(--surface); display: grid; grid-template-rows: 52px auto auto minmax(0, 1fr); min-height: 0; height: 100%; animation: slide-in 180ms var(--ease); }
+.thread { position: relative; border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; height: 100%; animation: slide-in 180ms var(--ease); }
+.thread > .th-head { flex: none; height: 52px; }
+.thread > .th-root, .thread > .th-count, .thread > .th-foot { flex: none; }
+.thread > .msgs { flex: 1 1 auto; }
 @keyframes slide-in { from { transform: translateX(16px); opacity: 0; } to { transform: none; opacity: 1; } }
 .th-resize { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 2; }
 .th-resize:hover, .th-resize:focus-visible { background: color-mix(in srgb, var(--moss) 35%, transparent); outline: none; }

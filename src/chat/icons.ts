@@ -39,6 +39,16 @@ const ICONS = {
   expand: [['path', 'M14 4.5h5.5V10M19.5 4.5 13 11M10 19.5H4.5V14M4.5 19.5 11 13']],
   pip: [['rect', 3, 5, 18, 14, 2], ['rect', 12, 12, 6.5, 4.5, 1]],
   refresh: [['path', 'M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5V9H15']],
+  smile: [['circle', 12, 12, 8.5], ['path', 'M8.5 14a4 4 0 0 0 7 0M9 9.5h.01M15 9.5h.01']],
+  more: [['circle', 6, 12, 1.2], ['circle', 12, 12, 1.2], ['circle', 18, 12, 1.2]],
+  bold: [['path', 'M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z']],
+  italic: [['path', 'M10 5h8M6 19h8M14 5l-4 14']],
+  code: [['path', 'm9 7-5 5 5 5M15 7l5 5-5 5']],
+  codeblock: [['rect', 3.5, 4.5, 17, 15, 2], ['path', 'm9.5 10-2 2 2 2M14.5 10l2 2-2 2']],
+  list: [['path', 'M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01']],
+  link: [['path', 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1']],
+  send: [['path', 'M4.5 12 19.5 5l-4 14-3.5-5.5zM12 13.5 19.5 5']],
+  alert: [['circle', 12, 12, 8.5], ['path', 'M12 7.5v5M12 16h.01']],
 } satisfies Record<string, Shape[]>;
 
 export type ChatIconName = keyof typeof ICONS;

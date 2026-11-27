@@ -29,13 +29,34 @@ use crate::secret::{self, blocking, Authorization, Session};
 const MAX_BODY: usize = 32 * 1024 * 1024;
 
 /// Request headers the UI may set; anything else is dropped. Never `authorization`: Rust sets it (`auth`).
-/// `x-beacon-context` names the tenant of a chat request (`personal` / `org:<uuid>`, design §4.4, BD-2).
+/// `x-beacon-context` names the tenant of a chat request (`personal` / `org:<uuid>`, design §4.4, BD-2);
+/// `idempotency-key` names one chat write (ChatKit 2.5, BD-3b), so a retry is never written twice.
 const ALLOWED_HEADERS: &[&str] = &[
     "accept",
     "accept-language",
     "content-type",
+    "idempotency-key",
     "x-beacon-context",
 ];
+
+/// The method of a UI request. `GET` and `POST` go anywhere on the bound origin; `PUT` and `DELETE` only to the chat
+/// reaction route (`…/api/chat/v1/conversations/{uuid}/messages/{uuid}/reactions/{emoji}`, ChatKit 2.5), where the chat
+/// token, never the time token, is attached. Deny by default (audit ZDG-L1): no other route takes them, and `PATCH`
+/// (message edits) is not sent by this version. Anything else is refused.
+fn method_of(method: &str, reaction_route: bool) -> Result<reqwest::Method, String> {
+    let method = match method.to_ascii_uppercase().as_str() {
+        "GET" => return Ok(reqwest::Method::GET),
+        "POST" => return Ok(reqwest::Method::POST),
+        "PUT" => reqwest::Method::PUT,
+        "DELETE" => reqwest::Method::DELETE,
+        _ => return Err("method not allowed".into()),
+    };
+    if reaction_route {
+        Ok(method)
+    } else {
+        Err("method not allowed".into())
+    }
+}
 
 /// A sign-in or "Connect chat" answer whose token was stored: its origin, the notification language and which token.
 #[derive(Debug, PartialEq, Eq)]
@@ -215,11 +236,9 @@ pub async fn send_and_capture(
     if secret::obfuscated_path(&url) {
         return Err("invalid URL".into());
     }
-    let method = match request.method.to_ascii_uppercase().as_str() {
-        "GET" => reqwest::Method::GET,
-        "POST" => reqwest::Method::POST,
-        _ => return Err("method not allowed".into()),
-    };
+    let reaction_route =
+        session.route(&url)? == secret::Route::Chat && session.is_reaction_route(&url)?;
+    let method = method_of(&request.method, reaction_route)?;
     let mut headers = HeaderMap::new();
     for (name, value) in &request.headers {
         let name = name.to_ascii_lowercase();
@@ -662,6 +681,123 @@ mod tests {
             auth: false,
         };
         assert!(send(&client, bad_header, &example).await.is_err());
+    }
+
+    #[test]
+    fn write_methods_reach_the_reaction_route_only() {
+        for method in ["GET", "get", "POST"] {
+            assert!(method_of(method, true).is_ok(), "{method}");
+            assert!(method_of(method, false).is_ok(), "{method}");
+        }
+        for method in ["PUT", "delete"] {
+            assert!(method_of(method, true).is_ok(), "{method}");
+            assert!(method_of(method, false).is_err(), "{method}");
+        }
+        // PATCH (message edits) is not sent by this version (audit ZDG-L1).
+        for method in ["PATCH", "OPTIONS", "HEAD", "TRACE", "CONNECT", ""] {
+            assert!(method_of(method, true).is_err(), "{method}");
+        }
+        const C: &str = "0c000000-0000-4000-8000-000000000001";
+        const M: &str = "0c000000-0000-4000-8000-00000000000a";
+        let url =
+            |path: &str| url::Url::parse(&format!("https://beacon.example.com{path}")).unwrap();
+        let reaction =
+            format!("/api/chat/v1/conversations/{C}/messages/{M}/reactions/%F0%9F%91%8D");
+        assert!(secret::is_reaction_path(&url(&reaction), ""));
+        assert!(secret::is_reaction_path(
+            &url(&format!("/beacon{reaction}")),
+            "/beacon"
+        ));
+        for path in [
+            format!("/api/chat/v1/conversations/{C}/messages/{M}"),
+            format!("/api/chat/v1/conversations/{C}/messages/{M}/reactions/"),
+            format!("/api/chat/v1/conversations/{C}/messages/{M}/reactions/a/b"),
+            format!("/api/chat/v1/conversations/{C}/messages/{M}/thread"),
+            format!("/api/chat/v1/conversations/{C}/mute"),
+            format!("/api/chat/v1/conversations/x/messages/{M}/reactions/a"),
+            format!("/api/chat/v1/conversations/{C}/messages/not-a-uuid/reactions/a"),
+            format!("/other/api/chat/v1/conversations/{C}/messages/{M}/reactions/a"),
+            "/api/time-track/timer/1".to_string(),
+        ] {
+            assert!(!secret::is_reaction_path(&url(&path), ""), "{path}");
+        }
+        // `..` as the emoji: the URL parser resolves it to the message route, which is not the reaction route.
+        assert!(!secret::is_reaction_path(
+            &url(&format!(
+                "/api/chat/v1/conversations/{C}/messages/{M}/reactions/.."
+            )),
+            ""
+        ));
+    }
+
+    #[tokio::test]
+    async fn chat_writes_carry_the_chat_token_and_the_idempotency_key() {
+        let ca = TestCa::new("E2E Root");
+        let (leaf, key) = ca.leaf(HOST);
+        let (port, seen) =
+            mock_server_with(vec![leaf], &key, 1, r#"{"reactions":[],"replayed":false}"#);
+        let client = client_for(
+            ca.roots(),
+            pin_set(&[HOST], &[&ca.spki_pin], "2999-01-01"),
+            port,
+        );
+        let origin = origin_of(port);
+        let session = Arc::new(
+            Session::with_timing(
+                Box::new(MemoryStore::with(&origin, "secret-token")),
+                secret::SIGN_IN_WINDOW,
+                std::time::Duration::ZERO,
+            )
+            .with_chat_store(Box::new(MemoryStore::with(&origin, "chat-secret"))),
+        );
+        session.bind(&url::Url::parse(&origin).unwrap()).unwrap();
+        let path = "/api/chat/v1/conversations/0c000000-0000-4000-8000-000000000001/messages/0c000000-0000-4000-8000-000000000002/reactions/%F0%9F%91%8D";
+        let write = FetchRequest {
+            url: format!("{origin}{path}"),
+            method: "PUT".into(),
+            headers: vec![
+                ("Accept".into(), "application/json".into()),
+                ("Idempotency-Key".into(), "k-1".into()),
+                ("X-Beacon-Context".into(), "personal".into()),
+            ],
+            body: None,
+            auth: true,
+        };
+        let response = send(&client, write, &session).await.unwrap();
+        assert_eq!(response.status, 200);
+        let head = seen.recv().unwrap().to_ascii_lowercase();
+        assert!(head.starts_with("put /api/chat/v1/"), "{head}");
+        assert!(head.contains("idempotency-key: k-1"), "{head}");
+        assert!(head.contains("authorization: bearer chat-secret"), "{head}");
+        assert!(!head.contains("secret-token"), "{head}");
+        // The time API never takes a write method, whatever the UI asks.
+        let time = FetchRequest {
+            url: format!("{origin}/api/time-track/timer/1"),
+            method: "DELETE".into(),
+            headers: vec![],
+            body: None,
+            auth: true,
+        };
+        assert_eq!(
+            send(&client, time, &session).await.unwrap_err(),
+            "method not allowed"
+        );
+        // Nor any other chat route: deleting or editing a message is not a write of this version (ZDG-L1).
+        let message = "/api/chat/v1/conversations/0c000000-0000-4000-8000-000000000001/messages/0c000000-0000-4000-8000-000000000002";
+        for (method, target) in [("DELETE", message), ("PATCH", message), ("PATCH", path)] {
+            let request = FetchRequest {
+                url: format!("{origin}{target}"),
+                method: method.into(),
+                headers: vec![],
+                body: None,
+                auth: true,
+            };
+            assert_eq!(
+                send(&client, request, &session).await.unwrap_err(),
+                "method not allowed",
+                "{method} {target}"
+            );
+        }
     }
 
     #[tokio::test]

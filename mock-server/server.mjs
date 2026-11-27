@@ -160,8 +160,8 @@ export function createMockServer(options = {}) {
     if (origin && (allowedOrigins === null || allowedOrigins.includes(origin))) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept, X-Beacon-Context');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept, X-Beacon-Context, Idempotency-Key');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
       res.setHeader('Access-Control-Expose-Headers', 'Retry-After, Content-Disposition, X-Min-Supported-Version');
       res.setHeader('Access-Control-Max-Age', '600');
     }
@@ -648,7 +648,7 @@ export function createMockServer(options = {}) {
         // Contract v0.5: `family` (time by default; `chat` with chat scopes); a Bearer of a token the device holds
         // chains the request (only that token's owner may approve it).
         const family = body.family ?? 'time';
-        const known = family === 'chat' ? CHAT_SCOPES : state.config.meetingsScope ? [...ALL_SCOPES, MEETINGS_SCOPE] : ALL_SCOPES;
+        const known = family === 'chat' ? (state.config.chatReadOnlyFamily ? ['chat:read'] : CHAT_SCOPES) : state.config.meetingsScope ? [...ALL_SCOPES, MEETINGS_SCOPE] : ALL_SCOPES;
         const scopes = body.scopes ?? [...ALL_SCOPES];
         if (!['time', 'chat'].includes(family) || !Array.isArray(scopes) || scopes.length === 0 || scopes.some((scope) => !known.includes(scope))) {
           return error(res, 400, 'invalid_scope', 'Unknown or empty scope list.');
@@ -813,7 +813,7 @@ export function createMockServer(options = {}) {
   const server = createServer(async (req, res) => {
     cors(req, res);
     const url = new URL(req.url ?? '/', 'http://localhost');
-    const raw = req.method === 'POST' ? await readBody(req) : '';
+    const raw = req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' ? await readBody(req) : '';
     if (req.method === 'OPTIONS') {
       return send(res, 204);
     }
