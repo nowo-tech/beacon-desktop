@@ -160,12 +160,14 @@ test('reduced motion: toasts and strips do not animate', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   const names = await page.evaluate(() => {
-    const strip = document.createElement('div');
-    strip.className = 'status-strip';
-    strip.innerHTML = '<div class="ss-box warn">x</div>';
-    const toasts = document.createElement('div');
-    toasts.className = 'undo-toasts';
-    toasts.innerHTML = '<ol class="ut-list"><li class="ut">y</li></ol>';
+    const make = (tag: string, className: string, ...children: Element[]) => {
+      const node = document.createElement(tag);
+      node.className = className;
+      node.append(...children);
+      return node;
+    };
+    const strip = make('div', 'status-strip', make('div', 'ss-box warn'));
+    const toasts = make('div', 'undo-toasts', make('ol', 'ut-list', make('li', 'ut')));
     document.body.append(strip, toasts);
     return [getComputedStyle(strip.firstElementChild as Element).animationName, getComputedStyle(toasts.querySelector('.ut') as Element).animationName];
   });
