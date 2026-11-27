@@ -86,6 +86,8 @@ export interface TrayMenu {
    */
   meetingsLabel?: string | null;
   meetings?: TrayMenuItem[];
+  /** Chat (BD-3b): "Open chat" (`open-chat`) and "Pause / Resume chat notifications" (`pause-chat` / `resume-chat`). */
+  chat?: TrayMenuItem[];
   settings: string;
   quit: string;
 }
@@ -117,6 +119,15 @@ export interface FriendlyNotification {
   action?: NotificationAction | null;
   /** Up to two buttons ("Working without a timer?"); the host drops unknown ids. */
   actions?: NotificationAction[];
+  /** What a click on the notification itself opens (`chat-open:<uuid>`, BD-3b); the host drops anything else. */
+  click?: string | null;
+}
+
+/** A `beacon-desktop://` link, as the host parsed it (src-tauri/src/deeplink.rs): ids and a context key only. */
+export interface DeepLink {
+  kind: 'chat' | 'task';
+  id: string;
+  context: string | null;
 }
 
 /** `unsupported`: the host has no desktop notifications (plain browser). */
@@ -343,6 +354,10 @@ export interface Platform {
   onSessionEvent(handler: (event: SessionEvent) => void): void;
   /** A tray menu item was chosen (see `TrayMenu`). */
   onTray(handler: (action: string) => void): void;
+  /** The `beacon-desktop://` link the app was opened with before the UI listened (taken once). */
+  takeDeepLink(): Promise<DeepLink | null>;
+  /** A `beacon-desktop://` link opened while the app runs (the window is already shown). */
+  onDeepLink(handler: (link: DeepLink) => void): void;
 }
 
 /** Test / development hooks of the browser fallback (set from Playwright through `window.__timeTrack`). */
@@ -439,6 +454,9 @@ export interface BrowserHooks {
   /** The fake OS locks / unlocks the screen or sleeps / wakes. */
   sessionEvent(event: SessionEvent): void;
   trayAction(action: string): void;
+  /** The fake OS opens a `beacon-desktop://` link (already parsed, as the host would); before the UI runs: pending. */
+  deepLink(link: DeepLink): void;
+  pendingDeepLink: DeepLink | null;
   /** The fake heartbeat fires. */
   wake(reason?: WakeReason): void;
   /** The button of a fake notification is pressed. */
@@ -466,6 +484,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
   const micHandlers: ((signal: unknown) => void)[] = [];
   const hintHandlers: ((hint: unknown) => void)[] = [];
   const modeHandlers: ((mode: ChatRealtimeMode) => void)[] = [];
+  const linkHandlers: ((link: DeepLink) => void)[] = [];
   const hooks: BrowserHooks = {
     chatToken: null,
     chatConnectBegins: 0,
@@ -533,6 +552,11 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     resumeShortcutPressed: () => resumeHandlers.forEach((handler) => handler()),
     sessionEvent: (event) => sessionHandlers.forEach((handler) => handler(event)),
     trayAction: (action) => trayHandlers.forEach((handler) => handler(action)),
+    pendingDeepLink: null,
+    deepLink: (link) => {
+      if (linkHandlers.length === 0) hooks.pendingDeepLink = link;
+      linkHandlers.forEach((handler) => handler(link));
+    },
     wake: (reason = 'tick') => wakeHandlers.forEach((handler) => handler(reason)),
     notificationAction: (id) => actionHandlers.forEach((handler) => handler(id)),
     answerPrompt: (answer) => answerHandlers.forEach((handler) => handler(answer)),
@@ -723,6 +747,12 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     onResumeShortcut: (handler) => void resumeHandlers.push(handler),
     onSessionEvent: (handler) => void sessionHandlers.push(handler),
     onTray: (handler) => void trayHandlers.push(handler),
+    takeDeepLink: async () => {
+      const link = hooks.pendingDeepLink;
+      hooks.pendingDeepLink = null;
+      return link;
+    },
+    onDeepLink: (handler) => void linkHandlers.push(handler),
   };
 }
 

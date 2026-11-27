@@ -33,6 +33,10 @@ pub struct FriendlyNote {
     /// More buttons ("Working without a timer?": Start last, Choose task); absent from older UIs.
     #[serde(default)]
     pub actions: Vec<NoteAction>,
+    /// What a click on the notification itself opens (BD-3b chat notifications): `chat-open:<uuid>` only, sent back
+    /// as a `notification-action`; anything else, or nothing, just brings the main window forward.
+    #[serde(default)]
+    pub click: Option<String>,
 }
 
 /// A notification button: what it sends back (`id`) and its translated label.
@@ -79,7 +83,31 @@ pub fn known_action(id: &str) -> bool {
 /// Whether pressing the button brings the window forward: the task picker, and "Track the meeting" (it may need the
 /// picker when the meeting has no linked task).
 fn shows_window(id: &str) -> bool {
-    SHOWS_WINDOW.contains(&id) || meeting_action(id) == Some("track")
+    SHOWS_WINDOW.contains(&id) || meeting_action(id) == Some("track") || chat_click(id)
+}
+
+/// A chat notification's click target: `chat-open:` and a conversation UUID (an id, never content).
+pub fn chat_click(id: &str) -> bool {
+    id.strip_prefix("chat-open:").is_some_and(|uuid| {
+        uuid.len() == 36
+            && uuid.char_indices().all(|(at, c)| match at {
+                8 | 13 | 18 | 23 => c == '-',
+                _ => c.is_ascii_hexdigit(),
+            })
+    })
+}
+
+/// The note's click target when it is a valid one ([`chat_click`]).
+pub fn checked_click(note: &FriendlyNote) -> Option<String> {
+    note.click.clone().filter(|id| chat_click(id))
+}
+
+/// A click on the notification itself: its target (window shown, the UI opens it) or just the window.
+fn clicked(app: &AppHandle, click: Option<&str>) {
+    match click {
+        Some(id) => dispatch(app, id),
+        None => crate::show_main(app),
+    }
 }
 /// At most this many buttons on one notification.
 pub const MAX_ACTIONS: usize = 2;
@@ -254,7 +282,14 @@ pub fn show(app: &AppHandle, note: &FriendlyNote) -> Result<(), String> {
         (Some(id), Some(cache)) => pose_file(&cache, id),
         _ => None,
     };
-    platform::show(app, &title, &body, image.as_deref(), checked_actions(note))
+    platform::show(
+        app,
+        &title,
+        &body,
+        image.as_deref(),
+        checked_actions(note),
+        checked_click(note),
+    )
 }
 
 #[cfg(windows)]
@@ -268,6 +303,7 @@ mod platform {
         body: &str,
         image: Option<&Path>,
         actions: Vec<NoteAction>,
+        click: Option<String>,
     ) -> Result<(), String> {
         let exe = tauri::utils::platform::current_exe().map_err(|e| e.to_string())?;
         let aumid = windows_aumid(&exe, &app.config().identifier)
@@ -288,7 +324,7 @@ mod platform {
                     .and_then(|pressed| ids.iter().find(|id| *id == pressed))
                 {
                     Some(id) => dispatch(&handle, id),
-                    None => crate::show_main(&handle),
+                    None => clicked(&handle, click.as_deref()),
                 }
                 Ok(())
             })
@@ -307,6 +343,7 @@ mod platform {
         body: &str,
         image: Option<&Path>,
         actions: Vec<NoteAction>,
+        click: Option<String>,
     ) -> Result<(), String> {
         #[cfg(not(target_os = "macos"))]
         let body = &escape_markup(body);
@@ -355,7 +392,7 @@ mod platform {
                     if let Some(action) = pressed(response, &actions) {
                         dispatch(&app, &action.id);
                     } else if is_click(response) {
-                        crate::show_main(&app);
+                        clicked(&app, click.as_deref());
                     }
                 });
             })
@@ -367,6 +404,36 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chat_click_target_is_a_conversation_uuid_only() {
+        let note = |click: Option<&str>| FriendlyNote {
+            title: "Beacon Desktop".into(),
+            body: "New message in Beacon".into(),
+            pose: None,
+            action: None,
+            actions: vec![],
+            click: click.map(str::to_string),
+        };
+        let uuid = "chat-open:0c000000-0000-4000-8000-000000000001";
+        assert_eq!(checked_click(&note(Some(uuid))).as_deref(), Some(uuid));
+        assert!(shows_window(uuid));
+        for bad in [
+            "chat-open:",
+            "chat-open:../x",
+            "chat-open:0c000000-0000-4000-8000-00000000000g",
+            "chat-open:0c000000x0000-4000-8000-000000000001",
+            "schedule-stop",
+            "https://evil.example",
+        ] {
+            assert_eq!(checked_click(&note(Some(bad))), None, "{bad}");
+        }
+        assert_eq!(checked_click(&note(None)), None);
+        // An old UI without `click` still deserialises.
+        let old: FriendlyNote =
+            serde_json::from_str(r#"{"title":"t","body":"b","pose":null}"#).unwrap();
+        assert!(old.click.is_none());
+    }
 
     #[test]
     fn every_listed_pose_has_a_square_png_and_nothing_else_does() {
@@ -471,6 +538,7 @@ mod tests {
                 label: label.into(),
             }),
             actions: Vec::new(),
+            click: None,
         };
         assert_eq!(
             checked_action(&note("schedule-stop", " Parar\n")),

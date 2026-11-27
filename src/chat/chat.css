@@ -542,3 +542,11 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 @media (prefers-reduced-motion: reduce) {
   .mini-timer .tp-dot { animation: none; }
 }
+
+/* ---------- Notifications opt-in (BD-3b, prototype .notif-ask) ---------- */
+.ch-ask[hidden] { display: none; }
+.notif-ask { margin: 12px 20px 4px; border: 1px solid var(--moss-line); background: var(--moss-soft); border-radius: var(--r-md); padding: 12px 14px; display: flex; gap: 12px; align-items: flex-start; }
+.notif-ask .na-ico { width: 32px; height: 32px; border-radius: var(--r-sm); background: var(--surface); color: var(--moss); display: grid; place-items: center; flex: none; }
+.notif-ask h3 { margin: 0 0 2px; font-size: var(--fs-md); color: var(--ink); }
+.notif-ask p { margin: 0 0 8px; color: var(--ink-2); font-size: var(--fs-sm); }
+.notif-ask .row { display: flex; gap: 6px; flex-wrap: wrap; }

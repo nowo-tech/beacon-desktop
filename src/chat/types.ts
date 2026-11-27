@@ -60,6 +60,8 @@ export interface Conversation {
   lastMessageAt: string;
   lastMessageId: number | null;
   preview: string | null;
+  /** The newest message is the reader's own (never notified). */
+  lastMine: boolean;
   ticketStatus: string | null;
   /** The reader may post here (`false`: read-only channel, blocked direct message, closed ticket). */
   canSend: boolean;
@@ -259,6 +261,7 @@ export function parseConversation(raw: unknown): Conversation | null {
     lastMessageAt: str(raw.lastMessageAt),
     lastMessageId: intOrNull(raw.lastMessageId),
     preview: last !== null && !bool(last.deleted) ? strOrNull(last.preview) : null,
+    lastMine: last !== null && bool(last.mine),
     ticketStatus: ticket !== null ? strOrNull(ticket.statusLabel) : null,
     // Older servers (2.4) send no `canSend`: they offer no writes either, so `true` changes nothing there.
     canSend: raw.canSend !== false && !(ticket !== null && ticket.readOnly === true),

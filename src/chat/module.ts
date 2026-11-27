@@ -50,6 +50,10 @@ export interface ChatModuleDeps {
   preferredContext?(): string | null;
   /** A slot at the sidebar's foot for the running timer ("title bar + sidebar"). */
   sidebarTimer(): HTMLElement | null;
+  /** The conversation list changed (BD-3b notifications): every row of the context and the one being read. */
+  onList?(rows: Conversation[], open: string | null): void;
+  /** The opt-in card for notifications (first Chat visit), or `null`. */
+  notifyCard?(): HTMLElement | null;
   clock?: SyncClock;
   now?: () => Date;
   /** Device-flow sleep (tests shorten it). */
@@ -120,6 +124,7 @@ export class ChatModule {
   private readonly pill: HTMLButtonElement;
   private readonly head: HTMLElement;
   private readonly banner: HTMLElement;
+  private readonly ask: HTMLElement;
   private readonly foot: HTMLElement;
   private prefs: ViewPrefs;
   private readonly history = new History();
@@ -156,12 +161,13 @@ export class ChatModule {
     this.side = h('aside', { class: 'side', id: 'chat-side', attrs: { 'aria-label': deps.t('conversations') } });
     this.head = h('header', { class: 'ch-head', id: 'chat-head' });
     this.banner = h('div', { class: 'ch-banner', id: 'chat-banner', attrs: { role: 'status', 'aria-live': 'polite' } });
+    this.ask = h('div', { class: 'ch-ask', id: 'chat-ask' });
     this.list = h('ul', { class: 'msg-list', id: 'msg-list', attrs: { role: 'list' } });
     this.scroller = h('div', { class: 'msgs', id: 'msg-scroll', attrs: { tabindex: '-1', role: 'region' } }, this.list);
     this.pill = h('button', { class: 'new-pill', id: 'new-pill', attrs: { type: 'button', hidden: true } });
     this.pill.addEventListener('click', () => this.scrollToBottom(true));
     this.foot = h('div', { class: 'ch-foot', id: 'chat-foot' });
-    this.main = h('div', { class: 'chat-main', id: 'chat-main' }, this.head, this.banner, h('div', { class: 'msgs-wrap' }, this.scroller, this.pill), this.foot);
+    this.main = h('div', { class: 'chat-main', id: 'chat-main' }, this.head, this.ask, this.banner, h('div', { class: 'msgs-wrap' }, this.scroller, this.pill), this.foot);
     this.threadSlot = h('div', { class: 'thread-slot', id: 'thread-slot' });
     this.root = h('div', { class: 'chat', id: 'chat' }, this.side, this.main, this.threadSlot);
     this.scroller.addEventListener('scroll', () => this.onScroll(), { passive: true });
@@ -716,6 +722,7 @@ export class ChatModule {
       this.renderHead();
       const store = this.sync?.store;
       if (store !== undefined) this.deps.onUnread(store.badgeCount(this.clock.now()), store.unreadTotalCapped);
+      if (store !== undefined && store.loaded) this.deps.onList?.(store.conversations(), this.openUuid());
     } else if (scope === 'messages') {
       const open = this.openUuid();
       if (open !== null) this.outbox?.settle(open);
@@ -801,10 +808,18 @@ export class ChatModule {
     if (this.root.firstChild !== this.side) this.root.replaceChildren(this.side, this.main, this.threadSlot);
     this.renderSide();
     this.renderHead();
+    this.renderAsk();
     this.renderBanner();
     this.renderMessages();
     this.renderFoot();
     this.renderThread();
+  }
+
+  /** The notifications opt-in card (from the shell), above the timeline. */
+  renderAsk(): void {
+    const card = this.connected ? (this.deps.notifyCard?.() ?? null) : null;
+    this.ask.replaceChildren(...(card === null ? [] : [card]));
+    this.ask.hidden = card === null;
   }
 
   private renderConnect(): HTMLElement {

@@ -109,7 +109,7 @@ import { type DaySpan, todaySpans, weekByTask, weekDays } from '../lib/week';
 import { askNote, callMinutes, endedNote, finishMeeting, ignoreCall, inCall, MEETING_ACTION_IDS, meetingActionOfId, meetingCandidates, type MeetingNote, type MicSignal, MIC_POLL_SECONDS, NO_MEETING, observeMic, parseMicSignal, searchTasks, type TaskRef, tracking, withinWorkingDay } from '../lib/meetings';
 import type { MeetingAction } from '../lib/messages/types';
 import { meetingStatus, type PickerMode, renderMeetingSettings, renderMeetingToast } from './meetings';
-import type { ConnectionSecurity, FriendlyNotification, Platform, SessionEvent, ShortcutSlot, TrayMenu, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
+import type { ConnectionSecurity, FriendlyNotification, Platform, SessionEvent, ShortcutSlot, TrayMenu, TrayMenuItem, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
 import { art, emptyArt, ERROR_POSES, moment, poseArt, variant, type Moment } from './mascot';
@@ -175,6 +175,8 @@ export interface AppDeps {
   askAllocation?: (request: AllocationRequest) => Promise<Allocation | null>;
   /** The time API answered `403 context_forbidden` for this context (it now uses Personal): the shell follows. */
   onContextRefused?: (context: string) => void;
+  /** The shell's chat items of the tray menu ("Open chat", pause / resume chat notifications; BD-3b). */
+  trayChat?: () => TrayMenuItem[];
 }
 
 /** What `stop()` did: stopped (or queued offline), cancelled in the fields dialog, failed, or nothing was running. */
@@ -2525,6 +2527,7 @@ export class DesktopApp {
           ? { id: 'resume-friendly', label: t('trayFriendlyPaused', { time: this.time(this.state.messages.pausedUntil as string) }) }
           : { id: 'pause-friendly', label: t('trayPauseFriendly') },
       ...this.trayMeetings(),
+      ...(signedIn && this.deps.trayChat !== undefined ? { chat: this.deps.trayChat() } : {}),
       settings: t('traySettings'),
       quit: t('trayQuit'),
     };

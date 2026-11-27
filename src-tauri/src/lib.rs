@@ -11,6 +11,7 @@
 
 mod autostart;
 mod browser;
+mod deeplink;
 mod heartbeat;
 mod meeting;
 mod mini;
@@ -100,6 +101,10 @@ struct TrayMenuSpec {
     /// "Full view" (`layout-full`) or "Compact view" (`layout-compact`): the other view; absent while signed out.
     #[serde(default)]
     layout: Option<TrayMenuItem>,
+    /// Chat (BD-3b): "Open chat" (`open-chat`, with the unread count in its label) and "Pause chat notifications" /
+    /// "Resume chat notifications" (`pause-chat` / `resume-chat`); absent from older UIs and while chat is off.
+    #[serde(default)]
+    chat: Vec<TrayMenuItem>,
     open_beacon: Option<String>,
     my_time: Option<String>,
     /// "Check for updates" (absent in the Microsoft Store build, where the Store updates the app).
@@ -169,6 +174,9 @@ fn tray_action_allowed(id: &str) -> bool {
             | "resume-friendly"
             | "layout-full"
             | "layout-compact"
+            | "open-chat"
+            | "pause-chat"
+            | "resume-chat"
     ) || (id.starts_with("switch:") && id.len() > 7 && id.len() <= 200)
         || tray_meeting_id(id)
 }
@@ -420,6 +428,19 @@ fn set_tray_menu(app: AppHandle, window: tauri::Window, menu: TrayMenuSpec) -> R
     built
         .append(&MenuItem::with_id(&app, "open", &menu.open, true, None::<&str>).map_err(err)?)
         .map_err(err)?;
+    for item in menu
+        .chat
+        .into_iter()
+        .filter(|item| matches!(item.id.as_str(), "open-chat" | "pause-chat" | "resume-chat"))
+        .take(2)
+    {
+        built
+            .append(
+                &MenuItem::with_id(&app, item.id, menu_label(&item.label), true, None::<&str>)
+                    .map_err(err)?,
+            )
+            .map_err(err)?;
+    }
     if let Some(item) = menu.layout.filter(|item| tray_action_allowed(&item.id)) {
         built
             .append(
@@ -1069,7 +1090,12 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                     // A meeting of *Today* opens the window too (its *Join* button and the list are there).
                     if matches!(
                         id,
-                        "search" | "settings" | "check-updates" | "layout-full" | "layout-compact"
+                        "search"
+                            | "settings"
+                            | "check-updates"
+                            | "layout-full"
+                            | "layout-compact"
+                            | "open-chat"
                     ) || tray_meeting_id(id)
                     {
                         show_main(app);
@@ -1186,6 +1212,8 @@ pub fn run() {
         builder.plugin(tauri_plugin_updater::Builder::new().build())
     };
     builder
+        // `beacon-desktop://` links (deeplink.rs); after the single instance, which forwards them to this app.
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -1233,6 +1261,7 @@ pub fn run() {
             app.manage(MainFocus::default());
             app.manage(prompt::PromptState::default());
             app.manage(mini::MiniState::default());
+            app.manage(deeplink::Pending::default());
             // The pause after a declined sign-in survives a restart (audit GO-I2).
             // Time token (`session-token`), chat token (`chat-token`, BD-2) and tasks token (`tasks-token`, BD-3b):
             // three entries of the same service.
@@ -1253,6 +1282,24 @@ pub fn run() {
             spawn_heartbeat(app.handle().clone());
             // Screen lock / sleep events for "Pause on lock or sleep" (the UI decides whether to use them).
             session::start(app.handle());
+            // `beacon-desktop://` links: the one the app was started with, and every later one.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                // AppImage / dev builds: register the scheme at run time (installers register it themselves).
+                #[cfg(any(windows, target_os = "linux"))]
+                let _ = app.deep_link().register_all();
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    for url in urls {
+                        deeplink::open(app.handle(), url.as_str());
+                    }
+                }
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        deeplink::open(&handle, url.as_str());
+                    }
+                });
+            }
             // Started at login (opt-in autostart passes --hidden): stay in the tray.
             if std::env::args().any(|arg| arg == HIDDEN_ARG) {
                 if let Some(window) = app.get_webview_window("main") {
@@ -1304,6 +1351,7 @@ pub fn run() {
             secret::tasks_status,
             secret::tasks_connect_begin,
             secret::tasks_disconnect,
+            deeplink::deep_link_take,
             realtime::chat_realtime_start,
             realtime::chat_realtime_stop,
             set_unread_badge,
@@ -1532,6 +1580,9 @@ mod tests {
             "resume-friendly",
             "layout-full",
             "layout-compact",
+            "open-chat",
+            "pause-chat",
+            "resume-chat",
             "switch:T-1",
             "meeting:0123456789abcdef",
         ] {
@@ -1656,6 +1707,7 @@ mod tests {
         )
         .expect("old spec");
         assert!(old.pause_friendly.is_none());
+        assert!(old.chat.is_empty());
         assert!(old.layout.is_none());
         let layout: TrayMenuSpec = serde_json::from_str(
             r#"{"primary":null,"switchLabel":"s","switchTo":[],"search":"s","open":"o","layout":{"id":"layout-full","label":"Full view"},"openBeacon":null,"myTime":null,"checkUpdates":null,"settings":"s","quit":"q"}"#,

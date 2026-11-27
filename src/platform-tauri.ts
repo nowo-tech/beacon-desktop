@@ -6,7 +6,7 @@ import { availableMonitors, currentMonitor, getCurrentWindow, type Monitor, Phys
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { type NativeRequest, type NativeResponse, nativeFetch, SESSION_HANDLE } from './lib/nativeFetch';
-import { type ChatHost, type ChatRealtimeMode, type TasksHost, type ConnectionSecurity, notificationBody, type NotificationPermission, type Platform, type WindowHost, type PromptClient, type PromptHost, type MiniHost, type SessionEvent, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
+import { type ChatHost, type ChatRealtimeMode, type DeepLink, type TasksHost, type ConnectionSecurity, notificationBody, type NotificationPermission, type Platform, type WindowHost, type PromptClient, type PromptHost, type MiniHost, type SessionEvent, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
 import { type BrowserChoice, type DetectedBrowser, type OpenOutcome, sanitizeBrowser } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 import type { MiniAction, MiniClient, MiniView } from './ui/miniWindow';
@@ -169,6 +169,9 @@ export function tauriPlatform(): Platform {
     setWakePlan: (plan) => invoke('set_wake_plan', { plan }),
     // A button of a working-hours reminder notification (src-tauri/src/notify.rs, known ids only).
     onNotificationAction: (handler) => void listen<string>('notification-action', (event) => handler(event.payload)),
+    // `beacon-desktop://` links, parsed in Rust (src-tauri/src/deeplink.rs): ids and a context key only.
+    takeDeepLink: () => invoke<DeepLink | null>('deep_link_take'),
+    onDeepLink: (handler) => void listen<DeepLink>('deep-link', (event) => handler(event.payload)),
     // Meeting detection: what holds the microphone, from the heartbeat (src-tauri/src/meeting, app ids only).
     onMic: (handler) => void listen<unknown>('mic', (event) => handler(event.payload)),
     promptWindow: promptHost,

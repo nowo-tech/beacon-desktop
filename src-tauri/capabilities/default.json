@@ -31,6 +31,7 @@
     "allow-tasks-status",
     "allow-tasks-connect-begin",
     "allow-tasks-disconnect",
+    "allow-deep-link-take",
     "allow-chat-realtime-start",
     "allow-chat-realtime-stop",
     "allow-set-unread-badge",

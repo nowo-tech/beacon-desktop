@@ -10,7 +10,8 @@
  */
 import type { DesktopApp } from '../ui/app';
 import { h } from '../ui/dom';
-import type { Platform } from '../platform';
+import type { DeepLink, Platform } from '../platform';
+import { ChatNotifier, PAUSE_HOUR_MS, tomorrowMorning } from '../chat/notifications';
 import type { Locale } from '../lib/i18n';
 import type { ThemePreference } from '../lib/theme';
 import { chatText, type ChatText } from '../chat/i18n';
@@ -104,6 +105,12 @@ export class Shell {
   readonly tasks: TasksModule | null;
   /** `403 module_forbidden`: the Tasks tab is hidden, the token kept. */
   tasksHidden = false;
+  /** Chat notifications (BD-3b): opt-in, level None, pause. */
+  readonly notifier: ChatNotifier;
+  /** A link or a notification to open once the chat (or the tasks) are ready. */
+  private pendingTarget: DeepLink | null = null;
+  /** The modules started after the sign-in (links wait for it). */
+  private ready = false;
   app: DesktopApp | null = null;
   prefs: ShellPrefs;
   module: ModuleId = 'chat';
@@ -141,6 +148,7 @@ export class Shell {
   ) {
     this.t = chatText(deps.locale);
     this.prefs = loadShellPrefs(deps.storage);
+    this.notifier = new ChatNotifier(deps.storage, () => this.now());
     this.timeRoot = h('div', { class: 'time-root', id: 'app', attrs: { 'aria-busy': 'true' } });
     this.titlebar = h('header', { class: 'titlebar', id: 'titlebar' });
     this.rail = h('nav', { class: 'rail', id: 'rail', attrs: { 'aria-label': this.t('modules') } });
@@ -185,9 +193,16 @@ export class Shell {
         if (total !== this.lastBadge) {
           this.lastBadge = total;
           void host.setUnreadBadge(total).catch(() => undefined);
+          void this.app?.updateTray();
         }
       },
-      onConnection: () => this.renderChrome(),
+      onConnection: (connected) => {
+        if (!connected) this.notifier.reset();
+        this.renderChrome();
+        void this.app?.updateTray();
+      },
+      onList: (rows, open) => this.onChatList(rows, open),
+      notifyCard: () => this.notifyCard(),
       sidebarTimer: () => this.sidebarTimer(),
       preferredContext: () => this.prefs.context,
       storage: deps.storage,
@@ -238,6 +253,11 @@ export class Shell {
     this.allocation = new AllocationDialog(this.t, (text) => this.announce(text), () => this.now());
     this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.tasksPanel, this.timePanel), this.live, this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog);
     platform.miniWindow?.onAction((action) => void this.onMiniAction(action));
+    platform.onTray((action) => void this.onTrayAction(action));
+    platform.onNotificationAction((id) => {
+      if (id.startsWith('chat-open:')) void this.openTarget({ kind: 'chat', id: id.slice(10), context: null });
+    });
+    platform.onDeepLink((link) => void this.openTarget(link));
     this.mount.replaceChildren(this.root);
     this.root.addEventListener('chat-switcher', () => this.openSwitcher());
     document.addEventListener('keydown', (event) => this.onKey(event));
@@ -334,6 +354,8 @@ export class Shell {
       this.chat.signedOut();
       this.tasks?.signedOut();
       this.tasksHidden = false;
+      this.ready = false;
+      this.notifier.reset();
       this.contexts = [];
       this.context = null;
       // Audit ZCD-L3: the next sign-in (maybe another account or server) starts in Personal. Written only when the
@@ -357,6 +379,118 @@ export class Shell {
 
   private lastRunning: string | null = null;
 
+  // ---- chat notifications, tray, links (BD-3b) ----------------------------------------------------------------------
+
+  /** A new conversation list: notify (level None) when something new arrived elsewhere. */
+  private onChatList(rows: Conversation[], open: string | null): void {
+    // Another organization's list: what was seen there says nothing here (prime again, notify nothing old).
+    if (this.chat.context !== this.notifyContext) {
+      this.notifier.reset();
+      this.notifyContext = this.chat.context;
+    }
+    const reading = this.module === 'chat' && !document.hidden && (document.hasFocus?.() ?? true);
+    const target = this.notifier.observe(rows, { open, reading });
+    if (target === null) return;
+    const t = this.t;
+    void this.platform.notifyFriendly({ title: t('notifyTitle'), body: t('notifyBody'), pose: null, click: `chat-open:${target}` }).catch(() => false);
+  }
+
+  /** The opt-in card on the first Chat visit (design §3.4: a calm card, not an OS prompt at install). */
+  private notifyCard(): HTMLElement | null {
+    if (this.notifier.prefs.asked) return null;
+    const t = this.t;
+    const on = h('button', { class: 'btn sm primary', id: 'notify-on', attrs: { type: 'button' } }, t('notifyTurnOn'));
+    on.addEventListener('click', () => void this.setNotifications(true));
+    const later = h('button', { class: 'btn sm', id: 'notify-later', attrs: { type: 'button' } }, t('notifyNotNow'));
+    later.addEventListener('click', () => {
+      this.notifier.dismiss();
+      this.chat.renderAsk();
+    });
+    return h(
+      'section',
+      { class: 'notif-ask', attrs: { 'aria-labelledby': 'notify-ask-title' } },
+      h('span', { class: 'na-ico', attrs: { 'aria-hidden': 'true' } }, chatIcon('bell')),
+      h('div', {}, h('h3', { id: 'notify-ask-title' }, t('notifyAskTitle')), h('p', {}, t('notifyAskText')), h('div', { class: 'row' }, on, later)),
+    );
+  }
+
+  /** Turns chat notifications on (asking the OS for permission first) or off. */
+  async setNotifications(enabled: boolean): Promise<void> {
+    let permission = enabled ? await this.platform.notificationPermission().catch(() => 'unsupported' as const) : 'granted';
+    if (enabled && permission === 'prompt') permission = await this.platform.requestNotificationPermission().catch(() => 'denied' as const);
+    this.notifier.setEnabled(enabled);
+    this.notifyDenied = enabled && permission !== 'granted';
+    if (enabled) this.announce(this.t('notifyOnAnnounce'));
+    this.chat.renderAsk();
+    if (this.settings.open) this.renderSettings();
+    void this.app?.updateTray();
+  }
+
+  /** The context the notifier last saw a list of. */
+  private notifyContext: string | null = null;
+
+  /** The OS refused notifications when they were turned on (Settings says so). */
+  private notifyDenied = false;
+
+  pauseNotifications(until: number | null): void {
+    if (until === null) this.notifier.resume();
+    else this.notifier.pause(until);
+    if (this.settings.open) this.renderSettings();
+    void this.app?.updateTray();
+  }
+
+  /** The tray's chat items (AppDeps.trayChat): "Open chat", pause / resume chat notifications. */
+  trayChat(): { id: string; label: string }[] {
+    if (!this.chat.connected) return [];
+    const t = this.t;
+    const items = [{ id: 'open-chat', label: this.unread > 0 ? t('trayOpenChatUnread', { count: this.badgeText() }) : t('trayOpenChat') }];
+    if (this.notifier.prefs.enabled) {
+      items.push(this.notifier.paused() ? { id: 'resume-chat', label: t('trayResumeChat', { time: this.clockTime(this.notifier.prefs.pausedUntil as number) }) } : { id: 'pause-chat', label: t('trayPauseChat') });
+    }
+    return items;
+  }
+
+  private clockTime(at: number): string {
+    return new Intl.DateTimeFormat(this.deps.locale, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at));
+  }
+
+  private async onTrayAction(action: string): Promise<void> {
+    if (action === 'open-chat') this.show('chat');
+    else if (action === 'pause-chat') this.pauseNotifications(this.now() + PAUSE_HOUR_MS);
+    else if (action === 'resume-chat') this.pauseNotifications(null);
+  }
+
+  /**
+   * Opens a conversation or a task from a `beacon-desktop://` link or a notification click: only navigation. A context
+   * in the link is switched to through the normal flow (a running timer is asked about); an id the person may not see
+   * is simply not found (the API answers 404).
+   */
+  async openTarget(link: DeepLink): Promise<void> {
+    if (!this.ready) {
+      this.pendingTarget = link;
+      return;
+    }
+    if (link.context !== null && link.context !== this.context && this.contexts.some((item) => item.key === link.context)) {
+      await this.switchContext(link.context);
+      if (this.context !== link.context) return;
+    }
+    if (link.kind === 'chat') {
+      this.show('chat');
+      if (!this.chat.connected) return;
+      const found = this.chat.allConversations().some((row) => row.uuid === link.id);
+      if (found) await this.chat.open(link.id);
+      else this.announce(this.t('linkNotFound'));
+      return;
+    }
+    if (this.tasks === null || this.tasksHidden) return;
+    this.show('tasks');
+    if (!this.tasks.connected) {
+      this.announce(this.t('linkTasksOff'));
+      return;
+    }
+    await this.tasks.openTask(link.id);
+  }
+
   /** Signed in (at start-up or after the sign-in): landing module, then chat. */
   private async enter(): Promise<void> {
     const app = this.app;
@@ -367,6 +501,11 @@ export class Shell {
     await this.chat.init(this.prefs.context);
     await this.tasks?.init();
     this.renderChrome();
+    // A `beacon-desktop://` link the app was started with.
+    this.ready = true;
+    const link = (await this.platform.takeDeepLink().catch(() => null)) ?? this.pendingTarget;
+    this.pendingTarget = null;
+    if (link !== null) await this.openTarget(link);
   }
 
   /** Set by main.ts when the session came from a sign-in in this run (not a launch with a stored session). */
@@ -887,6 +1026,31 @@ export class Shell {
         void this.chat.disconnect().then(() => this.renderSettings());
       });
       connection.append(this.settingRow(t('chatConnection'), `${t('chatConnected')}. ${t('disconnectHint')}`, disconnect));
+      // Notifications (BD-3b): opt-in, level None, pause.
+      const prefs = this.notifier.prefs;
+      connection.append(
+        this.settingRow(
+          t('settingsNotifications'),
+          this.notifyDenied ? t('notifyDenied') : t('notificationsHint'),
+          this.segmented<'on' | 'off'>(t('settingsNotifications'), [['off', t('notifyOff')], ['on', t('notifyOn')]], prefs.enabled ? 'on' : 'off', (value) => void this.setNotifications(value === 'on')),
+        ),
+      );
+      if (prefs.enabled) {
+        connection.append(this.settingRow(t('notifyPreview'), null, h('p', { class: 's-d notify-level', id: 'notify-level' }, t('notifyPreviewHidden'))));
+        const pause = h('div', { class: 'cc-row' });
+        if (this.notifier.paused()) {
+          const resume = h('button', { class: 'btn sm', id: 'notify-resume', attrs: { type: 'button' } }, t('notifyResume'));
+          resume.addEventListener('click', () => this.pauseNotifications(null));
+          pause.append(resume);
+        } else {
+          const hour = h('button', { class: 'btn sm', id: 'notify-pause-hour', attrs: { type: 'button' } }, t('notifyPause1h'));
+          hour.addEventListener('click', () => this.pauseNotifications(this.now() + PAUSE_HOUR_MS));
+          const tomorrow = h('button', { class: 'btn sm', id: 'notify-pause-tomorrow', attrs: { type: 'button' } }, t('notifyPauseTomorrow'));
+          tomorrow.addEventListener('click', () => this.pauseNotifications(tomorrowMorning(this.now())));
+          pause.append(hour, tomorrow);
+        }
+        connection.append(this.settingRow(t('notifyPause'), this.notifier.paused() ? t('notifyPausedUntil', { time: this.clockTime(prefs.pausedUntil as number) }) : t('notifyNotPaused'), pause));
+      }
     } else {
       const connect = h('button', { class: 'btn sm primary', id: 'settings-chat-connect', attrs: { type: 'button' } }, t('connectButton'));
       connect.addEventListener('click', () => {

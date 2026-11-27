@@ -33,6 +33,7 @@ if (root !== null && new URLSearchParams(location.search).get('window') === 'pro
   const app = new DesktopApp(shell.timeRoot, platform, {
     onRender: () => shell.onAppRender(),
     beforeSignOut: () => shell.chat.revokeOnServer(),
+    trayChat: () => shell.trayChat(),
     askAllocation: (request) => shell.askAllocation(request),
     onContextRefused: (context) => void shell.timeContextRefused(context),
     contextLabel: () => shell.contextLabel(),
