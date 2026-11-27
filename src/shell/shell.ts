@@ -9,7 +9,7 @@
  * switcher as rail tiles or a dropdown, and a timer never keeps running in another organization (Q4).
  */
 import type { DesktopApp } from '../ui/app';
-import { h } from '../ui/dom';
+import { type Child, h } from '../ui/dom';
 import type { DeepLink, Platform } from '../platform';
 import { ChatNotifier, PAUSE_HOUR_MS, tomorrowMorning } from '../chat/notifications';
 import type { Locale } from '../lib/i18n';
@@ -26,6 +26,9 @@ import type { Allocation } from '../api/types';
 import { type AskOn, meContexts } from '../lib/allocation';
 import { AllocationDialog, type AllocationRequest } from './allocationDialog';
 import type { MiniAction, MiniView } from '../ui/miniWindow';
+import { shellText, type ShellText } from './i18n';
+import { type AnyTab, isTimeTab, SettingsDialog, type SettingsSource } from './settings';
+import { type SetupState, type SetupStep, SetupView } from './setup';
 
 export type ModuleId = 'chat' | 'tasks' | 'time';
 export type Density = 'comfortable' | 'compact';
@@ -42,15 +45,19 @@ export interface ShellPrefs {
   context: string | null;
   /** Column markers (owner decision 2026-11-25): TaskBoard's emojis or colour dots. */
   markers: Markers;
+  /** Guided first run (UX batch 6): `null` never run, `pending` on screen when the app quit, `done`. */
+  setup: SetupState;
+  /** Setup steps skipped. */
+  skipped: SetupStep[];
 }
 
 export const SHELL_KEY = 'beacon-desktop-shell';
-const DEFAULTS: ShellPrefs = { module: null, density: 'comfortable', switcher: 'tiles', timer: 'title', context: null, markers: 'emoji' };
+const DEFAULTS: ShellPrefs = { module: null, density: 'comfortable', switcher: 'tiles', timer: 'title', context: null, markers: 'emoji', setup: null, skipped: [] };
 
 export function loadShellPrefs(storage: Storage | undefined): ShellPrefs {
   try {
     const raw = JSON.parse(storage?.getItem(SHELL_KEY) ?? 'null') as Partial<ShellPrefs> | null;
-    if (raw === null || typeof raw !== 'object') return { ...DEFAULTS };
+    if (raw === null || typeof raw !== 'object') return { ...DEFAULTS, skipped: [] };
     return {
       module: raw.module === 'chat' || raw.module === 'time' || raw.module === 'tasks' ? raw.module : null,
       density: raw.density === 'compact' ? 'compact' : 'comfortable',
@@ -58,9 +65,11 @@ export function loadShellPrefs(storage: Storage | undefined): ShellPrefs {
       timer: raw.timer === 'title-sidebar' ? 'title-sidebar' : 'title',
       context: typeof raw.context === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(raw.context) ? raw.context : null,
       markers: raw.markers === 'dots' ? 'dots' : 'emoji',
+      setup: raw.setup === 'pending' || raw.setup === 'done' ? raw.setup : null,
+      skipped: Array.isArray(raw.skipped) ? (['chat', 'tasks'] as const).filter((step) => raw.skipped?.includes(step)) : [],
     };
   } catch {
-    return { ...DEFAULTS };
+    return { ...DEFAULTS, skipped: [] };
   }
 }
 
@@ -128,6 +137,11 @@ export class Shell {
   private readonly live: HTMLElement;
   private readonly switcher: HTMLDialogElement;
   private readonly settings: HTMLDialogElement;
+  /** The one Settings (UX batch 6). */
+  private readonly settingsDialog: SettingsDialog;
+  /** The guided first run (UX batch 6). */
+  private readonly setup: SetupView;
+  private readonly st: ShellText;
   private readonly keys: HTMLDialogElement;
   private readonly confirm: HTMLDialogElement;
   /** Required time fields (Q5, BD-3a). */
@@ -147,6 +161,7 @@ export class Shell {
     private readonly deps: ShellDeps,
   ) {
     this.t = chatText(deps.locale);
+    this.st = shellText(deps.locale);
     this.prefs = loadShellPrefs(deps.storage);
     this.notifier = new ChatNotifier(deps.storage, () => this.now());
     this.timeRoot = h('div', { class: 'time-root', id: 'app', attrs: { 'aria-busy': 'true' } });
@@ -199,10 +214,12 @@ export class Shell {
       onConnection: (connected) => {
         if (!connected) this.notifier.reset();
         this.renderChrome();
+        this.followSetup();
         void this.app?.updateTray();
       },
       onList: (rows, open) => this.onChatList(rows, open),
       notifyCard: () => this.notifyCard(),
+      onConnectRender: () => this.followSetup(),
       sidebarTimer: () => this.sidebarTimer(),
       preferredContext: () => this.prefs.context,
       storage: deps.storage,
@@ -226,7 +243,11 @@ export class Shell {
             announce: (text) => this.announce(text),
             context: () => this.context,
             contextLabel: () => this.currentContext()?.context.label ?? this.t('moduleTasks'),
-            onConnection: () => this.renderRail(),
+            onConnection: () => {
+              this.renderRail();
+              this.followSetup();
+            },
+            onConnectRender: () => this.followSetup(),
             onForbidden: (hidden) => {
               this.tasksHidden = hidden;
               if (hidden && this.module === 'tasks') this.show('chat', false);
@@ -247,11 +268,34 @@ export class Shell {
     this.timePanel = h('section', { class: 'module', id: 'mod-time', attrs: { role: 'tabpanel', 'aria-labelledby': 'tab-time' } }, this.timeRoot);
     this.live = h('p', { class: 'sr-only', id: 'shell-live', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
     this.switcher = this.buildSwitcher();
-    this.settings = h('dialog', { class: 'sh-dialog', id: 'shell-settings', attrs: { 'aria-labelledby': 'shell-settings-title', closedby: 'any' } });
+    this.settingsDialog = new SettingsDialog(this.settingsSource(), deps.storage);
+    this.settings = this.settingsDialog.dialog;
+    this.setup = new SetupView({
+      t: this.st,
+      chat: this.chat,
+      tasks: this.tasks,
+      tasksHidden: () => this.tasksHidden,
+      skipped: () => this.prefs.skipped,
+      skip: (step) => {
+        if (!this.prefs.skipped.includes(step)) this.prefs.skipped = [...this.prefs.skipped, step];
+        if (step === 'chat') this.chat.cancelConnect();
+        else this.tasks?.cancelConnect();
+        this.save();
+        this.followSetup();
+      },
+      copy: (text) => void this.copy(text),
+      openVerification: (url) => void this.app?.openVerification(url),
+      finish: () => this.finishSetup(true),
+      later: () => {
+        this.chat.cancelConnect();
+        this.tasks?.cancelConnect();
+        this.finishSetup(false);
+      },
+    });
     this.keys = h('dialog', { class: 'sh-dialog', id: 'shell-keys', attrs: { 'aria-labelledby': 'shell-keys-title', closedby: 'any' } });
     this.confirm = h('dialog', { class: 'sh-dialog', id: 'shell-confirm', attrs: { 'aria-labelledby': 'shell-confirm-title' } });
     this.allocation = new AllocationDialog(this.t, (text) => this.announce(text), () => this.now());
-    this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.tasksPanel, this.timePanel), this.live, this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog);
+    this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.tasksPanel, this.timePanel, this.setup.root), this.live, this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog);
     platform.miniWindow?.onAction((action) => void this.onMiniAction(action));
     platform.onTray((action) => void this.onTrayAction(action));
     platform.onNotificationAction((id) => {
@@ -273,6 +317,8 @@ export class Shell {
   /** Attaches the Time module (its constructor needs `timeRoot`) and follows its renders. */
   attach(app: DesktopApp): void {
     this.app = app;
+    // UX batch 6 (UXA-1, UXA-2): the Time module drops its own header and Settings; the shell's are the only ones.
+    app.embed({ openSettings: (tab) => this.openSettings(tab as AnyTab | undefined) });
     // Before the first time API request: the organization used last (Personal on a first launch).
     app.setContext(this.prefs.context);
   }
@@ -351,6 +397,8 @@ export class Shell {
     } else if (!signedIn && this.signedIn && app.state.session === null) {
       this.signedIn = false;
       this.started = false;
+      this.hideSetup();
+      this.settingsDialog.close();
       this.chat.signedOut();
       this.tasks?.signedOut();
       this.tasksHidden = false;
@@ -371,6 +419,7 @@ export class Shell {
     this.renderTitlebar();
     this.syncTicker();
     this.pushMini();
+    if (signedIn) this.renderSettings();
     // The running timer's task is marked in the Tasks views.
     const running = app.state.activeTimer?.taskId ?? null;
     if (this.tasks?.connected === true && running !== this.lastRunning) this.tasks.render();
@@ -496,11 +545,15 @@ export class Shell {
     const app = this.app;
     if (app === null || this.started) return;
     this.started = true;
-    // A fresh interactive sign-in stays on Time (where it happened); a launch follows the landing rule (Q1).
-    this.show(this.freshSignIn ? 'time' : landingModule(this.prefs, app.state.activeTimer !== null), false);
+    // Landing rule (owner Q1): Chat on the first launch, then the last module, Time while a timer runs. A first sign-in
+    // (or a setup the app quit in the middle of) opens the guided setup instead (UX batch 6, UXA-4), which ends on Chat.
+    const timer = app.state.activeTimer !== null;
+    const setup = (this.freshSignIn && this.prefs.setup === null) || (this.prefs.setup === 'pending' && !timer);
+    this.show(setup ? 'chat' : landingModule(this.prefs, timer), false);
     await this.chat.init(this.prefs.context);
     await this.tasks?.init();
     this.renderChrome();
+    if (setup && this.app?.state.session !== null) this.startSetup();
     // A `beacon-desktop://` link the app was started with.
     this.ready = true;
     const link = (await this.platform.takeDeepLink().catch(() => null)) ?? this.pendingTarget;
@@ -508,10 +561,19 @@ export class Shell {
     if (link !== null) await this.openTarget(link);
   }
 
-  /** Set by main.ts when the session came from a sign-in in this run (not a launch with a stored session). */
+  /**
+   * Set by main.ts when the session came from a sign-in in this run (not a launch with a stored session): a first one
+   * opens the guided setup (UX batch 6).
+   */
   freshSignIn = false;
 
   show(module: ModuleId, remember = true): void {
+    if (this.setupShown) {
+      // Another module picked from the rail (or a link): the setup is left for later (Settings → Account).
+      this.hideSetup();
+      this.prefs.setup = 'done';
+      this.save();
+    }
     this.module = module;
     this.chatPanel.hidden = module !== 'chat';
     this.tasksPanel.hidden = module !== 'tasks';
@@ -712,13 +774,13 @@ export class Shell {
     };
     const specs = this.moduleOrder().map((id) => all[id]);
     specs.forEach(([id, icon, label, aria], index) => {
-      const selected = this.module === id;
+      const selected = !this.setupShown && this.module === id;
       const tab = h(
         'button',
         {
           class: 'rail-tab',
           id: `tab-${id}`,
-          attrs: { type: 'button', role: 'tab', 'aria-selected': selected ? 'true' : 'false', 'aria-controls': `mod-${id}`, tabindex: selected ? '0' : '-1', title: `${label} (${modKey()}+${index + 1})`, 'aria-keyshortcuts': `Control+${index + 1}` },
+          attrs: { type: 'button', role: 'tab', 'aria-selected': selected ? 'true' : 'false', 'aria-controls': `mod-${id}`, tabindex: selected || (this.setupShown && index === 0) ? '0' : '-1', title: `${label} (${modKey()}+${index + 1})`, 'aria-keyshortcuts': `Control+${index + 1}` },
         },
         h('span', { class: 'rt-ico' }, chatIcon(icon)),
         h('span', { class: 'rt-label' }, label),
@@ -953,10 +1015,10 @@ export class Shell {
     if (this.settings.open) this.renderSettings();
   }
 
-  openSettings(): void {
-    this.renderSettings();
-    if (!this.settings.open) this.settings.showModal();
-    this.settings.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+  /** The one Settings (UXA-2): the rail's gear, Ctrl/⌘+, in every module, the tray, the Time module's own links. */
+  openSettings(tab?: AnyTab): void {
+    for (const dialog of [this.switcher, this.keys]) if (dialog.open) dialog.close();
+    this.settingsDialog.show(tab);
   }
 
   private segmented<T extends string>(label: string, options: [T, string][], value: T, onPick: (value: T) => void): HTMLElement {
@@ -977,31 +1039,68 @@ export class Shell {
     return group;
   }
 
-  private settingRow(title: string, hint: string | null, control: HTMLElement): HTMLElement {
+  private settingRow(title: string, hint: string | null, control: HTMLElement | null): HTMLElement {
     return h('div', { class: 'set-row' }, h('div', { class: 's-l' }, h('div', { class: 's-t' }, title), hint !== null ? h('div', { class: 's-d' }, hint) : null), control);
   }
 
   private renderSettings(): void {
-    const t = this.t;
-    const theme = (this.app?.state.settings.theme ?? 'system') as ThemePreference;
-    const update = (patch: Partial<ShellPrefs>) => {
-      this.prefs = { ...this.prefs, ...patch };
-      this.save();
-      this.renderChrome();
-      this.renderSettings();
+    this.settingsDialog.render();
+  }
+
+  /** What the one Settings shows in each tab (the Time module's panels, then the shell's rows). */
+  private settingsSource(): SettingsSource {
+    return {
+      hasTasks: () => this.tasks !== null,
+      label: (tab) => {
+        if (isTimeTab(tab)) return this.app?.settingsTabLabel(tab) ?? tab;
+        return this.st(tab === 'appearance' ? 'tabAppearance' : tab === 'chat' ? 'tabChat' : tab === 'tasks' ? 'tabTasks' : 'tabAccount');
+      },
+      content: (tab) => this.settingsContent(tab),
+      title: () => this.st('settingsTitle'),
+      sectionsLabel: () => this.st('settingsSections'),
+      closeLabel: () => this.t('close'),
     };
-    const close = this.iconButton('x-btn', 'x', t('close'), () => this.settings.close(), 'settings-close');
-    const look = h(
+  }
+
+  private updatePrefs(patch: Partial<ShellPrefs>): void {
+    this.prefs = { ...this.prefs, ...patch };
+    this.save();
+    this.renderChrome();
+    this.renderSettings();
+  }
+
+  private settingsContent(tab: AnyTab): Child[] {
+    const app = this.app;
+    if (tab === 'appearance') return [this.appearanceSettings()];
+    if (tab === 'chat') return [this.chatSettings()];
+    if (tab === 'tasks') return [this.tasksSettings()];
+    if (tab === 'account') return [this.accountSettings()];
+    if (app === null || app.state.session === null) return [];
+    if (tab === 'timer') return [this.timeSettings(), ...app.settingsContent(tab)];
+    return app.settingsContent(tab);
+  }
+
+  private appearanceSettings(): HTMLElement {
+    const t = this.t;
+    return h(
       'div',
-      { class: 'set-group' },
-      h('h3', {}, t('settingsAppearance')),
-      this.settingRow(t('theme'), null, this.segmented(t('theme'), [['system', t('themeSystem')], ['light', t('themeLightOption')], ['dark', t('themeDarkOption')]], theme, (value) => void this.setTheme(value))),
-      this.settingRow(t('density'), t('densityHint'), this.segmented(t('density'), [['comfortable', t('densityComfortable')], ['compact', t('densityCompact')]], this.prefs.density, (density) => update({ density }))),
-      this.settingRow(t('switcherStyle'), t('switcherStyleHint'), this.segmented(t('switcherStyle'), [['tiles', t('switcherTiles')], ['dropdown', t('switcherDropdown')]], this.prefs.switcher, (switcher) => update({ switcher }))),
-      this.settingRow(t('timerPlacement'), t('timerPlacementHint'), this.segmented(t('timerPlacement'), [['title', t('timerTitle')], ['title-sidebar', t('timerTitleSidebar')]], this.prefs.timer, (timer) => update({ timer }))),
+      { class: 'set-stack' },
+      this.app?.themeSetting() ?? null,
+      h(
+        'div',
+        { class: 'set-group' },
+        this.settingRow(t('density'), t('densityHint'), this.segmented(t('density'), [['comfortable', t('densityComfortable')], ['compact', t('densityCompact')]], this.prefs.density, (density) => this.updatePrefs({ density }))),
+        this.settingRow(t('switcherStyle'), t('switcherStyleHint'), this.segmented(t('switcherStyle'), [['tiles', t('switcherTiles')], ['dropdown', t('switcherDropdown')]], this.prefs.switcher, (switcher) => this.updatePrefs({ switcher }))),
+        this.settingRow(t('timerPlacement'), t('timerPlacementHint'), this.segmented(t('timerPlacement'), [['title', t('timerTitle')], ['title-sidebar', t('timerTitleSidebar')]], this.prefs.timer, (timer) => this.updatePrefs({ timer }))),
+      ),
     );
+  }
+
+  /** Time tracking rows of the shell (BD-3a: required fields, mini timer), at the top of the Timer tab. */
+  private timeSettings(): HTMLElement {
+    const t = this.t;
     const settings = this.app?.state.settings;
-    const time = h('div', { class: 'set-group' }, h('h3', {}, t('settingsTime')));
+    const time = h('div', { class: 'set-group', id: 'settings-time-tracking' }, h('h3', {}, t('settingsTime')));
     if (settings !== undefined) {
       time.append(
         this.settingRow(t('askOn'), t('askOnHint'), this.segmented<AskOn>(t('askOn'), [['stop', t('askOnStop')], ['start', t('askOnStart')], ['both', t('askOnBoth')]], settings.askOn, (askOn) => {
@@ -1019,13 +1118,17 @@ export class Shell {
       mini.addEventListener('click', () => void this.toggleMini().then(() => this.renderSettings()));
       time.append(this.settingRow(t('miniTimer'), t('miniTimerHint'), mini));
     }
+    return time;
+  }
+
+  private chatSettings(): HTMLElement {
+    const t = this.t;
+    const st = this.st;
     const connection = h('div', { class: 'set-group' }, h('h3', {}, t('settingsChat')));
     if (this.chat.connected) {
-      const disconnect = h('button', { class: 'btn sm danger', id: 'chat-disconnect', attrs: { type: 'button' } }, t('disconnect'));
-      disconnect.addEventListener('click', () => {
-        void this.chat.disconnect().then(() => this.renderSettings());
-      });
-      connection.append(this.settingRow(t('chatConnection'), `${t('chatConnected')}. ${t('disconnectHint')}`, disconnect));
+      const manage = h('button', { class: 'btn sm', id: 'settings-chat-manage', attrs: { type: 'button' } }, st('manage'));
+      manage.addEventListener('click', () => this.openSettings('account'));
+      connection.append(this.settingRow(t('chatConnection'), st('connOn'), manage));
       // Notifications (BD-3b): opt-in, level None, pause.
       const prefs = this.notifier.prefs;
       connection.append(
@@ -1049,37 +1152,189 @@ export class Shell {
           tomorrow.addEventListener('click', () => this.pauseNotifications(tomorrowMorning(this.now())));
           pause.append(hour, tomorrow);
         }
-        connection.append(this.settingRow(t('notifyPause'), this.notifier.paused() ? t('notifyPausedUntil', { time: this.clockTime(prefs.pausedUntil as number) }) : t('notifyNotPaused'), pause));
+        connection.append(this.settingRow(t('notifyPause'), this.notifier.paused() ? t('notifyPausedUntil', { time: this.clockTime(this.notifier.prefs.pausedUntil as number) }) : t('notifyNotPaused'), pause));
       }
     } else {
-      const connect = h('button', { class: 'btn sm primary', id: 'settings-chat-connect', attrs: { type: 'button' } }, t('connectButton'));
-      connect.addEventListener('click', () => {
-        this.settings.close();
-        this.show('chat');
-        void this.chat.connectChat();
-      });
-      connection.append(this.settingRow(t('chatConnection'), t('chatNotConnected'), connect));
+      connection.append(this.settingRow(t('chatConnection'), t('chatNotConnected'), this.connectButton('chat', 'settings-chat-connect', t('connectButton'))));
     }
+    return connection;
+  }
+
+  private tasksSettings(): HTMLElement | null {
     const tasks = this.tasks;
-    const tasksGroup = tasks === null ? null : h('div', { class: 'set-group' }, h('h3', {}, this.tt('settingsTasks')));
-    if (tasks !== null && tasksGroup !== null) {
-      const tt = this.tt;
-      if (tasks.connected) {
-        const disconnect = h('button', { class: 'btn sm danger', id: 'tasks-disconnect', attrs: { type: 'button' } }, tt('disconnect'));
-        disconnect.addEventListener('click', () => void tasks.disconnect().then(() => this.renderSettings()));
-        tasksGroup.append(this.settingRow(tt('tasksConnection'), `${tt('tasksConnected')}. ${tt('disconnectHint')}`, disconnect));
-      } else {
-        const connect = h('button', { class: 'btn sm primary', id: 'settings-tasks-connect', attrs: { type: 'button' } }, tt('connectButton'));
-        connect.addEventListener('click', () => {
-          this.settings.close();
-          this.show('tasks');
-          void tasks.connectTasks();
-        });
-        tasksGroup.append(this.settingRow(tt('tasksConnection'), tt('tasksNotConnected'), connect));
-      }
-      tasksGroup.append(this.settingRow(tt('markers'), tt('markersHint'), this.segmented<Markers>(tt('markers'), [['emoji', tt('markersEmoji')], ['dots', tt('markersDots')]], this.prefs.markers, (markers) => update({ markers }))));
+    if (tasks === null) return null;
+    const tt = this.tt;
+    const group = h('div', { class: 'set-group' }, h('h3', {}, tt('settingsTasks')));
+    if (tasks.connected) {
+      const manage = h('button', { class: 'btn sm', id: 'settings-tasks-manage', attrs: { type: 'button' } }, this.st('manage'));
+      manage.addEventListener('click', () => this.openSettings('account'));
+      group.append(this.settingRow(tt('tasksConnection'), this.tasksHidden ? this.st('connTasksHidden') : this.st('connOn'), manage));
+    } else {
+      group.append(this.settingRow(tt('tasksConnection'), tt('tasksNotConnected'), this.connectButton('tasks', 'settings-tasks-connect', tt('connectButton'))));
     }
-    this.settings.replaceChildren(h('div', { class: 'dlg settings' }, h('div', { class: 'dlg-h' }, h('h1', { id: 'shell-settings-title' }, t('shellSettings')), close), h('div', { class: 'dlg-b' }, look, time, connection, tasksGroup)));
+    group.append(this.settingRow(tt('markers'), tt('markersHint'), this.segmented<Markers>(tt('markers'), [['emoji', tt('markersEmoji')], ['dots', tt('markersDots')]], this.prefs.markers, (markers) => this.updatePrefs({ markers }))));
+    return group;
+  }
+
+  /** "Connect" from Settings: closes it and starts the module's device flow in its own module. */
+  private connectButton(module: 'chat' | 'tasks', id: string, label = this.st('connect')): HTMLButtonElement {
+    const button = h('button', { class: 'btn sm primary', id, attrs: { type: 'button' } }, label);
+    button.addEventListener('click', () => {
+      this.settingsDialog.close();
+      this.show(module);
+      if (module === 'chat') void this.chat.connectChat();
+      else void this.tasks?.connectTasks();
+    });
+    return button;
+  }
+
+  /** Account (UXA-2): who is signed in, the three connections (Disconnect asks first, UXA-8), Sign out. */
+  private accountSettings(): HTMLElement {
+    const st = this.st;
+    const session = this.app?.state.session ?? null;
+    const name = session?.displayName ?? session?.identifier ?? '';
+    const host = hostOf(session?.server ?? null);
+    const status = (on: boolean) => h('span', { class: `conn-state${on ? ' on' : ''}` }, h('span', { class: 'conn-dot', attrs: { 'aria-hidden': 'true' } }), on ? st('connOn') : st('connOff'));
+    const row = (id: string, title: string, hint: string, on: boolean, action: HTMLElement | null) =>
+      h('div', { class: 'set-row conn-row', id }, h('div', { class: 's-l' }, h('div', { class: 's-t' }, title, ' ', status(on)), h('div', { class: 's-d' }, hint)), action);
+    const chatAction = this.chat.connected ? this.disconnectButton('chat') : this.connectButton('chat', 'account-chat-connect');
+    const tasks = this.tasks;
+    const connections = h(
+      'div',
+      { class: 'set-group' },
+      h('h3', {}, st('connections')),
+      row('account-time', st('connTime'), st('connTimeHint'), session !== null, null),
+      row('account-chat', st('connChat'), st('connChatHint'), this.chat.connected, chatAction),
+      tasks === null ? null : row('account-tasks', st('connTasks'), this.tasksHidden ? st('connTasksHidden') : st('connTasksHint'), tasks.connected, tasks.connected ? this.disconnectButton('tasks') : this.connectButton('tasks', 'account-tasks-connect')),
+    );
+    const privacy = h('button', { class: 'btn sm', id: 'open-privacy', attrs: { type: 'button' } }, st('whatWeCollect'));
+    privacy.addEventListener('click', () => {
+      this.settingsDialog.close();
+      this.show('time');
+      this.app?.show('privacy');
+    });
+    const logout = h('button', { class: 'btn sm danger', id: 'logout', attrs: { type: 'button' } }, st('signOut'));
+    logout.addEventListener('click', () => {
+      this.settingsDialog.close();
+      void this.app?.logout();
+    });
+    const setup = this.setup.needed() ? h('button', { class: 'btn sm primary', id: 'account-finish-setup', attrs: { type: 'button' } }, st('finishSetup')) : null;
+    setup?.addEventListener('click', () => {
+      this.settingsDialog.close();
+      this.prefs.skipped = [];
+      this.startSetup();
+    });
+    return h(
+      'div',
+      { class: 'set-stack' },
+      h(
+        'div',
+        { class: 'set-group' },
+        this.settingRow(st('accountSignedIn', { name }), host !== '' ? st('accountServer', { host }) : null, null),
+        setup !== null ? this.settingRow(st('finishSetup'), st('finishSetupHint'), setup) : null,
+      ),
+      connections,
+      h('div', { class: 'cc-row account-actions' }, privacy, logout),
+    );
+  }
+
+  private disconnectButton(module: 'chat' | 'tasks'): HTMLButtonElement {
+    const st = this.st;
+    const button = h('button', { class: 'btn sm danger', id: `${module}-disconnect`, attrs: { type: 'button' } }, st('disconnect'));
+    button.addEventListener('click', () => void this.disconnectModule(module));
+    return button;
+  }
+
+  /** Disconnect chat / tasks, after a confirmation (UXA-8); time stays signed in. */
+  async disconnectModule(module: 'chat' | 'tasks'): Promise<void> {
+    const st = this.st;
+    const ok = await this.askConfirm(st(module === 'chat' ? 'confirmChatTitle' : 'confirmTasksTitle'), st(module === 'chat' ? 'confirmChatText' : 'confirmTasksText'), st('confirmDisconnect'));
+    if (!ok) return;
+    if (module === 'chat') await this.chat.disconnect();
+    else await this.tasks?.disconnect();
+    this.announce(st(module === 'chat' ? 'chatDisconnected' : 'tasksDisconnected'));
+    this.renderSettings();
+    this.settings.querySelector<HTMLElement>(`#account-${module}-connect`)?.focus();
+  }
+
+  /** A destructive question: Cancel is the default (focused first, Esc), the action is named and styled as danger. */
+  private askConfirm(title: string, text: string, action: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const cancel = h('button', { class: 'btn', id: 'confirm-cancel', attrs: { type: 'button', autofocus: true } }, this.st('cancel'));
+      const go = h('button', { class: 'btn primary danger-fill', id: 'confirm-ok', attrs: { type: 'button' } }, action);
+      this.confirm.replaceChildren(h('div', { class: 'dlg' }, h('div', { class: 'dlg-h' }, h('h1', { id: 'shell-confirm-title' }, title)), h('div', { class: 'dlg-b' }, h('p', {}, text)), h('div', { class: 'dlg-f' }, cancel, go)));
+      let answer = false;
+      const done = () => {
+        this.confirm.removeEventListener('close', done);
+        resolve(answer);
+      };
+      this.confirm.addEventListener('close', done);
+      cancel.addEventListener('click', () => this.confirm.close());
+      go.addEventListener('click', () => {
+        answer = true;
+        this.confirm.close();
+      });
+      this.confirm.showModal();
+      cancel.focus();
+    });
+  }
+
+  // ---- guided first run (UXA-4) -------------------------------------------------------------------------------------
+
+  /** The setup card on screen (the modules are hidden behind it; the rail stays usable). */
+  setupShown = false;
+
+  private startSetup(): void {
+    if (!this.setup.needed()) {
+      this.finishSetup(false);
+      return;
+    }
+    this.setupShown = true;
+    this.prefs.setup = 'pending';
+    this.save();
+    this.module = 'chat';
+    this.chatPanel.hidden = true;
+    this.tasksPanel.hidden = true;
+    this.timePanel.hidden = true;
+    this.setup.root.hidden = false;
+    this.root.dataset.setup = 'true';
+    this.chat.setShown(false);
+    this.tasks?.setShown(false);
+    this.setup.render();
+    this.renderRail();
+    this.renderTitlebar();
+    this.setup.focus();
+  }
+
+  private hideSetup(): void {
+    this.setupShown = false;
+    this.setup.root.hidden = true;
+    delete this.root.dataset.setup;
+  }
+
+  /** Nothing left (or "Finish later"): the setup is over; the app lands on Chat (owner Q1). */
+  private finishSetup(announce: boolean): void {
+    const shown = this.setupShown;
+    this.hideSetup();
+    this.prefs.setup = 'done';
+    this.save();
+    if (shown) {
+      this.show('chat');
+      if (announce) this.announce(this.st('setupFinished'));
+      this.chatPanel.querySelector<HTMLElement>('#chat-connect, .side .conv, .chat-main')?.focus?.();
+    }
+  }
+
+  /** A module's connection or its device-flow state changed: the setup card follows, and moves on when done. */
+  private followSetup(): void {
+    if (!this.setupShown) return;
+    if (!this.setup.needed()) {
+      this.finishSetup(true);
+      return;
+    }
+    const before = document.activeElement;
+    this.setup.render();
+    if (before === null || before === document.body || !this.setup.root.contains(document.activeElement)) this.setup.focus();
   }
 
   openKeys(): void {
@@ -1280,4 +1535,14 @@ export class Shell {
 
 function modKey(): string {
   return /mac/i.test(globalThis.navigator?.platform ?? '') ? '⌘' : 'Ctrl';
+}
+
+/** The host of a server address for Settings → Account (the address itself when it does not parse). */
+function hostOf(server: string | null): string {
+  if (server === null) return '';
+  try {
+    return new URL(server).host;
+  } catch {
+    return server;
+  }
 }
