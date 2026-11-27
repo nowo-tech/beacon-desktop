@@ -41,6 +41,10 @@ through `GET me`, so a 2.4 server or a read-only token keeps the 0.10 read-only 
   closing it removed it twice, which throws there, so the chosen action never ran. It is removed once now, and focus
   goes back to the message even when the list was drawn again meanwhile.
 - The thread panel keeps its scroll position and the focused message when it is drawn again (a new reply, a hint).
+- A message on its way shows the Markdown the box offers (bold, italic, code, lists, links) rendered as the server
+  will render it, never the raw `**` markers (text nodes only, no HTML).
+- The hover / focus toolbar of the first visible message is no longer cut off under the conversation header: with no
+  room above, it sits inside the row.
 
 ### Changed
 

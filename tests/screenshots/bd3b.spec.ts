@@ -87,6 +87,12 @@ for (const scheme of ['light', 'dark'] as const) {
     // 06 the hover toolbar and the reaction toggles.
     const root = page.locator('#msg-list li.msg', { has: page.locator('.thread-link') }).first();
     await root.scrollIntoViewIfNeeded();
+    // The row at the very top: the toolbar goes inside it (never cut off under the header).
+    await root.evaluate((el) => {
+      const box = el.closest('.msgs') as HTMLElement;
+      box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    });
+    await page.mouse.move(0, 0);
     await root.hover();
     await expect(root.locator('.m-actions')).toBeVisible();
     await axe(page, '#msg-list');

@@ -7,6 +7,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { ApiError, TimeTrackApi } from '../../src/api/client';
 import { ChatApi, IDEMPOTENCY_KEY, newIdempotencyKey, retryable } from '../../src/chat/api';
 import { Composer, insertListItem, wrapSelection } from '../../src/chat/composer';
+import { inlineTokens, markdownBlocks } from '../../src/chat/markdown';
+import { placeActions } from '../../src/chat/module';
 import { chatText } from '../../src/chat/i18n';
 import { AUTO_RETRIES, ChatOutbox, type OutboxEvents, refusalOf, toggled, waitFor } from '../../src/chat/outbox';
 import { ChatSync, RateLimited, type SyncClock, type SyncEvents } from '../../src/chat/sync';
@@ -69,6 +71,10 @@ describe('chat writes against the mock ChatKit (2.5)', () => {
     const first = await api.send(ENVELOPE, 'Shipping the **fix**\nnow', key);
     expect(first.replayed).toBe(false);
     expect(first.message.mine).toBe(true);
+    // The server answers the per-reader rendered form (tokens/1), never the raw Markdown.
+    expect(first.message.blocks).toEqual([
+      { type: 'paragraph', tokens: [{ type: 'text', text: 'Shipping the ', marks: [] }, { type: 'text', text: 'fix', marks: ['bold'] }, { type: 'break' }, { type: 'text', text: 'now', marks: [] }] },
+    ]);
     expect(first.root).toBeNull();
     const again = await api.send(ENVELOPE, 'Shipping the **fix**\nnow', key);
     expect(again.replayed).toBe(true);
@@ -119,6 +125,63 @@ describe('chat writes against the mock ChatKit (2.5)', () => {
   it('keeps any other device-code error', async () => {
     const time = new TimeTrackApi({ baseUrl: env.url, source: 'desktop', token: 'unknown-token', fetchImpl: nodeFetch });
     await expect(time.chatDeviceCode('Beacon Desktop')).rejects.toMatchObject({ status: 401 });
+  });
+});
+
+describe('the composer\'s Markdown subset (pending rows and the mock)', () => {
+  it('renders inline marks, code and safe links as data, leaving anything unclosed as typed', () => {
+    expect(inlineTokens('a **b _c_** ~~d~~ `e*f` [g](https://x.example/p) [h](javascript:alert(1)) snake_case_name *i* ** j **')).toEqual([
+      { type: 'text', text: 'a ', marks: [] },
+      { type: 'text', text: 'b ', marks: ['bold'] },
+      { type: 'text', text: 'c', marks: ['bold', 'italic'] },
+      { type: 'text', text: ' ', marks: [] },
+      { type: 'text', text: 'd', marks: ['strike'] },
+      { type: 'text', text: ' ', marks: [] },
+      { type: 'code', text: 'e*f' },
+      { type: 'text', text: ' ', marks: [] },
+      { type: 'link', url: 'https://x.example/p', text: 'g', card: false },
+      { type: 'text', text: ' [h](javascript:alert(1)) snake_case_name ', marks: [] },
+      { type: 'text', text: 'i', marks: ['italic'] },
+      { type: 'text', text: ' ** j **', marks: [] },
+    ]);
+    expect(inlineTokens('[x](https://u:p@x.example) [y](not a url) `` **unclosed')).toEqual([{ type: 'text', text: '[x](https://u:p@x.example) [y](not a url) `` **unclosed', marks: [] }]);
+  });
+
+  it('renders blocks: paragraphs, breaks, lists, quotes, fenced code', () => {
+    expect(markdownBlocks('one\r\ntwo\n\n- a\n* b\n1. c\n2) d\n> q1\n>\n\n```\nx **y**\n```\n```\nopen')).toEqual([
+      { type: 'paragraph', tokens: [{ type: 'text', text: 'one', marks: [] }, { type: 'break' }, { type: 'text', text: 'two', marks: [] }] },
+      { type: 'list', ordered: false, items: [[{ type: 'text', text: 'a', marks: [] }], [{ type: 'text', text: 'b', marks: [] }]] },
+      { type: 'list', ordered: true, items: [[{ type: 'text', text: 'c', marks: [] }], [{ type: 'text', text: 'd', marks: [] }]] },
+      { type: 'quote', tokens: [{ type: 'text', text: 'q1', marks: [] }, { type: 'break' }] },
+      { type: 'code', text: 'x **y**' },
+      { type: 'paragraph', tokens: [{ type: 'text', text: '```', marks: [] }, { type: 'break' }, { type: 'text', text: 'open', marks: [] }] },
+    ]);
+    expect(markdownBlocks('')).toEqual([]);
+    expect(markdownBlocks('> q\npara')).toEqual([
+      { type: 'quote', tokens: [{ type: 'text', text: 'q', marks: [] }] },
+      { type: 'paragraph', tokens: [{ type: 'text', text: 'para', marks: [] }] },
+    ]);
+  });
+
+  it('moves a message toolbar inside its row when there is no room above', () => {
+    const box = document.createElement('div');
+    box.className = 'msgs';
+    const item = document.createElement('li');
+    item.className = 'msg';
+    const bar = document.createElement('div');
+    bar.className = 'm-actions';
+    item.append(bar);
+    box.append(item);
+    document.body.replaceChildren(box);
+    placeActions(bar);
+    expect(item.classList.contains('actions-in')).toBe(true);
+    item.getBoundingClientRect = () => ({ top: 200 }) as DOMRect;
+    placeActions(item);
+    expect(item.classList.contains('actions-in')).toBe(false);
+    placeActions(box);
+    placeActions(null);
+    bar.remove();
+    placeActions(item);
   });
 });
 

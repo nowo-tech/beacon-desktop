@@ -111,7 +111,9 @@ describe('chat writes in the module', () => {
     await until(() => document.querySelector('#msg-list li.msg.pending') === null, 'the sent message');
     expect(document.querySelectorAll('#msg-list li.msg').length).toBe(count + 1);
     const last = [...document.querySelectorAll('#msg-list li.msg')].at(-1) as HTMLElement;
-    expect(last.textContent).toContain('Ship it **today**');
+    // Rendered as the server renders it: bold, never the raw markers.
+    expect(last.textContent).toContain('Ship it today');
+    expect(last.querySelector('.m-body strong')?.textContent).toBe('today');
     // ↑ in the empty box goes to the last message.
     ui.$<HTMLTextAreaElement>('#composer').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
     expect(document.activeElement?.classList.contains('msg')).toBe(true);

@@ -540,6 +540,7 @@ never patched directly, so `after=` never skips a message). Drafts and unsent me
 | File | New / changed | Role |
 |---|---|---|
 | `src/chat/composer.ts` | new | Message box: formatting toolbar (one tab stop), IME-safe Enter, submit button, counter, `field-sizing` with a fallback |
+| `src/chat/markdown.ts` | new | The composer's Markdown subset as `tokens/1` (pending rows; the mock loads the same module) |
 | `src/chat/outbox.ts` | new | Writes in memory: keys, states (sending / waiting / failed / sent), retries, settle after catch-up, optimistic reactions |
 | `src/chat/api.ts`, `src/chat/types.ts` | changed | `send`, `reply`, `react` with `Idempotency-Key`; `me.features` 2.5, `limits.textMaxLength`, `reactions.quick / accepted`, `canSend`, `writeAccess()` |
 | `src/chat/module.ts`, `src/chat/store.ts`, `src/chat/sync.ts` | changed | Composer and thread box, pending rows, reaction toggles, hover toolbar, picker (`E`), reply (`R`), `C`, `Shift+F10`, "Allow sending" |

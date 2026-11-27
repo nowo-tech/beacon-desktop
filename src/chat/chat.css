@@ -288,7 +288,7 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .msg:hover .react.add, .msg:focus-within .react.add, .msg:focus .react.add { opacity: 1; }
 .m-actions { position: absolute; top: -14px; right: 18px; display: flex; gap: 1px; padding: 2px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line-strong); box-shadow: var(--shadow-md); opacity: 0; pointer-events: none; transform: translateY(2px); transition: opacity 120ms var(--ease), transform 120ms var(--ease); z-index: 3; }
 .msg:hover .m-actions, .msg:focus-within .m-actions, .msg:focus .m-actions { opacity: 1; pointer-events: auto; transform: none; }
-.msg:first-child .m-actions { top: 2px; }
+.msg:first-child .m-actions, .msg.actions-in .m-actions { top: 4px; }
 #mod-chat .m-act { height: 28px; min-width: 28px; padding: 0 6px; color: var(--ink-2); display: inline-flex; align-items: center; justify-content: center; gap: 5px; font-size: var(--fs-xs); font-weight: 600; }
 #mod-chat .m-act:hover { background: var(--hover); color: var(--ink); }
 .m-act .e { font-size: 15px; line-height: 1; }

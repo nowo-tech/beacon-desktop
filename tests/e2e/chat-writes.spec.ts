@@ -59,8 +59,13 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.keyboard.press('Enter');
     await expect(page.locator('#composer')).toHaveValue('');
     await expect(page.locator('#msg-list li.msg').last()).toContainText('Shipping after lunch.');
+    // Markdown comes back rendered (bold), never as raw markers.
+    await page.keyboard.type('Bold **works**');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#msg-list li.msg').last().locator('.m-body strong')).toHaveText('works');
+    await expect(page.locator('#msg-list li.msg').last()).not.toContainText('**');
     await expect(page.locator('#msg-list li.msg.pending')).toHaveCount(0);
-    expect((await writes()).filter((write) => write.kind === 'send')).toHaveLength(1);
+    expect((await writes()).filter((write) => write.kind === 'send')).toHaveLength(2);
     // A failed send keeps its key: Retry is written once.
     await control('config', { chatFailNext: { status: 503, error: 'server_error' } });
     await page.keyboard.type('Second try');
@@ -69,7 +74,7 @@ for (const scheme of ['light', 'dark'] as const) {
     expect(await axe(page)).toEqual([]);
     await page.locator('#msg-list li.msg.pending.failed').getByRole('button', { name: 'Retry' }).click();
     await expect(page.locator('#msg-list li.msg.pending')).toHaveCount(0);
-    expect((await writes()).filter((write) => write.kind === 'send' && !write.replayed)).toHaveLength(2);
+    expect((await writes()).filter((write) => write.kind === 'send' && !write.replayed)).toHaveLength(3);
     // ↑ from the empty box to the last message, then up to the thread root; R replies in its thread.
     await page.locator('#composer').focus();
     await page.keyboard.press('ArrowUp');
@@ -100,6 +105,17 @@ for (const scheme of ['light', 'dark'] as const) {
     await root.hover();
     await expect(root.locator('.m-actions')).toBeVisible();
     expect(await axe(page)).toEqual([]);
+    // The first visible row under the header: its toolbar moves inside the row instead of being cut off.
+    const scroller = page.locator('#msg-scroll');
+    await root.evaluate((el) => {
+      const box = el.closest('.msgs') as HTMLElement;
+      box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    });
+    await page.mouse.move(0, 0);
+    await root.hover();
+    const bar = await root.locator('.m-actions').boundingBox();
+    const top = await scroller.boundingBox();
+    expect(bar !== null && top !== null && bar.y >= top.y).toBe(true);
   });
 }
 

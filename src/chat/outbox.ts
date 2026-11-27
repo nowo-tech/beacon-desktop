@@ -16,6 +16,7 @@
  */
 import { ApiError } from '../api/client';
 import { newIdempotencyKey, retryable } from './api';
+import { markdownBlocks } from './markdown';
 import { RateLimited, type ChatSync, type SyncClock } from './sync';
 import type { Message, Person, Reaction } from './types';
 
@@ -225,10 +226,9 @@ export class ChatOutbox {
     this.events.changed(conversation, null);
   }
 
-  /** The message shown for a pending write: the server's once sent, else the text as typed (plain, by the reader). */
+  /** The message shown for a pending write: the server's once sent, else the text rendered as the server will. */
   static view(pending: Pending, author: Person): Message {
     if (pending.sent !== null) return pending.sent;
-    const paragraphs = pending.text.split(/\n{2,}/);
     return {
       id: Number.MAX_SAFE_INTEGER,
       uuid: pending.key,
@@ -242,10 +242,8 @@ export class ChatOutbox {
       threadRootUuid: pending.root,
       thread: null,
       reactions: [],
-      blocks: paragraphs.map((paragraph) => ({
-        type: 'paragraph' as const,
-        tokens: paragraph.split('\n').flatMap((line, i) => (i === 0 ? [{ type: 'text' as const, text: line, marks: [] }] : [{ type: 'break' as const }, { type: 'text' as const, text: line, marks: [] }])),
-      })),
+      // The same subset the server renders (bold, italic, code, lists, links): no raw `**` while it is on its way.
+      blocks: markdownBlocks(pending.text),
     };
   }
 }

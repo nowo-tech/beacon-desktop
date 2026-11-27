@@ -9,6 +9,9 @@
  * `chat/react` changes a reaction; both bump an `events` counter the tests read.
  */
 import { randomUUID } from 'node:crypto';
+// The composer's Markdown subset rendered as ChatKit does (tokens/1, per reader): the app's own module, loaded by Node's
+// type stripping, so the mock and the pending row agree.
+import { markdownBlocks } from '../src/chat/markdown.ts';
 
 export const CHAT_PREFIX = '/api/chat/v1';
 export const CHAT_SCOPES = ['chat:read', 'chat:write'];
@@ -201,7 +204,7 @@ export function createChatMock({ send, error }) {
     if (value === '') return error(res, 422, 'empty_text', 'Empty text.');
     if ([...value].length > 4000) return error(res, 422, 'text_too_long', 'Too long.');
     data.nextId += 1;
-    const message = { id: data.nextId, uuid: randomUUID(), kind: 'user', author: PEOPLE.me, mine: true, createdAt: new Date().toISOString(), edited: false, deleted: false, moderated: false, pinned: false, mentionsMe: false, reactions: [], body: body(...value.split(/\n{2,}/).map((part) => para(...part.split('\n').flatMap((line, i) => (i === 0 ? [text(line)] : [{ type: 'break' }, text(line)]))))), previews: [] };
+    const message = { id: data.nextId, uuid: randomUUID(), kind: 'user', author: PEOPLE.me, mine: true, createdAt: new Date().toISOString(), edited: false, deleted: false, moderated: false, pinned: false, mentionsMe: false, reactions: [], body: body(...markdownBlocks(value)), previews: [] };
     if (match[4] === '/thread') {
       const root = list.find((item) => item.uuid === match[3]);
       if (!root) return error(res, 404, 'not_found', 'Not found.');

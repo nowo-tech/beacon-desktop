@@ -171,6 +171,9 @@ export class ChatModule {
         if (this.stick) this.scroller.scrollTop = this.scroller.scrollHeight;
       }).observe(this.scroller);
     }
+    // The hover / focus toolbar sits above a message; with no room above (the first visible row under the header) it
+    // goes inside the row instead of being cut off.
+    for (const type of ['pointerover', 'focusin'] as const) this.root.addEventListener(type, (event) => placeActions(event.target));
     this.list.addEventListener('keydown', (event) => this.onMessageKey(event, this.list));
     this.list.addEventListener('contextmenu', (event) => this.onContextMenu(event));
     this.list.addEventListener('focusin', (event) => this.roving(event, this.list));
@@ -1620,6 +1623,17 @@ export function showMenu(x: number, y: number, entries: [string, () => void][], 
   document.body.append(menu);
   menu.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
   return menu;
+}
+
+/** Toolbar room above the row (its height minus what overlaps the row): below it, the toolbar moves inside the row. */
+const ACTIONS_ROOM = 16;
+
+/** Puts a message's toolbar inside its row when the row's top is too close to its scroller's (or panel's) top. */
+export function placeActions(target: EventTarget | null): void {
+  const item = target instanceof Element ? target.closest<HTMLElement>('li.msg') : null;
+  const box = item?.closest<HTMLElement>('.msgs, .th-root');
+  if (item === null || item === undefined || box === null || box === undefined || item.querySelector(':scope > .m-actions') === null) return;
+  item.classList.toggle('actions-in', item.getBoundingClientRect().top - box.getBoundingClientRect().top < ACTIONS_ROOM);
 }
 
 /** Focus back to `element`, or to the same message drawn again since (the list re-renders on new data). */
