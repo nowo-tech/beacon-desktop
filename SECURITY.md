@@ -119,6 +119,11 @@ Only the latest release receives fixes. The server can force an update with `min
   `PATCH` only on `…/tasks/{id}` and `…/tasks/{id}/checklist-items/{id}`, `PUT` / `DELETE` only on
   `…/tasks/{id}/members/{user}`, `POST` as any route; `If-Match` is an allowed request header and `ETag` a returned
   one. Sign-out deletes the tasks entry first; "Disconnect tasks" deletes it alone.
+- **Links** (`beacon-desktop://`, src-tauri/src/deeplink.rs). Untrusted input that only navigates: parsed in Rust
+  into `{kind: chat|task, id, context}` (UUID / TaskBoard id, `personal` or `org:<uuid>`; anything else, extra
+  parameters, dot segments, credentials, ports or over 512 bytes is dropped), the main window shown, the UI told. The
+  UI never writes or sends anything for a link; a context switch goes through the usual confirmation.
+- **Notifications** carry no message data (level None); a click target is `chat-open:<uuid>` only, checked in Rust.
 - **Revocation.** "Disconnect chat" and sign-out call `POST …/api/chat/v1/logout` with the chat token first (best
   effort, 3 s), then delete it from the keychain.
 - **Realtime** (`src-tauri/src/realtime.rs`): the ticket (`GET …/api/chat/v1/realtime`) and the SSE stream are made in

@@ -60,10 +60,12 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect.poll(() => page.evaluate(() => (window as unknown as { __timeTrack: { hooks: Hooks } }).__timeTrack.hooks.friendly)).toEqual([{ title: 'Beacon Desktop', body: 'New message in Beacon', pose: null, click: `chat-open:${MAYA}` }]);
     await page.locator('#rail-settings').click();
     await expect(page.locator('#notify-level')).toBeVisible();
+    await page.locator('#notify-pause-hour').scrollIntoViewIfNeeded();
     await axe(page, '#shell-settings');
     await shot(page, '02-settings-notifications', scheme);
     await page.locator('#notify-pause-hour').click();
     await expect(page.locator('#notify-resume')).toBeVisible();
+    await page.locator('#notify-resume').scrollIntoViewIfNeeded();
     await shot(page, '03-settings-paused', scheme);
     const tray = await page.evaluate(() => (window as unknown as { __timeTrack: { hooks: Hooks } }).__timeTrack.hooks.trayMenu?.chat);
     expect(tray?.map((item) => item.id)).toEqual(['open-chat', 'resume-chat']);

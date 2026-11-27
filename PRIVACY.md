@@ -40,6 +40,8 @@ mismatch is logged locally with the server name only, never a token.
 
 - The session token, in the OS keychain; with chat connected, the chat token too (a second entry); with tasks
   connected, the tasks token (a third entry).
+- Chat notifications: only the setting (on / off, asked, paused until). A notification never carries a sender, a
+  conversation name or message text; the operating system shows "New message in Beacon" only.
 - Tasks are **never written to disk** either: boards, tasks and what you type in a task stay in memory and are
   forgotten on an organization switch, "Disconnect tasks" and sign-out. On disk only: the tasks view, the last board
   per organization (its id), *Only mine* and the column-marker setting.

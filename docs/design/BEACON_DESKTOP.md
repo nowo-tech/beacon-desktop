@@ -568,6 +568,20 @@ Beacon still has to register the `tasks` family and the TaskBoard `client_api` (
 | `mock-server/tasks.mjs`, `mock-server/server.mjs` | new / changed | TaskBoard client API mock (revisions, conflicts, policy refusal, `module_forbidden`) |
 | `tests/unit/tasks.test.ts`, `tests/unit/tasks-module.test.ts`, `tests/e2e/tasks.spec.ts`, `tests/screenshots/tasks.spec.ts` | new | API, parsers, module, e2e with axe, owner screenshots |
 
+### 7.4 BD-3b, part 3: notifications (level None), tray, links (app 0.13.0 candidate)
+
+Owner decision 2026-11-27: notifications ship opt-in at level **None** with pause; Sender / Text wait for a ChatKit
+minor (mute, `notifications/preview`, members and reference search) and the organization's maximum (Q-BD-9). Web Push
+dedupe (Q-BD-14) is Beacon work. Links: `beacon-desktop://chat/<uuid>` / `beacon-desktop://tasks/<id>`
+(`?context=`), navigation only.
+
+| File | New / changed | Role |
+|---|---|---|
+| `src/chat/notifications.ts` | new | Opt-in, level None, pause, prime / dedupe / gap rules |
+| `src/shell/shell.ts`, `src/chat/module.ts`, `src/ui/app.ts`, `src/platform*.ts`, `src/main.ts` | changed | Opt-in card, Settings → Chat, tray items, `openTarget` for clicks and links |
+| `src-tauri/src/deeplink.rs`, `src-tauri/src/notify.rs`, `src-tauri/src/lib.rs`, `Cargo.toml`, `tauri.conf.json` | new / changed | Link parsing and hand-over, notification click target, tray chat items, deep-link plugin |
+| `tests/unit/chat-notify.test.ts`, `tests/screenshots/notify.spec.ts` | new | Rules, shell flows, owner screenshots |
+
 ## 8. Open questions
 
 Each question has options and a recommendation. **[Beacon]** = needs Beacon's answer; the rest are the owner's.

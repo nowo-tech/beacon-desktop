@@ -82,8 +82,7 @@ describe('0.2.0 UX', () => {
     await ui.app.refresh();
     expect(document.activeElement).toBe(row(ui, 'T-103'));
     row(ui, 'T-103')?.click();
-    await tick();
-    expect(ui.app.state.activeTimer?.taskId).toBe('T-103');
+    await vi.waitFor(() => expect(ui.app.state.activeTimer?.taskId).toBe('T-103'));
     expect(document.activeElement?.id).toBe('stop');
     // Arrow keys: search → first row → next row; Home / End; Escape back to the search field.
     ui.app.focusSearch();
@@ -122,23 +121,21 @@ describe('0.2.0 UX', () => {
     expect(ui.platform.hooks.trayMenu?.primary).toEqual({ id: 'resume', label: 'Resume “Review pull request queue”' });
     expect(ui.platform.hooks.trayMenu?.switchTo.map((item) => item.id)).toEqual(['switch:T-102', 'switch:T-101']);
     ui.click('#resume');
-    await tick();
-    expect(ui.app.state.activeTimer?.taskId).toBe('T-102');
+    // A request to the mock: waited for, not a fixed delay (slow under coverage).
+    await vi.waitFor(() => expect(ui.app.state.activeTimer?.taskId).toBe('T-102'));
     // Pin a task: it goes first in "Pinned and recent", survives a restart, and Alt+1 switches to it.
     ui.root.querySelector<HTMLButtonElement>('#tasks [data-task="T-105"] .pin')?.click();
     expect(ui.app.isPinned('T-105')).toBe(true);
     expect(ui.$('#quick [data-task="T-105"] .pin').getAttribute('aria-pressed')).toBe('true');
     expect(JSON.parse(localStorage.getItem('time-track-desktop') ?? '{}').pinned.map((t: { id: string }) => t.id)).toEqual(['T-105']);
     ui.key('1', { altKey: true, code: 'Digit1' }, ui.root);
-    await tick();
-    expect(ui.app.state.activeTimer?.taskId).toBe('T-105');
+    await vi.waitFor(() => expect(ui.app.state.activeTimer?.taskId).toBe('T-105'));
     await ui.app.trayAction('switch:T-102');
     expect(ui.app.state.activeTimer?.taskId).toBe('T-102');
     await ui.app.trayAction('switch:unknown');
     // Ctrl+Shift+S stops, then resumes the last task.
     ui.key('S', { ctrlKey: true, shiftKey: true }, ui.root);
-    await tick();
-    expect(ui.app.state.activeTimer).toBeNull();
+    await vi.waitFor(() => expect(ui.app.state.activeTimer).toBeNull());
     await ui.app.trayAction('resume');
     expect(ui.app.state.activeTimer?.taskId).toBe('T-102');
     ui.root.querySelector<HTMLButtonElement>('#quick [data-task="T-105"] .pin')?.click();
@@ -206,8 +203,7 @@ describe('0.2.0 UX', () => {
     expect(ui.$('#notice').textContent).toBe('Copied to the clipboard.');
     await env.control('config', { notFound: [] });
     const retried = ui.app.retry();
-    await tick();
-    expect(ui.app.view).toBe('device');
+    await vi.waitFor(() => expect(ui.app.view).toBe('device'));
     ui.click('#cancel-device');
     await retried;
     ui.app.dismissError();
@@ -239,14 +235,14 @@ describe('0.2.0 UX', () => {
     const ui = mount();
     await ui.app.init();
     const pending = ui.app.connect(env.url);
-    await tick();
+    // The code screen comes after preflight and the device-code request (no fixed wait: slow under coverage).
+    await vi.waitFor(() => expect(ui.$('#user-code')).not.toBeNull(), { timeout: 15_000 });
     expect(ui.$('#expires').textContent).toBe('Expires in 10:00');
     expect(ui.$('[role="progressbar"]').getAttribute('aria-valuemax')).toBe('600');
     const code = ui.$('#user-code').textContent ?? '';
     expect(ui.$('#user-code').getAttribute('aria-label')).toBe(`Code ${code.split('').map((c) => (c === '-' ? 'dash' : c)).join(' ')}`);
     ui.click('#copy-code');
-    await tick();
-    expect(ui.platform.hooks.copied).toEqual([code]);
+    await vi.waitFor(() => expect(ui.platform.hooks.copied).toEqual([code]));
     ui.click('#cancel-device');
     await pending;
     await env.control('config', { deviceExpiresIn: 0 });
@@ -256,8 +252,7 @@ describe('0.2.0 UX', () => {
     expect(ui.$('#device [data-moment="deviceExpired"]').getAttribute('data-pose')).toBe('pose-hourglass');
     await env.control('config', { deviceExpiresIn: 600 });
     ui.click('#new-code');
-    await tick();
-    expect(ui.$('#user-code')).not.toBeNull();
+    await vi.waitFor(() => expect(ui.$('#user-code')).not.toBeNull(), { timeout: 15_000 });
     ui.click('#cancel-device');
     ui.app.destroy();
   });
@@ -268,7 +263,7 @@ describe('0.2.0 UX', () => {
     await ui.app.init();
     await env.control('config', { deviceExpiresIn: 90 });
     const pending = ui.app.connect(env.url);
-    await tick();
+    await vi.waitFor(() => expect(ui.$('#user-code')).not.toBeNull(), { timeout: 15_000 });
     now += 45_000;
     await tick(1100);
     expect(ui.$('#live').textContent).toContain('The code expires in 1 minute.');
@@ -317,13 +312,11 @@ describe('0.2.0 UX', () => {
     await ui.app.refresh();
     expect(ui.$('#error-title').textContent).toBe('A timer is already running');
     ui.click('#error-retry');
-    await tick();
-    expect(ui.$('#error')).toBeNull();
+    await vi.waitFor(() => expect(ui.$('#error')).toBeNull());
     await env.control('config', { failNext: { status: 403, error: 'insufficient_scope' } });
     await ui.app.refresh();
     expect(ui.$('#error-title').textContent).toBe('This connection is missing permissions');
     ui.click('#error-reconnect');
-    await tick();
-    expect(ui.app.view).toBe('login');
+    await vi.waitFor(() => expect(ui.app.view).toBe('login'));
   });
 });

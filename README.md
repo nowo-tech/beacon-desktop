@@ -131,6 +131,11 @@ Your Beacon tasks next to chat and the timer: **Chat**, **Tasks** and **Time** o
    checklist, read its description and comments, or start the timer on it (`S` on a card). `N` adds a task
    (`!high #tag @tomorrow ~2h`).
 
+**Notifications and links.** Chat notifications are off until you turn them on (Chat asks once; Settings → Chat).
+They only say "New message in Beacon", never who wrote or what; a click opens the conversation. Pause them for an hour
+or until tomorrow from Settings or the tray, where *Open chat* is too. `beacon-desktop://chat/<id>` and
+`beacon-desktop://tasks/<id>` links open the app on that conversation or task.
+
 Tasks stay in memory only; a change made elsewhere shows within a minute. Needs Beacon with TaskBoardBundle 3.4 and
 the tasks approval turned on. If Beacon turns the module off for you, the tab disappears and comes back when it is on
 again (the approval is kept).

@@ -156,6 +156,30 @@ describe('desktop app', () => {
     ui.app.destroy();
   });
 
+  it('the task scroller is a focusable region only while it scrolls with nothing focusable in it (axe scrollable-region-focusable)', async () => {
+    const ui = await signedIn();
+    const scroller = ui.$('#task-scroll');
+    expect(scroller.hasAttribute('tabindex')).toBe(false);
+    await ui.app.search('zzz');
+    // jsdom has no layout: the text overflows a short window (or one with a toast's room below).
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 400 });
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 120 });
+    ui.app.render();
+    // The welcome card's button is in it: the keyboard reaches (and scrolls) it already.
+    expect(ui.$('#welcome-dismiss')).not.toBeNull();
+    expect(scroller.hasAttribute('tabindex')).toBe(false);
+    ui.click('#welcome-dismiss');
+    ui.app.render();
+    expect(ui.$('#welcome-dismiss')).toBeNull();
+    expect(scroller.getAttribute('tabindex')).toBe('0');
+    expect(scroller.getAttribute('role')).toBe('region');
+    expect(scroller.getAttribute('aria-label')).toBe('Your tasks');
+    // It fits again: no extra tab stop.
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 120 });
+    ui.app.render();
+    for (const name of ['tabindex', 'role', 'aria-label']) expect(scroller.hasAttribute(name), name).toBe(false);
+  });
+
   it('queues actions offline and syncs them when back', async () => {
     const ui = await signedIn();
     let online = true;

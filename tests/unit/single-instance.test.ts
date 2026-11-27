@@ -26,7 +26,8 @@ describe('one TimeTrack, one tray icon (0.5.1)', () => {
   });
 
   it('the single-instance plugin is a dependency and keyed on the unchanged identifier', () => {
-    expect(readFileSync('src-tauri/Cargo.toml', 'utf8')).toMatch(/^tauri-plugin-single-instance = "2"$/m);
+    // With `deep-link` (BD-3b): a `beacon-desktop://` link opened while the app runs reaches this instance.
+    expect(readFileSync('src-tauri/Cargo.toml', 'utf8')).toMatch(/^tauri-plugin-single-instance = \{ version = "2", features = \["deep-link"\] \}$/m);
     // The mutex / D-Bus name / socket derive from the identifier: changing it lets an old and a new copy run together.
     expect(JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8')).identifier).toBe('tech.nowo.timetrack');
   });
