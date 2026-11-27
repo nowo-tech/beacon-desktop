@@ -66,7 +66,13 @@ release bucket.
   strict CSP: `default-src 'self'`, `connect-src ipc:` only).
 - **All network traffic goes through Rust** (`net.rs`, `beacon_fetch`) with **TLS public-key pinning** for the official
   Beacon host (`pinning.rs`, `pins.json`: CA keys, never the leaf; Mozilla roots compiled in, never the OS store).
-  Self-hosted servers keep standard validation ("Connection not pinned"). Release builds require `https://`.
+  Self-hosted servers kept standard validation ("Connection not pinned"). **Since 2026-11-27 (owner decision) release
+  builds use https://beacon.nowo.tech only**: no address field at sign-in or in the first run, Settings → Account
+  shows the server read-only, Rust refuses to bind any other origin (`net::validate_server_url`), pinning always
+  applies, and the native "Sign in to <host>?" question is no longer asked for it (the host is fixed). The question
+  and its "This is not beacon.nowo.tech" line stay **debug-only**, for an override host (the mock, staging:
+  `BEACON_SERVER_FIELD=1` or Vite's dev server, with a debug Rust build). An install bound to another host is signed
+  out at the next start with a message.
 - **Bound origin**: every request, including the updater, goes only to the origin the user signed in to
   (`beacon_bind`); switching servers means signing out first.
 - **ACL-scoped commands**: every app command is declared in `build.rs`, allowed per window label
@@ -431,6 +437,19 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
 - **Landing module** (owner decision 2026-11-25, three modules: Time, Chat, Tasks): Chat on first launch, then the
   last-used module; Time when a timer is running at launch (details in
   [BEACON_DESKTOP_TASKS.md §9](BEACON_DESKTOP_TASKS.md#9-the-tasks-module-in-the-app)).
+- **One shell for every module** (UX batch 6, owner approval 2026-11-27, UXA-1 / UXA-2 / UXA-4 / UXA-30):
+  - The Time module is hosted in the shell's grammar: no header, *Compact view* toggle or Settings of its own; its
+    sections (*Track*, *Pinned and recent*, *My time*) sit in a module sidebar like Chat's; the detail pane shows from
+    1100 px. Task rows carry one quiet play icon (as Tasks' cards). The mini timer, the stop dialog with required
+    fields, the switch confirmation and the timer placement setting stay as approved in BD-3a.
+  - **One Settings** dialog (rail gear, `Ctrl/⌘+,` in every module, tray): General, Appearance, Timer, Shortcuts,
+    Schedule, Notifications, Meetings, Chat, Tasks, Updates, **Account** (identity, the three connections with
+    *Disconnect…* behind a confirmation, *What we collect*, *Sign out*). The "Settings stays in its own view" line
+    above is superseded.
+  - **Guided first run**: after the first sign-in a setup card chains the Chat and Tasks approvals (§4.2), each step
+    skippable, resumable (Settings → Account, or the next launch if the app quit mid-way); it ends on Chat. A fresh
+    sign-in no longer forces Time: the landing rule applies.
+  - **First window** about 1200 × 780, centred and clamped to the work area; the remembered size wins afterwards.
 - **Timer placement** (owner decision 2026-11-25): a setting, title bar only or title bar + sidebar; the mini timer
   stays a separate, always-available window.
 - **Sidebar** (owner decision 2026-11-25): density is a setting, comfortable or compact. In Chat, **project channels

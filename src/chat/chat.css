@@ -4,7 +4,7 @@
  * on a 4 / 8 px grid, radii 4 / 6 / 8 / 12, motion 120–180 ms and off with reduced motion. Light and dark sets; the
  * system decides unless Settings → Theme forces one (data-theme on <html>, as styles.css).
  */
-:where(.titlebar, .rail, #mod-chat, #mod-tasks, .sh-dialog, .ctx-menu, .mini-timer) {
+:where(.titlebar, .rail, #mod-chat, #mod-tasks, #mod-time, #mod-setup, .sh-dialog, .ctx-menu, .mini-timer) {
   --ink: #0f1c18; --ink-2: #3f514a; --ink-3: #5f6e68;
   --surface: #ffffff; --surface-2: #f6f8f7; --surface-3: #edf2ef; --hover: #f1f5f3;
   --line: #e2e8e4; --line-strong: #cbd5cf;
@@ -25,11 +25,12 @@
   --fs-2xs: 0.6875rem; --fs-xs: 0.75rem; --fs-sm: 0.8125rem; --fs-md: 0.875rem; --fs-lg: 1rem;
   --r-xs: 4px; --r-sm: 6px; --r-md: 8px; --r-lg: 12px;
   --ease: cubic-bezier(0.22, 1, 0.36, 1); --dur: 160ms; --row-h: 30px;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
   color: var(--ink);
   font-family: var(--font-ui);
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) :where(.titlebar, .rail, #mod-chat, #mod-tasks, .sh-dialog, .ctx-menu, .mini-timer) {
+  :root:not([data-theme='light']) :where(.titlebar, .rail, #mod-chat, #mod-tasks, #mod-time, #mod-setup, .sh-dialog, .ctx-menu, .mini-timer) {
     --ink: #e5eee9; --ink-2: #b4c4bc; --ink-3: #93a49c;
     --surface: #121a17; --surface-2: #161f1b; --surface-3: #1c2722; --hover: #18221e;
     --line: #233029; --line-strong: #34453d;
@@ -45,7 +46,7 @@
     --shadow-lg: 0 2px 8px rgb(0 0 0 / 50%), 0 24px 60px rgb(0 0 0 / 60%);
   }
 }
-:root[data-theme='dark'] :where(.titlebar, .rail, #mod-chat, #mod-tasks, .sh-dialog, .ctx-menu, .mini-timer) {
+:root[data-theme='dark'] :where(.titlebar, .rail, #mod-chat, #mod-tasks, #mod-time, #mod-setup, .sh-dialog, .ctx-menu, .mini-timer) {
   --ink: #e5eee9; --ink-2: #b4c4bc; --ink-3: #93a49c;
   --surface: #121a17; --surface-2: #161f1b; --surface-3: #1c2722; --hover: #18221e;
   --line: #233029; --line-strong: #34453d;
@@ -138,7 +139,7 @@ svg.i.lg { width: 20px; height: 20px; }
 .rail .ctx-tile:hover { opacity: 1; }
 .rail-sep { width: 28px; height: 1px; background: var(--chrome-line); margin: 4px 0; }
 .rail-tabs { display: flex; flex-direction: column; gap: 2px; }
-.rail .rail-tab { width: 52px; padding: 7px 0 5px; border-radius: var(--r-md); color: var(--chrome-ink-2); display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 500; position: relative; }
+.rail .rail-tab { width: 52px; padding: 7px 0 5px; border-radius: var(--r-md); color: var(--chrome-ink-2); display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: var(--fs-2xs); font-weight: 500; position: relative; }
 .rail-tab svg.i { width: 20px; height: 20px; }
 .rail .rail-tab:hover { color: var(--chrome-ink); background: var(--chrome-hover); }
 .rail .rail-tab[aria-selected='true'] { color: var(--chrome-ink); }
@@ -148,7 +149,7 @@ svg.i.lg { width: 20px; height: 20px; }
 .rail-tab .live { position: absolute; top: 4px; right: 9px; width: 8px; height: 8px; border-radius: 50%; background: var(--signal-dot); box-shadow: 0 0 0 2px var(--chrome); }
 .rail-spacer { flex: 1; }
 .rail .rail-settings { padding: 8px 0; }
-.shell .badge { display: inline-block; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--badge); color: #fff; font: 700 10.5px/18px var(--font-ui); text-align: center; font-variant-numeric: tabular-nums; }
+.shell .badge { display: inline-block; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--badge); color: #fff; font: 700 var(--fs-2xs)/18px var(--font-ui); text-align: center; font-variant-numeric: tabular-nums; }
 .shell .badge.soft { background: var(--chrome-hover); color: var(--chrome-ink-2); }
 
 /* ---------- Chat layout ---------- */
@@ -182,7 +183,7 @@ svg.i.lg { width: 20px; height: 20px; }
 .side .conv.muted .c-ico, .side .conv.muted .badge, .side .conv.muted > svg { opacity: 0.6; }
 .side .conv.muted .c-name { font-style: italic; }
 .side .conv[aria-current='true'] { background: var(--chrome-active); color: #fff; }
-.conv .sup { font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px; background: rgb(246 198 116 / 18%); color: #f6c674; }
+.conv .sup { font-size: var(--fs-2xs); font-weight: 600; padding: 1px 5px; border-radius: 3px; background: rgb(246 198 116 / 18%); color: #f6c674; }
 .side .sec-more { margin: 8px 6px 0; font-size: var(--fs-xs); color: var(--chrome-ink-2); padding: 4px 6px; }
 .side .sec-more:hover { color: var(--chrome-ink); }
 .side-empty { color: var(--chrome-ink-2); font-size: var(--fs-sm); padding: 8px 6px; margin: 0; }
@@ -245,7 +246,7 @@ svg.i.lg { width: 20px; height: 20px; }
 .m-head { display: flex; align-items: baseline; gap: 8px; }
 .m-author { font-weight: 700; font-size: var(--fs-md); color: var(--ink); }
 .m-time { font-size: var(--fs-xs); color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.m-tag { font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px; background: var(--surface-3); color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.05em; }
+.m-tag { font-size: var(--fs-2xs); font-weight: 600; padding: 1px 5px; border-radius: 3px; background: var(--surface-3); color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.05em; }
 .m-body { color: var(--ink); font-size: var(--fs-md); line-height: 1.55; overflow-wrap: anywhere; max-width: 72ch; }
 .m-body p, .m-body blockquote { margin: 0; }
 .m-body > * + * { margin-top: 4px; }
@@ -265,7 +266,7 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .ref .r-k { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 3px; flex: none; background: var(--surface-3); color: var(--ink-2); }
 .ref .r-id { font: 600 11px/1 var(--font-mono); color: var(--ink-2); white-space: nowrap; }
 .ref .r-t { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 260px; }
-.ref .r-s { white-space: nowrap; font-size: 10px; font-weight: 600; padding: 0 4px; border-radius: 3px; line-height: 15px; background: var(--surface-3); color: var(--ink-2); }
+.ref .r-s { white-space: nowrap; font-size: var(--fs-2xs); font-weight: 600; padding: 0 4px; border-radius: 3px; line-height: 15px; background: var(--surface-3); color: var(--ink-2); }
 .ref .r-s.tone-info { background: var(--slate-soft); color: var(--slate); }
 .ref .r-s.tone-success { background: var(--moss-soft); color: var(--moss); }
 .ref .r-s.tone-warning { background: var(--signal-soft); color: var(--signal); }
@@ -312,7 +313,7 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .msg.system .m-author { color: var(--ink-2); }
 .av { --s: 28px; width: var(--s); height: var(--s); border-radius: 7px; flex: none; position: relative; display: inline-grid; place-items: center; color: #fff; font: 600 calc(var(--s) * 0.38)/1 var(--font-ui); user-select: none; background: #2f6f5a; }
 .av.s20 { --s: 20px; border-radius: 5px; }
-.av.s22 { --s: 22px; border-radius: 6px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.02em; }
+.av.s22 { --s: 22px; border-radius: 6px; font-size: var(--fs-2xs); font-weight: 700; letter-spacing: 0.02em; }
 .conv .c-ico:has(.av) { width: 22px; }
 .av.s36 { --s: 36px; border-radius: 8px; }
 .av.bot { background: var(--chrome-2); color: #9fe3bf; }

@@ -52,7 +52,9 @@ test('theme follows the system by default; Dark / Light override it, persist and
 
   await page.emulateMedia({ colorScheme: 'light' });
   await signIn(page);
-  await page.locator('#open-settings').click();
+  await page.locator('#rail-settings').click();
+  // One Theme, in Settings → Appearance (UX batch 6, UXA-2).
+  await page.locator('#settings-tab-appearance').click();
   const group = page.getByRole('group', { name: 'Theme' });
   await expect(group.getByRole('radio', { name: 'System' })).toBeChecked();
   await group.getByRole('radio', { name: 'Dark' }).check();

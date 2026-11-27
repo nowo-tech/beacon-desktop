@@ -54,6 +54,8 @@ export interface ChatModuleDeps {
   onList?(rows: Conversation[], open: string | null): void;
   /** The opt-in card for notifications (first Chat visit), or `null`. */
   notifyCard?(): HTMLElement | null;
+  /** The "Connect" card was drawn (its device-flow state changed): the shell's guided first run follows (UX batch 6). */
+  onConnectRender?(): void;
   clock?: SyncClock;
   now?: () => Date;
   /** Device-flow sleep (tests shorten it). */
@@ -803,6 +805,7 @@ export class ChatModule {
     this.root.dataset.state = this.connected ? 'connected' : 'disconnected';
     if (!this.connected) {
       this.root.replaceChildren(this.renderConnect());
+      this.deps.onConnectRender?.();
       return;
     }
     if (this.root.firstChild !== this.side) this.root.replaceChildren(this.side, this.main, this.threadSlot);

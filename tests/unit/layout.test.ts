@@ -27,7 +27,8 @@ class MemoryStorage implements Storage {
 
 const SCREEN = { x: 0, y: 0, width: 1920, height: 1040 };
 const screens = (over: Partial<Screens> = {}): Screens => ({ areas: [SCREEN], current: SCREEN, scale: 1, ...over });
-const empty: WindowMemory = { mode: 'compact', bounds: {} };
+// UXA-30: nothing remembered opens the full view (about 1200 × 780).
+const empty: WindowMemory = { mode: 'full', bounds: {} };
 
 describe('layout', () => {
   it('picks the layout from the width and flips the mode', () => {

@@ -92,8 +92,9 @@ a ghost Windows removes when the mouse passes over it.
 
 ### Sign in
 
-1. Enter your Beacon URL and click **Connect**. The app asks *Sign in to <host>?* in a system dialog: check the host
-   and click **Sign in** (if you did not just ask to sign in, click **Cancel**).
+1. Click **Sign in with Beacon**. Beacon Desktop always uses **https://beacon.nowo.tech** (owner decision 2026-11-27):
+   there is no address to type and no *Sign in to <host>?* question, since the host is fixed and its TLS keys are
+   pinned. An install signed in to another server is signed out at the next start with a message saying so.
 2. The app shows a code like `BCDF-GHJK` and opens Beacon's *Connect a device* page in your browser.
 3. Check the code, approve. The app is now listed in Beacon under Account → Security → Time tracking apps, where you
    can revoke it. The session token is stored in the OS keychain only, and only Rust reads it: the app's web view
@@ -405,7 +406,8 @@ required" screen send you to the Store listing instead.
   self-signed certificate) is **not supported**: sign-in, API calls, the update check and in-app updates all fail
   with a certificate error. Use a certificate that chains to the Mozilla root store (for example Let's Encrypt).
 - **Bound to your server.** Every request the app makes and the updater go to the origin (scheme, host, port) of the
-  server you signed in to, and nowhere else; switching servers means signing out first. The session token stays
+  server you signed in to, and nowhere else. Release builds bind https://beacon.nowo.tech only (owner decision
+  2026-11-27); another server is a development option (see *Development*). The session token stays
   in Rust with the server that issued it, so even script running in the window cannot read it or send it elsewhere;
   script itself is prevented by the CSP and the text-only DOM (SECURITY.md, *Credentials*). Plain `http://` to `localhost`,
   `127.0.0.1` or `[::1]` works in development (debug) builds only; release builds require `https://`.
@@ -483,7 +485,14 @@ pnpm screenshots          # regenerates docs/images/*.webp (real UI, fake platfo
 (cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test)
 ```
 
-The mock's device page is `http://127.0.0.1:8787/device` (approve the code shown by the app). `src/api/` is shared
+The mock's device page is `http://127.0.0.1:8787/device` (approve the code shown by the app).
+
+**Development server.** Release builds talk to https://beacon.nowo.tech only: the UI has no address field and Rust
+(`net::validate_server_url`, release builds) refuses to bind any other origin. For development and tests, the address
+field comes back in `pnpm dev` / `pnpm tauri dev` (Vite's dev server) and in any build made with
+`BEACON_SERVER_FIELD=1` (the Playwright configs set it for the mock server; `BEACON_URL` then prefills the field).
+Only a debug Rust build accepts such a server, and only there does a sign-in to a host other than beacon.nowo.tech
+still ask *Sign in to <host>?* with the line *This is not beacon.nowo.tech*. `src/api/` is shared
 verbatim with [time-track-extension](https://github.com/nowo-tech/time-track-extension).
 
 ## Tests and coverage
@@ -516,7 +525,7 @@ steps: [docs/RELEASE-PLAN-0.4.0.md](docs/RELEASE-PLAN-0.4.0.md).
 | `MSIX_IDENTITY_NAME`, `MSIX_PUBLISHER`, `MSIX_PUBLISHER_DISPLAY_NAME`, `TIMETRACK_STORE_URL` | variables (optional) | Microsoft Store package (Partner Center → Product identity) |
 | `TIME_TRACK_S3_ENDPOINT`, `TIME_TRACK_S3_BUCKET`, `TIME_TRACK_S3_ACCESS_KEY_ID`, `TIME_TRACK_S3_SECRET_ACCESS_KEY` (+ optional `TIME_TRACK_S3_REGION`) | secrets | upload (`s3:PutObject` on `time-track-clients/*` only) |
 | `S3_CLIENTS_PREFIX` | variable (optional) | S3 key prefix of every release key (files and `stable.json`; read by `channel.mjs` and `s3-put.sh`); allowlist `time-track-clients` (default) or `beacon-clients`, anything else fails the build. **The Beacon updater must read the same prefix before the variable is flipped**; the app's updater endpoint is unchanged |
-| `BEACON_URL` | variable | prefilled server URL |
+| `BEACON_URL` | variable | unused by release builds since 2026-11-27 (always https://beacon.nowo.tech); prefills the development address field only |
 | `TIME_TRACK_MIN_SUPPORTED_VERSION` | variable (optional) | `min_supported_version` in `stable.json` |
 | `LINUX_RUNNER`, `WINDOWS_RUNNER`, `MACOS_RUNNER` | variables (optional) | JSON `runs-on` value per platform, e.g. `["self-hosted","linux","x64","tauri-build"]`; default `"ubuntu-22.04"`, `"windows-latest"`, `"macos-latest"` |
 | `WINDOWS_BUILD`, `MACOS_BUILD` | variables (optional) | `false` skips that platform (no entries for it in that version's `stable.json`) |

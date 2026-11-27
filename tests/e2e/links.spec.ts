@@ -41,7 +41,7 @@ test('Settings → Open Beacon in: detected browsers, Custom…, used for every 
     ];
     hooks.pickResult = { kind: 'custom', path: 'C:\\Tools\\Brave\\brave.exe', name: 'brave' };
   });
-  await page.locator('#open-settings').click();
+  await page.locator('#rail-settings').click();
   const select = page.getByLabel('Open Beacon in');
   await expect(select).toHaveValue('system');
   await expect(select.locator('option')).toHaveText(['System default browser', 'Brave', 'Mozilla Firefox', 'Custom…']);
@@ -51,13 +51,13 @@ test('Settings → Open Beacon in: detected browsers, Custom…, used for every 
   expect(violations.map((v) => v.id)).toEqual([]);
 
   // The device flow opened the sign-in page with the system default; later links use Brave.
-  await page.locator('#back').click();
+  await page.locator('#settings-close').click();
   await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.render());
   const opened = await page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.openedWith);
   expect(opened).toEqual([{ kind: 'system' }]);
 
   // Custom… opens the host's file picker; the host keeps the result (never the window's storage, GC-L1).
-  await page.locator('#open-settings').click();
+  await page.locator('#rail-settings').click();
   await select.selectOption('custom');
   await expect(page.locator('#browser-path')).toHaveText('C:\\Tools\\Brave\\brave.exe');
   await expect(select).toHaveValue('custom-current');

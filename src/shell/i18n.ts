@@ -1,0 +1,139 @@
+/**
+ * Strings of the one Settings (Account section) and the guided first run (UX batch 6: UXA-2, UXA-4, UXA-30), English
+ * and Spanish. Kept apart from `chat/i18n.ts` so the shell's own copy has one home.
+ */
+import type { Locale } from '../lib/i18n';
+
+const en = {
+  settingsTitle: 'Settings',
+  settingsSections: 'Settings sections',
+  tabAppearance: 'Appearance',
+  tabChat: 'Chat',
+  tabTasks: 'Tasks',
+  tabAccount: 'Account',
+  timeTracking: 'Time tracking',
+
+  accountSignedIn: 'Signed in as {name}',
+  accountServer: 'Beacon at {host}',
+  connections: 'Connections',
+  connTime: 'Time tracking',
+  connTimeHint: 'Your sign-in. Signing out disconnects time, chat and tasks on this computer.',
+  connChat: 'Chat',
+  connTasks: 'Tasks',
+  connOn: 'Connected',
+  connOff: 'Not connected',
+  connChatHint: 'Disconnect chat and stay signed in for time and tasks.',
+  connTasksHint: 'Disconnect tasks and stay signed in for time and chat.',
+  connTasksHidden: 'Turned off in Beacon for this organization.',
+  connect: 'Connect',
+  disconnect: 'Disconnect…',
+  manage: 'Manage in Account',
+  signOut: 'Sign out',
+  whatWeCollect: 'What we collect',
+  finishSetup: 'Finish setup',
+  finishSetupHint: 'Connect what you skipped, one short approval each.',
+
+  confirmChatTitle: 'Disconnect chat?',
+  confirmChatText: 'Your conversations leave this computer and the chat approval ends here. Time and tasks stay signed in. You can connect chat again at any time.',
+  confirmTasksTitle: 'Disconnect tasks?',
+  confirmTasksText: 'Your boards leave this computer and the tasks approval ends here. Time and chat stay signed in. You can connect tasks again at any time.',
+  confirmDisconnect: 'Disconnect',
+  cancel: 'Cancel',
+  chatDisconnected: 'Chat disconnected',
+  tasksDisconnected: 'Tasks disconnected',
+
+  setupTitle: 'Set up Beacon Desktop',
+  setupLead: 'Time tracking is ready. Add chat and tasks with one short approval in Beacon each. Skip anything you do not need: you can connect it later in Settings → Account.',
+  setupSteps: 'Setup steps',
+  setupStepOf: 'Step {n} of {total}',
+  setupTimeText: 'Connected. Your timer is in the title bar.',
+  setupChatText: 'Read and send messages next to your timer.',
+  setupTasksText: 'Your tasks and boards, with the timer one click away.',
+  setupConnectChat: 'Connect chat',
+  setupConnectTasks: 'Connect tasks',
+  setupSkip: 'Skip',
+  setupDone: 'Connected',
+  setupSkipped: 'Skipped',
+  setupLater: 'Finish later',
+  setupWaiting: 'Approve Beacon Desktop in Beacon. This screen moves on by itself.',
+  setupCode: 'Code',
+  setupOpen: 'Open the approval page',
+  setupCopy: 'Copy code',
+  setupCancel: 'Cancel',
+  setupFinished: 'Setup finished. Opening chat.',
+  setupTasksOff: 'Tasks are turned off in Beacon for now.',
+};
+
+export type ShellKey = keyof typeof en;
+export type ShellText = (key: ShellKey, params?: Record<string, string | number>) => string;
+
+const es: Record<ShellKey, string> = {
+  settingsTitle: 'Ajustes',
+  settingsSections: 'Secciones de ajustes',
+  tabAppearance: 'Apariencia',
+  tabChat: 'Chat',
+  tabTasks: 'Tareas',
+  tabAccount: 'Cuenta',
+  timeTracking: 'Control de tiempo',
+
+  accountSignedIn: 'Sesión iniciada como {name}',
+  accountServer: 'Beacon en {host}',
+  connections: 'Conexiones',
+  connTime: 'Control de tiempo',
+  connTimeHint: 'Tu sesión. Al cerrarla se desconectan el tiempo, el chat y las tareas en este equipo.',
+  connChat: 'Chat',
+  connTasks: 'Tareas',
+  connOn: 'Conectado',
+  connOff: 'Sin conectar',
+  connChatHint: 'Desconecta el chat y sigue con la sesión iniciada para el tiempo y las tareas.',
+  connTasksHint: 'Desconecta las tareas y sigue con la sesión iniciada para el tiempo y el chat.',
+  connTasksHidden: 'Desactivadas en Beacon para esta organización.',
+  connect: 'Conectar',
+  disconnect: 'Desconectar…',
+  manage: 'Gestionar en Cuenta',
+  signOut: 'Cerrar sesión',
+  whatWeCollect: 'Qué datos recogemos',
+  finishSetup: 'Terminar la configuración',
+  finishSetupHint: 'Conecta lo que omitiste, con una aprobación breve cada uno.',
+
+  confirmChatTitle: '¿Desconectar el chat?',
+  confirmChatText: 'Tus conversaciones dejan este equipo y la aprobación del chat termina aquí. El tiempo y las tareas siguen con la sesión iniciada. Puedes volver a conectar el chat cuando quieras.',
+  confirmTasksTitle: '¿Desconectar las tareas?',
+  confirmTasksText: 'Tus tableros dejan este equipo y la aprobación de las tareas termina aquí. El tiempo y el chat siguen con la sesión iniciada. Puedes volver a conectar las tareas cuando quieras.',
+  confirmDisconnect: 'Desconectar',
+  cancel: 'Cancelar',
+  chatDisconnected: 'Chat desconectado',
+  tasksDisconnected: 'Tareas desconectadas',
+
+  setupTitle: 'Configura Beacon Desktop',
+  setupLead: 'El control de tiempo está listo. Añade el chat y las tareas con una aprobación breve en Beacon cada uno. Omite lo que no necesites: puedes conectarlo después en Ajustes → Cuenta.',
+  setupSteps: 'Pasos de la configuración',
+  setupStepOf: 'Paso {n} de {total}',
+  setupTimeText: 'Conectado. Tu temporizador está en la barra de título.',
+  setupChatText: 'Lee y envía mensajes junto a tu temporizador.',
+  setupTasksText: 'Tus tareas y tableros, con el temporizador a un clic.',
+  setupConnectChat: 'Conectar el chat',
+  setupConnectTasks: 'Conectar las tareas',
+  setupSkip: 'Omitir',
+  setupDone: 'Conectado',
+  setupSkipped: 'Omitido',
+  setupLater: 'Terminar más tarde',
+  setupWaiting: 'Aprueba Beacon Desktop en Beacon. Esta pantalla avanza sola.',
+  setupCode: 'Código',
+  setupOpen: 'Abrir la página de aprobación',
+  setupCopy: 'Copiar código',
+  setupCancel: 'Cancelar',
+  setupFinished: 'Configuración terminada. Abriendo el chat.',
+  setupTasksOff: 'Las tareas están desactivadas en Beacon por ahora.',
+};
+
+const CATALOGS: Record<Locale, Record<ShellKey, string>> = { en, es };
+
+export function shellText(locale: Locale): ShellText {
+  const catalog = CATALOGS[locale] ?? en;
+  return (key, params) => {
+    let text = catalog[key] ?? en[key];
+    for (const [name, value] of Object.entries(params ?? {})) text = text.split(`{${name}}`).join(String(value));
+    return text;
+  };
+}

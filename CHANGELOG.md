@@ -96,6 +96,41 @@ Pre-release audit BDA13 of the 0.13.0 candidate (nothing here affects 0.12.0 or 
   to revoke it on the server yet (chat has `POST …/chat/v1/logout`); it stays valid until it expires. To end it at
   once, revoke the device in Beacon (Account → Security). The app will call the route once TaskBoard offers one.
 
+### UX batch 6: Time in the shell, one Settings, guided first run
+
+From the UX audit of 2026-11-27 (UXA-1, 2, 4, 24, 25, 30, 36, 37); the owner approved the changes to the bd-3a screens.
+
+- **Time in the shell** (UXA-1): the Time module no longer draws its own "Beacon Desktop" header, *Compact view*
+  toggle (button, `Ctrl/⌘+Shift+L` and tray item) or Settings; its sections sit in a module sidebar like Chat's
+  (260 px, the shell's colours and rows, *Open Beacon* at its foot) and it paints with the shell's tokens. From 900 px
+  the sidebar and the list show; the detail pane waits for 1100 px. The mini timer, the stop dialog with its required
+  fields, the switch confirmation and the timer placement setting are unchanged.
+- **Track** (UXA-25): the Time sidebar's first item is *Track* / *Registrar*, no longer a second "Tasks".
+- **Quiet play icons** (UXA-24): one ghost play icon per task row, shown on hover and focus (always on the running
+  row, where it stops), one Tab stop for all rows (↑/↓, Home, End move; Enter or `S` start).
+- **One Settings** (UXA-2): the rail's gear, `Ctrl/⌘+,` in every module, the tray and the Time module all open one
+  dialog with a tab list (vertical when it fits): General, Appearance (Theme, once), Timer (the required-field and
+  mini-timer rows first), Shortcuts, Schedule, Notifications, Meetings, Chat, Tasks, Updates and **Account**: who is
+  signed in, the three connections with *Connect* or *Disconnect…*, *What we collect* and *Sign out*.
+  *Disconnect…* asks first, with Cancel as the default (UXA-8's confirm).
+- **Guided first run** (UXA-4): after the first sign-in, one card walks through the Chat and Tasks approvals (each
+  started from the card, its code shown there), every step skippable; *Finish later* or a rail tab leaves it, and
+  Settings → Account → *Finish setup* resumes it. A setup the app quit in the middle of comes back at the next
+  launch. It ends on Chat; afterwards the landing rule applies (Chat on the first launch, then the last module, Time
+  while a timer runs), also after a later sign-in.
+- **First window** (UXA-30): about 1200 × 780, centred and clamped to the work area (`tauri.conf.json`, and the full
+  preset when nothing is remembered); the size the window was left at still wins at the next launch. The minimum
+  stays 380 × 560.
+- **One Beacon server** (owner decision 2026-11-27): release builds always use https://beacon.nowo.tech. The sign-in
+  and the first run have no address field (*Sign in with Beacon* starts the approval straight away), Settings →
+  Account shows the server read-only, Rust refuses to bind any other origin, and the native *Sign in to <host>?*
+  question is no longer asked for it on any sign-in or reconnect (the host is fixed and pinned). An install bound to
+  another host is signed out at the next start with a message. Development keeps an override: the address field in
+  Vite's dev server and in builds with `BEACON_SERVER_FIELD=1` (the Playwright configs, for the mock server), accepted
+  only by debug Rust builds, which still ask *Sign in to <host>?* for a host other than beacon.nowo.tech.
+- **Type and spacing** (UXA-36, UXA-37): no text under 11 px (rail labels, badges, tags, priority, avatars use
+  `--fs-2xs`); spacing tokens `--sp-1…6` (4–32 px) for the new screens.
+
 ## [0.12.0] - 2026-11-27
 
 BD-3b, first part (design `docs/design/BEACON_DESKTOP.md` §7.2): chat writes. Needs ChatKitBundle

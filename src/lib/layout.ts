@@ -42,7 +42,7 @@ export interface Screens {
 }
 
 export interface WindowMemory {
-  /** View last used. */
+  /** View last used (UXA-30: a first run opens the full one, about 1200 × 780, centred on the work area). */
   mode: LayoutMode;
   /** Last size and position of the window in each view. */
   bounds: Partial<Record<LayoutMode, Rect>>;
@@ -72,9 +72,9 @@ export function loadWindowMemory(storage: Storage): WindowMemory {
       const rect = raw.bounds?.[mode];
       if (isRect(rect)) bounds[mode] = { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
     }
-    return { mode: raw.mode === 'full' ? 'full' : 'compact', bounds };
+    return { mode: raw.mode === 'compact' ? 'compact' : 'full', bounds };
   } catch {
-    return { mode: 'compact', bounds: {} };
+    return { mode: 'full', bounds: {} };
   }
 }
 

@@ -50,6 +50,8 @@ export interface TasksModuleDeps {
   onConnection(connected: boolean): void;
   /** `403 module_forbidden`: hide (true) or show (false) the module; the token is kept. */
   onForbidden(forbidden: boolean): void;
+  /** The "Connect" card was drawn (its device-flow state changed): the shell's guided first run follows (UX batch 6). */
+  onConnectRender?(): void;
   startTimer(task: TaskTimerRef): Promise<void>;
   stopTimer(): Promise<void>;
   runningTaskId(): string | null;
@@ -914,6 +916,7 @@ export class TasksModule {
     this.root.dataset.state = !this.connected ? 'disconnected' : this.forbidden ? 'forbidden' : 'connected';
     if (!this.connected) {
       this.root.replaceChildren(this.renderConnect());
+      this.deps.onConnectRender?.();
       return;
     }
     if (this.forbidden) {

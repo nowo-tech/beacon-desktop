@@ -76,7 +76,7 @@ async function inOrg(ui: Awaited<ReturnType<typeof connected>>) {
 describe('shell preferences', () => {
   it('parses stored preferences safely and picks the landing module (Q1)', () => {
     localStorage.setItem(SHELL_KEY, JSON.stringify({ module: 'time', density: 'compact', switcher: 'dropdown', timer: 'title-sidebar', context: 'bad key!' }));
-    expect(loadShellPrefs(localStorage)).toEqual({ module: 'time', density: 'compact', switcher: 'dropdown', timer: 'title-sidebar', context: null, markers: 'emoji' });
+    expect(loadShellPrefs(localStorage)).toEqual({ module: 'time', density: 'compact', switcher: 'dropdown', timer: 'title-sidebar', context: null, markers: 'emoji', setup: null, skipped: [] });
     localStorage.setItem(SHELL_KEY, '{');
     expect(loadShellPrefs(localStorage).module).toBeNull();
     localStorage.setItem(SHELL_KEY, '"x"');
@@ -105,7 +105,7 @@ describe('shell and chat module', () => {
     await env.control('config', { deviceInterval: 1 });
   });
 
-  it('stays bare while signed out, then shows the rail and Time after a sign-in', async () => {
+  it('stays bare while signed out, then shows the rail and the guided setup after a first sign-in', async () => {
     const ui = mount();
     await ui.app.init();
     expect(ui.shell.root.dataset.bare).toBe('true');
@@ -114,9 +114,13 @@ describe('shell and chat module', () => {
     await env.control('device/approve', { userCode: ui.$('#user-code').textContent });
     await done;
     await until(() => ui.shell.root.dataset.bare === 'false', 'the shell');
-    expect(ui.shell.module).toBe('time');
+    // UX batch 6 (UXA-4): a first sign-in opens the setup card (Chat next), no longer Time.
+    await until(() => ui.shell.setupShown, 'the setup');
+    expect(ui.shell.module).toBe('chat');
     expect(ui.$('#mod-chat').hidden).toBe(true);
-    expect(ui.$('#tab-time').getAttribute('aria-selected')).toBe('true');
+    expect(ui.$('#mod-time').hidden).toBe(true);
+    expect(ui.$('#mod-setup').hidden).toBe(false);
+    expect(ui.$('#tab-time').getAttribute('aria-selected')).toBe('false');
     expect(ui.$('#chat-connect')).not.toBeNull();
     expect(ui.$('#tb-search').hidden).toBe(true);
     // Ctrl+2 / Ctrl+1 switch modules and remember the last one.
@@ -372,7 +376,7 @@ describe('shell and chat module', () => {
     ui.key({ key: ',', ctrlKey: true });
     const dialog = ui.$<HTMLDialogElement>('#shell-settings');
     expect(dialog.open).toBe(true);
-    expect(ui.$('#shell-settings-title').textContent).toBe('Ajustes de Beacon Desktop');
+    expect(ui.$('#shell-settings-title').textContent).toBe('Ajustes');
     const pick = (label: string, value: string) => (document.querySelector(`#shell-settings [aria-label="${label}"] [data-value="${value}"]`) as HTMLButtonElement).click();
     pick('Densidad de la barra lateral', 'compact');
     expect(ui.shell.root.dataset.density).toBe('compact');
@@ -380,12 +384,22 @@ describe('shell and chat module', () => {
     expect(ui.shell.prefs.switcher).toBe('dropdown');
     pick('Cronómetro en marcha', 'title-sidebar');
     expect(ui.shell.root.dataset.timer).toBe('title-sidebar');
-    pick('Tema', 'dark');
+    // Theme: one control only (the Time module's native radios, in Appearance; UXA-2).
+    expect(document.querySelectorAll('#shell-settings #theme')).toHaveLength(1);
+    const theme = (value: string) => {
+      const radio = document.querySelector(`#shell-settings #theme-${value}`) as HTMLInputElement;
+      radio.checked = true;
+      radio.dispatchEvent(new Event('change'));
+    };
+    theme('dark');
     await until(() => document.documentElement.getAttribute('data-theme') === 'dark', 'dark');
-    (document.querySelector('#shell-settings [aria-label="Tema"] [data-value="dark"]') as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    theme('system');
     await until(() => ui.app.state.settings.theme === 'system', 'system');
     expect(JSON.parse(localStorage.getItem(SHELL_KEY) ?? '{}')).toMatchObject({ density: 'compact', switcher: 'dropdown', timer: 'title-sidebar' });
+    // Disconnect (Account) asks first (UXA-8).
     ui.$<HTMLButtonElement>('#chat-disconnect').click();
+    await until(() => ui.$<HTMLDialogElement>('#shell-confirm').open, 'the confirmation');
+    ui.$<HTMLButtonElement>('#confirm-ok').click();
     await until(() => !ui.shell.chat.connected, 'disconnected');
     expect(ui.platform.hooks.chatToken).toBeNull();
     expect(ui.platform.hooks.badge).toBe(0);
@@ -400,8 +414,8 @@ describe('shell and chat module', () => {
     expect(ui.$<HTMLDialogElement>('#shell-keys').open).toBe(true);
     ui.$<HTMLDialogElement>('#shell-keys').close();
     ui.$<HTMLButtonElement>('#rail-settings').click();
-    expect(document.querySelector('#shell-settings .btn.primary')?.textContent).toBe('Conectar chat');
-    (document.querySelector('#shell-settings .btn.primary') as HTMLButtonElement).click();
+    expect(document.querySelector('#settings-chat-connect')?.textContent).toBe('Conectar chat');
+    (document.querySelector('#settings-chat-connect') as HTMLButtonElement).click();
     await until(() => ui.$('#chat-user-code') !== null, 'the code');
   });
 

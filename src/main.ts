@@ -9,6 +9,8 @@ import './styles.css';
 // After styles.css: the shell's rules win over the Time module's element defaults.
 import './chat/chat.css';
 import './tasks/tasks.css';
+// UX batch 6: the Time module in the shell's grammar, the one Settings and the guided first run.
+import './shell/shell.css';
 
 const isTauri = '__TAURI_INTERNALS__' in window;
 const root = document.getElementById('app');
@@ -39,11 +41,13 @@ if (root !== null && new URLSearchParams(location.search).get('window') === 'pro
     contextLabel: () => shell.contextLabel(),
     contextLabelOf: (context) => shell.contextLabelOf(context),
     beaconUrl: __BEACON_URL__,
+    // Release builds: always https://beacon.nowo.tech, no address field (owner decision 2026-11-27).
+    ...(__SERVER_FIELD__ ? {} : { fixedServer: __BEACON_URL__ }),
     channel: __CHANNEL__,
     ...(__STORE_URL__ !== '' ? { storeUrl: __STORE_URL__ } : {}),
   });
   shell.attach(app);
-  // A session restored at launch follows the landing rule; a sign-in made in this run stays on Time.
+  // A session restored at launch follows the landing rule (owner Q1); a first sign-in in this run opens the guided setup.
   shell.freshSignIn = app.state.session === null;
   void app.init();
   // The regular check: in the Tauri app the Rust heartbeat wakes it, on time while the window is hidden

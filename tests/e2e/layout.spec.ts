@@ -122,19 +122,23 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.setViewportSize({ width: FULL.width, height: 560 });
     await page.locator('#task-scroll').evaluate((el) => el.scrollTo(0, el.scrollHeight));
     const timer = await page.locator('#timer').boundingBox();
-    const header = await page.locator('.bar').boundingBox();
+    // The shell's title bar is the only header (UX batch 6, UXA-1).
+    const header = await page.locator('#titlebar').boundingBox();
     expect(timer?.y).toBeGreaterThanOrEqual((header?.y ?? 0) + (header?.height ?? 0) - 1);
     expect((timer?.y ?? 0) + (timer?.height ?? 0)).toBeLessThanOrEqual(560);
     await noOverlap(page, `${scheme} full, scrolled`);
 
-    // Settings: a page in the main pane between the sidebar and the detail pane.
+    // Settings: the one Settings dialog (UX batch 6, UXA-2), the Time module behind it unchanged.
     await page.setViewportSize(FULL);
-    await page.locator('#nav-settings').click();
-    await expect(page.locator('#main-pane #settings')).toBeVisible();
-    await expect(page.locator('#detail')).toBeVisible();
+    await expect(page.locator('#nav-settings')).toHaveCount(0);
+    await page.locator('#rail-settings').click();
+    await expect(page.locator('#shell-settings')).toBeVisible();
+    await expect(page.locator('#settings-tablist')).toHaveAttribute('aria-orientation', 'vertical');
     await noHorizontalScroll(page, `${scheme} settings`);
-    await noOverlap(page, `${scheme} settings`);
     await axe(page, `${scheme} settings`);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#shell-settings')).toBeHidden();
+    await expect(page.locator('#detail')).toBeVisible();
 
     // My time.
     await page.locator('#nav-time').click();
@@ -144,15 +148,24 @@ for (const scheme of ['light', 'dark'] as const) {
   });
 }
 
-test('the view toggle and Ctrl+Shift+L resize the window; F6 walks the panes', async ({ page }) => {
-  await page.setViewportSize(COMPACT);
-  await signIn(page);
-  const sets = () => page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.window.set);
-  await page.locator('#layout-toggle').click();
-  await expect.poll(async () => (await sets()).at(-1)?.width).toBe(1200);
-  // The (fake) OS applies the new size.
+test('hosted in the shell: no view toggle (the window keeps its size), the detail pane waits for 1100 px, F6 walks the panes', async ({ page }) => {
   await page.setViewportSize(FULL);
-  await expect(page.locator('#layout-toggle')).toHaveText('Compact view');
+  await signIn(page);
+  const sets = () => page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.window.set.length);
+  await expect(page.locator('#layout-toggle')).toHaveCount(0);
+  await expect(page.locator('#app > .bar')).toBeHidden();
+  const before = await sets();
+  await page.keyboard.press('Control+Shift+L');
+  await page.waitForTimeout(200);
+  expect(await sets()).toBe(before);
+  // 900–1099 px: sidebar and list only, so titles keep their room (UXA-1).
+  await page.setViewportSize({ width: 960, height: 640 });
+  await expect(page.locator('#app')).toHaveAttribute('data-layout', 'full');
+  await expect(page.locator('#sidebar')).toBeVisible();
+  await expect(page.locator('#detail')).toBeHidden();
+  await noHorizontalScroll(page, 'hosted 960');
+  await page.setViewportSize(FULL);
+  await expect(page.locator('#detail')).toBeVisible();
   await page.keyboard.press('F6');
   await expect(page.locator('#nav-tasks')).toBeFocused();
   await page.keyboard.press('F6');
@@ -163,9 +176,4 @@ test('the view toggle and Ctrl+Shift+L resize the window; F6 walks the panes', a
   await expect(page.locator('#detail-start')).toBeFocused();
   await page.keyboard.press('Shift+F6');
   await expect(page.locator('#search')).toBeFocused();
-  await page.keyboard.press('Control+Shift+L');
-  await expect.poll(async () => (await sets()).at(-1)?.width).toBe(400);
-  await page.setViewportSize(COMPACT);
-  await expect(page.locator('#app')).toHaveAttribute('data-layout', 'compact');
-  await expect(page.locator('#layout-toggle')).toHaveAttribute('aria-label', 'Switch to the full view');
 });

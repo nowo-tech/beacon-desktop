@@ -105,7 +105,13 @@ test('disconnect chat keeps time signed in; sign-out ends both', async ({ page }
   await signIn(page);
   await connectChat(page);
   await page.locator('#rail-settings').click();
+  // UX batch 6: Disconnect lives in Account and asks first (Cancel is the default).
+  await page.locator('#settings-tab-account').click();
   await page.locator('#chat-disconnect').click();
+  await expect(page.locator('#confirm-cancel')).toBeFocused();
+  await page.locator('#confirm-ok').click();
+  await expect(page.locator('#account-chat-connect')).toBeVisible();
+  await page.locator('#settings-tab-chat').click();
   await expect(page.locator('#settings-chat-connect')).toHaveText('Connect chat');
   await page.keyboard.press('Escape');
   await expect(page.locator('#chat-connect')).toBeVisible();

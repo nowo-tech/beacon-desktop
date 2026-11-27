@@ -140,11 +140,31 @@ const SETTINGS_TAB_LABELS: Record<SettingsTab, MessageKey> = {
 /** Sections of the full layout's sidebar (the compact layout shows the tasks section). */
 export type Section = 'tasks' | 'quick' | 'time';
 
+/**
+ * The shell hosting the Time module (UX batch 6, UXA-1 / UXA-2): it owns the window chrome (title bar, rail) and the
+ * one Settings, so the hosted Time module drops its own header, Compact view toggle and Settings view.
+ */
+export interface TimeHost {
+  /** Opens the one Settings (optionally on a tab). */
+  openSettings(tab?: string): void;
+  /** The host's own local-storage keys: "Clear local data" removes them too. */
+  localKeys?: readonly string[];
+}
+
+/** Hosted in the shell: the detail pane shows from this window width (CSS px); narrower, sidebar · list only. */
+export const DETAIL_MIN_WIDTH = 1100;
+
 export interface AppDeps {
   storage?: Storage;
   now?: () => Date;
   locale?: Locale;
   beaconUrl?: string;
+  /**
+   * The one Beacon server of this build (owner decision 2026-11-27, release builds: https://beacon.nowo.tech): the
+   * sign-in has no address field, and a session stored for another server is signed out. Absent: the address field
+   * (development and the mock server only).
+   */
+  fixedServer?: string;
   /** Device-flow sleep (tests shorten it). */
   sleep?: (ms: number) => Promise<void>;
   searchDelayMs?: number;
@@ -221,6 +241,15 @@ const SAVED_VARIANTS: MessageKey[] = ['savedA', 'savedB', 'savedC'];
 const THEME_LABELS: Record<ThemePreference, MessageKey> = { system: 'themeSystem', light: 'themeLight', dark: 'themeDark' };
 
 /** `m:ss` for the device-code countdown. */
+/** Same scheme, host and port (an address that does not parse is never the same). */
+export function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
 function countdown(seconds: number): string {
   const s = Math.max(0, Math.ceil(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -430,6 +459,10 @@ export class DesktopApp {
   private readonly menuRegion: HTMLElement;
   private lastTrayMenu = '';
   private main: MainRegions | null = null;
+  /** The shell hosting this module (`null`: the standalone window, as in 0.8). */
+  private host: TimeHost | null = null;
+  /** Hosted: the detail pane was drawn at the last render (it follows the window width). */
+  private detailShown = false;
   /** Settings: the tablist and its panels, built once per session; each panel is patched in place. */
   private settingsView: { root: HTMLElement; tabs: Tabs<SettingsTab> } | null = null;
   /** Follows the Settings content's width (vertical or horizontal tablist). */
@@ -480,7 +513,7 @@ export class DesktopApp {
     this.timeFormat = new Intl.DateTimeFormat(formatLocale, { hour: 'numeric', minute: '2-digit' });
     this.dateFormat = new Intl.DateTimeFormat(formatLocale, { dateStyle: 'medium', timeStyle: 'short' });
     this.state = loadLocal(this.storage);
-    this.serverDraft = this.state.lastServer ?? deps.beaconUrl ?? '';
+    this.serverDraft = deps.fixedServer ?? this.state.lastServer ?? deps.beaconUrl ?? '';
     this.queue = new OfflineQueue(this.storage);
     this.meetingStore = new MeetingStore(this.storage);
     document.documentElement.lang = this.locale;
@@ -515,6 +548,18 @@ export class DesktopApp {
     return this.deps.viewportWidth?.() ?? globalThis.innerWidth ?? 0;
   }
 
+  /** Hosted in the shell (UX batch 6): no header of its own, one Settings, no Compact view toggle. */
+  embed(host: TimeHost): void {
+    this.host = host;
+    this.root.classList.add('hosted');
+    if (this.view !== 'loading') this.render();
+  }
+
+  /** Hosted in the shell (see `embed`). */
+  get hosted(): boolean {
+    return this.host !== null;
+  }
+
   async init(): Promise<void> {
     this.version = await this.platform.appVersion();
     await this.syncWindowTheme();
@@ -541,6 +586,17 @@ export class DesktopApp {
     await this.applyShortcut(this.state.settings.resumeShortcut, false, 'resume');
     await this.loadBrowserChoice();
     this.token = await this.platform.secretGet();
+    // A session of another server than this build's one (should not exist in production): signed out, and told why.
+    const moved = this.state.session !== null && this.deps.fixedServer !== undefined && !sameOrigin(this.state.session.server, this.deps.fixedServer) ? this.state.session.server : null;
+    if (moved !== null) {
+      await this.forgetToken();
+      await this.prepareMeetingAccount();
+      this.clearAccountData();
+      this.show('login');
+      this.setNotice(this.t('serverFixedSignedOut', { host: hostOf(this.deps.fixedServer), old: hostOf(moved) }));
+      await this.updateTray();
+      return;
+    }
     if (this.state.session === null || this.token === null) {
       // A token without a saved session (local data cleared) cannot be used or replaced: sign in again.
       if (this.token !== null) await this.forgetToken();
@@ -801,6 +857,10 @@ export class DesktopApp {
   }
 
   show(view: View): void {
+    if (view === 'settings' && this.host !== null) {
+      this.openHostSettings();
+      return;
+    }
     if (view !== this.view) {
       this.showWhere = false;
       this.announce('');
@@ -813,6 +873,21 @@ export class DesktopApp {
     if (view === 'settings') void this.loadConnectionSecurity();
   }
 
+  /** Hosted: Settings is the shell's dialog; "What we collect" goes back to the main screen behind it. */
+  private openHostSettings(tab?: SettingsTab | 'account'): void {
+    if (this.view === 'settings' || this.view === 'privacy') {
+      this.view = 'main';
+      this.render();
+    }
+    this.host?.openSettings(tab);
+  }
+
+  /** Settings is opening: the browsers found here and the connection's protection are asked for (shown when known). */
+  prepareSettings(): void {
+    if (this.browsers === null) void this.loadBrowsers();
+    void this.loadConnectionSecurity();
+  }
+
   /** Asks the host how the connection to the server is protected (TLS pinning, docs/PINNING.md). */
   private async loadConnectionSecurity(): Promise<void> {
     const server = this.state.session?.server ?? null;
@@ -823,7 +898,7 @@ export class DesktopApp {
       // Unknown: nothing is shown.
     }
     this.connectionSecurity = security;
-    if (this.view === 'settings') this.render();
+    if (this.view === 'settings' || this.host !== null) this.render();
   }
 
   /**
@@ -866,6 +941,8 @@ export class DesktopApp {
    * opens the verification page and polls until approved. Expired / denied codes stay on the device screen.
    */
   async connect(input: string = this.serverDraft): Promise<void> {
+    // A fixed server: whatever the caller passed, only this build's one (the address is never asked for).
+    if (this.deps.fixedServer !== undefined) input = this.deps.fixedServer;
     this.serverDraft = input;
     const prepared = prepareServerUrl(input);
     if (!prepared.ok) {
@@ -2519,7 +2596,7 @@ export class DesktopApp {
       switchTo: signedIn ? this.quickTasks().slice(0, MAX_TRAY_TASKS).map((task) => ({ id: `switch:${task.id}`, label: task.title })) : [],
       search: t('traySearch'),
       open: t('trayOpen'),
-      layout: signedIn ? { id: `layout-${otherMode(this.layout)}`, label: t(this.layout === 'full' ? 'layoutCompact' : 'layoutFull') } : null,
+      layout: signedIn && this.host === null ? { id: `layout-${otherMode(this.layout)}`, label: t(this.layout === 'full' ? 'layoutCompact' : 'layoutFull') } : null,
       openBeacon: dashboardUrl(server) !== null ? t('openBeacon') : null,
       myTime: myTimeUrl(server) !== null ? t('myTime') : null,
       checkUpdates: signedIn && this.channel === 'direct' ? t('trayCheckUpdates') : null,
@@ -3270,7 +3347,7 @@ export class DesktopApp {
       this.browserChoice = SYSTEM_BROWSER;
     }
     this.clearMeetings();
-    for (const key of [...LOCAL_KEYS, WINDOW_KEY]) this.storage.removeItem(key);
+    for (const key of [...LOCAL_KEYS, WINDOW_KEY, ...(this.host?.localKeys ?? [])]) this.storage.removeItem(key);
     this.windowMemory = loadWindowMemory(this.storage);
     this.section = 'tasks';
     this.selectedTaskId = null;
@@ -3312,7 +3389,11 @@ export class DesktopApp {
   relayout(): void {
     if (!this.root.isConnected) return;
     const layout = layoutFor(this.viewportWidth());
-    if (layout === this.layout) return;
+    const detail = this.host !== null && layout === 'full' && this.viewportWidth() >= DETAIL_MIN_WIDTH;
+    if (layout === this.layout) {
+      if (this.host !== null && detail !== this.detailShown && this.fullLayout()) this.render();
+      return;
+    }
     this.layout = layout;
     this.render();
     void this.updateTray();
@@ -3437,7 +3518,7 @@ export class DesktopApp {
     } else if (event.key === '/' && !typing && !mod) {
       event.preventDefault();
       this.focusSearch();
-    } else if (mod && event.shiftKey && event.key.toLowerCase() === 'l') {
+    } else if (mod && event.shiftKey && event.key.toLowerCase() === 'l' && this.host === null) {
       event.preventDefault();
       void this.setLayoutMode(otherMode(this.layout));
     } else if (event.key === 'F6' && this.fullLayout()) {
@@ -3473,10 +3554,16 @@ export class DesktopApp {
     else if (event.key === 'End' && index >= 0) next = buttons.at(-1);
     else if (event.key === 'Escape' && index >= 0) next = main.search;
     else if (event.key === 'Enter' && event.target === main.search) next = buttons[0];
+    else if (this.host !== null && index >= 0 && event.key.toLowerCase() === 's' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault();
+      buttons[index].click();
+      return;
+    }
     if (next !== undefined) {
       event.preventDefault();
       if (event.key === 'Enter' && next instanceof HTMLButtonElement) next.click();
       else next.focus();
+      this.syncRowStops();
     }
   }
 
@@ -3644,6 +3731,15 @@ export class DesktopApp {
     const signedIn = this.state.session !== null;
     const sub = this.view === 'settings' || this.view === 'privacy';
     const dashboard = signedIn ? dashboardUrl(this.state.session?.server) : null;
+    // Hosted (UXA-1): the shell's title bar is the only header of the main screen; "What we collect" keeps its row
+    // for the way back.
+    const bare = this.host !== null && signedIn && this.view === 'main';
+    this.header.hidden = bare;
+    this.root.classList.toggle('no-bar', bare);
+    if (bare) {
+      patch(this.headerRow, []);
+      return;
+    }
     patch(this.headerRow, [
       sub
         ? this.iconButton('back', t('back'), {
@@ -3657,7 +3753,7 @@ export class DesktopApp {
         { class: 'actions', attrs: { 'aria-label': t('beaconLinks') } },
         this.offline && signedIn && this.queue.size > 0 && h('span', { class: 'badge', id: 'queue-badge', attrs: { title: t('offline', { count: this.queue.size }) } }, String(this.queue.size)),
         dashboard !== null && this.beaconLink(dashboard, t('openBeacon'), { id: 'open-beacon', icon: true }),
-        signedIn && (this.view === 'main' || sub) && this.layoutToggle(),
+        this.host === null && signedIn && (this.view === 'main' || sub) && this.layoutToggle(),
         this.view === 'main' && this.iconButton('settings', t('settings'), { id: 'open-settings', onClick: () => this.show('settings'), shortcut: 'Control+,' }),
         this.view === 'login' && this.iconButton('help', t('whereFind'), { id: 'help', onClick: () => this.toggleWhere() }),
       ),
@@ -3684,7 +3780,9 @@ export class DesktopApp {
    */
   private renderPanes(): void {
     const full = this.fullLayout();
-    const detail = full;
+    // Hosted (UXA-1): the shell's rail takes room, so the detail pane waits for a wider window.
+    const detail = full && (this.host === null || this.viewportWidth() >= DETAIL_MIN_WIDTH);
+    this.detailShown = detail;
     this.root.setAttribute('data-layout', full ? 'full' : 'compact');
     this.root.classList.toggle('with-detail', detail);
     this.sidebar.hidden = !full;
@@ -3703,6 +3801,21 @@ export class DesktopApp {
         {},
         h('button', { class: 'nav-item', id, key: id, attrs: { type: 'button', 'aria-current': current ? 'page' : undefined, 'aria-keyshortcuts': shortcut }, on: { click: onClick } }, icon(name), h('span', {}, label)),
       );
+    if (this.host !== null) {
+      // Hosted (UXA-1, UXA-25): a module sidebar like Chat's; Settings is the rail's gear, Beacon's page at the foot.
+      const dashboard = dashboardUrl(this.state.session?.server);
+      return [
+        h('div', { class: 'side-head' }, h('h2', { id: 'time-side-title' }, t('navTitle'))),
+        h(
+          'ul',
+          { class: 'nav-list', attrs: { 'aria-labelledby': 'time-side-title' } },
+          item('nav-tasks', 'play', t('navTasks'), main && this.section === 'tasks', () => this.showSection('tasks')),
+          item('nav-quick', 'pin', t('pinnedRecent'), main && this.section === 'quick', () => this.showSection('quick')),
+          item('nav-time', 'clock', t('myTime'), main && this.section === 'time', () => this.showSection('time')),
+        ),
+        dashboard !== null && h('div', { class: 'side-foot' }, this.beaconLink(dashboard, t('openBeacon'), { id: 'open-beacon', key: 'open-beacon', className: 'side-link' }, icon('external'), h('span', {}, t('openBeacon')))),
+      ];
+    }
     return [
       h(
         'ul',
@@ -3908,6 +4021,28 @@ export class DesktopApp {
 
   private renderLogin(): HTMLElement {
     const t = this.t;
+    const fixed = this.deps.fixedServer;
+    if (fixed !== undefined) {
+      // Release builds (owner decision 2026-11-27): no address to type; one button starts the approval in Beacon.
+      return h(
+        'form',
+        {
+          id: 'login-form',
+          attrs: { novalidate: true },
+          on: {
+            submit: (event) => {
+              event.preventDefault();
+              void this.connect();
+            },
+          },
+        },
+        moment('firstRun', 'mascot', t),
+        h('h2', {}, t('loginTitle')),
+        h('p', { class: 'help', id: 'server-fixed' }, t('loginFixedHelp', { host: hostOf(fixed) })),
+        h('button', { class: 'primary', id: 'connect', attrs: { type: 'submit', disabled: this.busy } }, this.busy ? t('connecting') : t('connectFixed')),
+        h('button', { class: 'link', id: 'open-privacy', attrs: { type: 'button' }, on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
+      );
+    }
     const problem = this.serverProblem;
     const server = h('input', {
       id: 'server',
@@ -4031,7 +4166,12 @@ export class DesktopApp {
     main.list.hidden = section !== 'tasks';
     main.time.hidden = section !== 'time';
     patch(main.time, section === 'time' ? this.renderMyTime() : []);
-    patch(main.footer, [h('span', {}, this.t('signedInAs', { name: this.state.session?.displayName ?? this.state.session?.identifier ?? '' }))]);
+    // Hosted in a narrow window (no sidebar): Beacon's page at the footer instead of the header it no longer has.
+    const dashboard = this.host !== null && !this.fullLayout() ? dashboardUrl(this.state.session?.server) : null;
+    patch(main.footer, [
+      h('span', {}, this.t('signedInAs', { name: this.state.session?.displayName ?? this.state.session?.identifier ?? '' })),
+      dashboard !== null && this.beaconLink(dashboard, this.t('openBeacon'), { id: 'open-beacon', key: 'open-beacon' }),
+    ]);
     this.renderModal(main);
     this.syncScrollerFocus(main.scroller);
   }
@@ -4551,6 +4691,7 @@ export class DesktopApp {
       ],
       this.state.activeTimer !== null ? 'stop' : '#search',
     );
+    this.syncRowStops();
   }
 
   /**
@@ -4601,7 +4742,7 @@ export class DesktopApp {
       h('span', { class: 'task' }, h('span', { class: 'title', attrs: { title: task.title } }, task.title), meta !== '' ? h('small', {}, meta) : null),
       number !== undefined && h('kbd', { class: 'shortcut', attrs: { 'aria-hidden': 'true' } }, String(number)),
       link !== null && this.beaconLink(link, t('openTaskInBeacon', { title: task.title }), { icon: true, key: `link-${task.id}` }),
-      h(
+      this.host !== null ? this.playButton(task, label, number) : h(
         'button',
         {
           class: 'primary small row-action',
@@ -4613,6 +4754,34 @@ export class DesktopApp {
         h('span', { class: 'button-text' }, running ? t('switch') : t('start')),
       ),
     );
+  }
+
+  /**
+   * Hosted (UXA-24): one quiet play icon per row, as Tasks' `.k-play`: shown on hover and focus, always on the running
+   * row (where it stops the timer). Only one row button is a Tab stop (arrows, Home / End move; Enter or S start).
+   */
+  private playButton(task: Task, label: string, number?: number): HTMLButtonElement {
+    const t = this.t;
+    const running = this.state.activeTimer?.taskId === task.id;
+    const text = running ? t('stopTask', { task: task.title }) : label;
+    return h(
+      'button',
+      {
+        class: running ? 'row-action play on' : 'row-action play',
+        key: `start-${task.id}`,
+        attrs: { type: 'button', tabindex: '-1', 'aria-disabled': this.busy ? 'true' : undefined, 'aria-label': text, title: `${text} (S)`, 'aria-keyshortcuts': number !== undefined ? `Alt+${number} S` : 'S' },
+        on: { click: () => this.whenIdle(running ? async () => void (await this.stop()) : () => this.start(task)) },
+      },
+      icon(running ? 'stop' : 'play'),
+    );
+  }
+
+  /** Hosted: the row buttons form one Tab stop (the focused one, else the first). */
+  private syncRowStops(): void {
+    if (this.host === null || this.main === null) return;
+    const buttons = [...this.main.root.querySelectorAll<HTMLButtonElement>('button.row-action')];
+    const current = buttons.find((button) => button === document.activeElement) ?? buttons[0];
+    for (const button of buttons) button.tabIndex = button === current ? 0 : -1;
   }
 
   private time(iso: string | Date): string {
@@ -5045,6 +5214,10 @@ export class DesktopApp {
 
   /** Opens Settings on one tab. */
   showSettings(tab: SettingsTab): void {
+    if (this.host !== null) {
+      this.openHostSettings(tab);
+      return;
+    }
     this.show('settings');
     this.settingsView?.tabs.select(tab);
   }
@@ -5073,27 +5246,55 @@ export class DesktopApp {
     tabs.setLabels(t('settingsSections'), labels);
     if (root.parentElement !== this.body) this.body.replaceChildren(root);
     tabs.setOrientation(this.settingsOrientation());
-    const panel = (id: SettingsTab) => tabs.panels.get(id) as HTMLElement;
-    patch(panel('general'), [
-      this.renderAppearance(),
-      this.renderBrowserSetting(),
-      // Store (MSIX) builds cannot register the login item the autostart plugin writes: no switch there.
-      this.channel === 'direct' && this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
-      h('p', { class: 'muted', id: 'background-note' }, t('backgroundNote')),
-      this.renderConnectionSecurity(),
-      h(
-        'div',
-        { class: 'row-actions account-actions' },
-        h('button', { class: 'link', id: 'open-privacy', attrs: { type: 'button' }, on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
-        h('button', { class: 'danger', id: 'logout', attrs: { type: 'button' }, on: { click: () => void this.logout() } }, t('logout')),
-      ),
-    ]);
-    patch(panel('shortcuts'), [this.renderShortcut(), this.renderResumeShortcut()]);
-    patch(panel('timer'), [this.renderIdleSettings(), this.renderHelpers()]);
-    patch(panel('schedule'), [this.renderSchedule()]);
-    patch(panel('notifications'), [this.renderFriendlySettings(), this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText')]);
-    patch(panel('meetings'), [this.renderMeetingSettings(), this.renderReminderSettings()]);
-    patch(panel('updates'), [this.renderAbout()]);
+    for (const id of SETTINGS_TABS) patch(tabs.panels.get(id) as HTMLElement, this.settingsContent(id));
+  }
+
+  /**
+   * What one Settings tab holds. Hosted in the shell (UX batch 6) its one Settings shows these panels next to its own;
+   * Theme moves to its Appearance tab and Sign out / "What we collect" to its Account tab, so General has neither.
+   */
+  settingsContent(tab: SettingsTab): Child[] {
+    const t = this.t;
+    switch (tab) {
+      case 'general':
+        return [
+          this.host === null && this.renderAppearance(),
+          this.renderBrowserSetting(),
+          // Store (MSIX) builds cannot register the login item the autostart plugin writes: no switch there.
+          this.channel === 'direct' && this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
+          h('p', { class: 'muted', id: 'background-note' }, t('backgroundNote')),
+          this.renderConnectionSecurity(),
+          this.host === null &&
+            h(
+              'div',
+              { class: 'row-actions account-actions' },
+              h('button', { class: 'link', id: 'open-privacy', attrs: { type: 'button' }, on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
+              h('button', { class: 'danger', id: 'logout', attrs: { type: 'button' }, on: { click: () => void this.logout() } }, t('logout')),
+            ),
+        ];
+      case 'shortcuts':
+        return [this.renderShortcut(), this.renderResumeShortcut()];
+      case 'timer':
+        return [this.renderIdleSettings(), this.renderHelpers()];
+      case 'schedule':
+        return [this.renderSchedule()];
+      case 'notifications':
+        return [this.renderFriendlySettings(), this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText')];
+      case 'meetings':
+        return [this.renderMeetingSettings(), this.renderReminderSettings()];
+      case 'updates':
+        return [this.renderAbout()];
+    }
+  }
+
+  /** Settings → Theme (System / Light / Dark); hosted, the shell's Appearance tab shows it. */
+  themeSetting(): HTMLElement {
+    return this.renderAppearance();
+  }
+
+  /** The label of a Settings tab (the shell's one Settings names the Time module's tabs the same way). */
+  settingsTabLabel(tab: SettingsTab): string {
+    return this.t(SETTINGS_TAB_LABELS[tab]);
   }
 
   /** Settings → Shortcuts: the global shortcut that shows the window. */
@@ -5489,7 +5690,7 @@ export class DesktopApp {
       this.browsers = [];
     }
     await this.loadBrowserChoice();
-    if (this.view === 'settings') this.render();
+    if (this.view === 'settings' || this.host !== null) this.render();
   }
 
   /** The "Open Beacon in" choice the host keeps (the system default when the host cannot say). */
