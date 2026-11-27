@@ -5,6 +5,23 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+### UX batch 7: native chrome, tray, update pill (owner approval 2026-11-27)
+
+- **One title bar** (UXA-45, design `BEACON_DESKTOP.md` §5.1). Windows and Linux: the window has no system frame;
+  the app's title bar drags the window (double click maximises, edge snapping works) and draws minimise, maximise /
+  restore and close at the right edge (Windows caption buttons, Linux round buttons), keyboard and screen-reader
+  accessible; close still hides to the tray. macOS: overlay title bar, traffic lights inset into the app's bar. The
+  signed-out screen keeps a bare bar (brand and buttons). `BEACON_DESKTOP_SYSTEM_TITLEBAR=1` keeps the system title
+  bar (fallback for desktops where an undecorated window misbehaves). The mini timer keeps its own chrome.
+- **Update pill** (UXA-22): an available update is a pill in the title bar ("Update", then "Update after stop",
+  "Updating 45%", "Restarting…") that opens the update card in a popover; no card above the task list any more. A
+  manual check that finds one opens it. The forced-update screen is unchanged.
+- **Title bar at 900 px** (UXA-9): below 1100 px the search becomes its icon and the brand its mark, so the
+  organization and the running task keep their names.
+- **Tray** (UXA-41): *Quick add task…* opens Tasks with quick add focused (while tasks are connected).
+- **Security**: the main window's capability adds `core:window:allow-start-dragging`, `allow-minimize`,
+  `allow-toggle-maximize` and `allow-close` (main window only; see `SECURITY.md`).
+
 BD-3b, second part (design `docs/design/BEACON_DESKTOP_TASKS.md` §9, `BEACON_DESKTOP.md` §7.3): the Tasks module, 0.13.0
 candidate. Needs TaskBoardBundle **3.4** (`client_api`, `/api/task-board/v1`) and Beacon's `tasks` scope family
 (`task-board:read task-board:write`); without them the module shows its "Connect tasks" card and a refused request
