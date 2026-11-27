@@ -138,6 +138,8 @@ export class TasksModule {
   private readonly toolbar: HTMLElement;
   /** A card picked up with the keyboard or the mouse. */
   private dragging: string | null = null;
+  /** Writes per task, one after the other (audit BDA13-L4): each reads the revision the previous one returned. */
+  private readonly writes = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: TasksModuleDeps) {
     this.clock = deps.clock ?? realClock;
@@ -319,20 +321,33 @@ export class TasksModule {
     else this.schedulePoll();
   }
 
-  /** Runs one API call: `401` disconnects tasks, `module_forbidden` hides the module, `429` pauses, others go up. */
+  /**
+   * Whether an answer to a request sent at `generation` through `api` still belongs to what is shown (audit BDA13-M1):
+   * a context switch, a disconnect or a reconnect in between makes it stale, and it is dropped.
+   */
+  private fresh(generation: number, api: TasksApi | null): boolean {
+    return generation === this.generation && api === this.api;
+  }
+
+  /**
+   * Runs one API call: `401` disconnects tasks, `module_forbidden` hides the module, `429` pauses, others go up. An
+   * answer to a request sent before a context switch or a reconnect changes nothing here (BDA13-M1): its `401` would
+   * delete the new token, its `403` would hide the module or refuse the new context.
+   */
   private async call<T>(work: (api: TasksApi) => Promise<T>): Promise<T> {
     const api = this.api;
+    const generation = this.generation;
     if (api === null) throw new ApiError(401, 'invalid_token', 'Tasks are not connected.');
     try {
       const result = await work(api);
-      if (this.offline || this.failures > 0) {
+      if (this.fresh(generation, api) && (this.offline || this.failures > 0)) {
         this.offline = false;
         this.failures = 0;
         this.renderBanner();
       }
       return result;
     } catch (error) {
-      if (error instanceof ApiError) {
+      if (error instanceof ApiError && this.fresh(generation, api)) {
         if (error.status === 401) void this.lostAuthorization();
         else if (isModuleForbidden(error)) this.setForbidden(true);
         else if (error.status === 403 && error.code === 'context_forbidden') {
@@ -442,8 +457,12 @@ export class TasksModule {
       this.schedulePoll();
       return;
     }
+    const generation = this.generation;
+    const api = this.api;
     try {
-      const changes = await this.call((api) => api.changes(this.cursor));
+      const changes = await this.call((client) => client.changes(this.cursor));
+      // Another context's (or connection's) cursor never replaces this one (BDA13-M1); the new view polls on its own.
+      if (!this.fresh(generation, api)) return;
       this.cursor = changes.nextCursor ?? this.cursor;
       const shownBoard = this.prefs.view === 'mine' ? null : this.currentBoard()?.id;
       const touched = changes.reset || changes.changes.some((change) => this.prefs.view === 'mine' || change.boardId === shownBoard || change.taskId === this.detail?.id);
@@ -452,6 +471,7 @@ export class TasksModule {
       this.render();
     } catch {
       // Handled in call(): banner, backoff, disconnect.
+      if (!this.fresh(generation, api)) return;
     }
     this.schedulePoll();
   }
@@ -476,6 +496,11 @@ export class TasksModule {
   private stopPolling(): void {
     if (this.pollTimer !== null) this.clock.clearTimeout(this.pollTimer);
     this.pollTimer = null;
+  }
+
+  /** A short notice in the banner, announced (the shell's "link could not be opened", BDA13-I2). */
+  notify(text: string): void {
+    this.showNotice(text);
   }
 
   private showNotice(text: string): void {
@@ -544,11 +569,14 @@ export class TasksModule {
     this.comments = null;
     this.renderDrawer();
     this.drawerSlot.querySelector<HTMLElement>('.drawer')?.focus();
+    const generation = this.generation;
+    const api = this.api;
     await this.refreshDetail(id);
+    if (!this.fresh(generation, api)) return;
     this.renderDrawer();
-    void this.call((api) => api.comments(id))
+    void this.call((client) => client.comments(id))
       .then((comments) => {
-        if (this.detail?.id === id) {
+        if (this.fresh(generation, api) && this.detail?.id === id) {
           this.comments = comments;
           this.renderDrawer();
         }
@@ -557,16 +585,20 @@ export class TasksModule {
   }
 
   private async refreshDetail(id: string): Promise<void> {
+    const generation = this.generation;
+    const api = this.api;
     try {
-      const detail = await this.call((api) => api.task(id));
+      const detail = await this.call((client) => client.task(id));
+      // Opened before a context switch: the old organization's task never comes back into this view (BDA13-M1).
+      if (!this.fresh(generation, api)) return;
       if (detail !== null && (this.detail === null || this.detail.id === id)) this.detail = detail;
       // The panel's status and assignee pickers need the board's columns and people (My tasks has not loaded them).
       if (detail !== null && !this.boardDetails.has(detail.boardId)) {
-        const board = await this.call((api) => api.board(detail.boardId));
-        if (board !== null) this.boardDetails.set(board.id, board);
+        const board = await this.call((client) => client.board(detail.boardId));
+        if (board !== null && this.fresh(generation, api)) this.boardDetails.set(board.id, board);
       }
     } catch (error) {
-      if (error instanceof ApiError && error.status === 404 && this.detail?.id === id) {
+      if (error instanceof ApiError && error.status === 404 && this.fresh(generation, api) && this.detail?.id === id) {
         this.detail = null;
         this.showNotice(this.t('notFound'));
       }
@@ -621,48 +653,85 @@ export class TasksModule {
       .then(() => this.render());
   }
 
-  /** Moves a card to `columnId` (optimistic on the board; `If-Match` with the card's revision). */
+  /**
+   * Runs `work` after the writes already queued for this task (audit BDA13-L4): two quick edits of one task go out one
+   * after the other, the second with the revision the first returned, so the person's own first edit is no conflict.
+   */
+  private queue(id: string, work: () => Promise<void>): Promise<void> {
+    const previous = this.writes.get(id) ?? Promise.resolve();
+    const run = previous.then(work).catch(() => undefined);
+    this.writes.set(id, run);
+    void run.then(() => {
+      if (this.writes.get(id) === run) this.writes.delete(id);
+    });
+    return run;
+  }
+
+  /** Moves a card to `columnId` (optimistic on the board; `If-Match` with the card's latest revision). */
   async move(id: string, columnId: string): Promise<void> {
     const card = this.findCard(id);
     if (card === null || card.column?.id === columnId || !this.writable()) return;
+    const generation = this.generation;
+    const api = this.api;
     const board = this.boardDetails.get(card.boardId);
     const column = board?.columns.find((item) => item.id === columnId);
-    // Optimistic on the board: out of its column, on top of the new one.
+    // Optimistic on the board: out of its column, on top of the new one. The two pages before the change are kept to put
+    // the card back when the server refuses, even when the reload after it fails too (offline).
     const from = card.column?.id;
+    let rollback: (() => void) | null = null;
     if (from !== undefined && this.columns.has(from) && this.columns.has(columnId)) {
       const source = this.columns.get(from) as ColumnPage;
       const target = this.columns.get(columnId) as ColumnPage;
       const moved = { ...card, column: column !== undefined ? { id: column.id, name: column.name, icon: column.icon, type: column.type } : card.column };
-      this.columns.set(from, { ...source, tasks: source.tasks.filter((task) => task.id !== id) });
-      this.columns.set(columnId, { ...target, tasks: [moved, ...target.tasks] });
+      const movedSource = { ...source, tasks: source.tasks.filter((task) => task.id !== id) };
+      const movedTarget = { ...target, tasks: [moved, ...target.tasks] };
+      this.columns.set(from, movedSource);
+      this.columns.set(columnId, movedTarget);
+      rollback = () => {
+        // Only while nothing newer replaced the two pages (a reload, another move).
+        if (this.columns.get(from) !== movedSource || this.columns.get(columnId) !== movedTarget) return;
+        this.columns.set(from, source);
+        this.columns.set(columnId, target);
+      };
       this.renderBody();
       this.body.querySelector<HTMLElement>(`[data-task="${id}"]`)?.focus({ preventScroll: true });
     }
-    try {
-      const detail = await this.call((api) => api.move(id, { columnId }, card.revision));
-      this.replaceCard(detail);
-      this.deps.announce(this.t('moved', { task: taskRef(card), column: column?.name ?? detail.column?.name ?? '' }));
-      if (this.prefs.view !== 'board') await this.loadView().catch(() => undefined);
-      this.render();
-      this.body.querySelector<HTMLElement>(`[data-task="${id}"]`)?.focus({ preventScroll: true });
-    } catch (error) {
-      this.writeFailed(error);
-    }
+    await this.queue(id, async () => {
+      if (!this.fresh(generation, api)) return;
+      const revision = this.findCard(id)?.revision ?? card.revision;
+      try {
+        const detail = await this.call((client) => client.move(id, { columnId }, revision));
+        if (!this.fresh(generation, api)) return;
+        this.replaceCard(detail);
+        this.deps.announce(this.t('moved', { task: taskRef(card), column: column?.name ?? detail.column?.name ?? '' }));
+        if (this.prefs.view !== 'board') await this.loadView().catch(() => undefined);
+        this.render();
+        this.body.querySelector<HTMLElement>(`[data-task="${id}"]`)?.focus({ preventScroll: true });
+      } catch (error) {
+        if (!this.fresh(generation, api)) return;
+        rollback?.();
+        this.renderBody();
+        this.writeFailed(error);
+      }
+    });
   }
 
   /** Completes a task: to the board's first `done` column. */
   async complete(id: string): Promise<void> {
     const card = this.findCard(id);
     if (card === null) return;
+    const generation = this.generation;
+    const api = this.api;
     let board = this.boardDetails.get(card.boardId) ?? null;
     if (board === null) {
-      board = await this.call((api) => api.board(card.boardId)).catch(() => null);
+      board = await this.call((client) => client.board(card.boardId)).catch(() => null);
+      if (!this.fresh(generation, api)) return;
       if (board !== null) this.boardDetails.set(board.id, board);
     }
     const done = board?.columns.find((column) => column.type === 'done');
     if (done === undefined) return;
     await this.move(id, done.id);
-    this.deps.announce(this.t('completed', { task: taskRef(card) }));
+    if (this.fresh(generation, api)) this.deps.announce(this.t('completed', { task: taskRef(card) }));
   }
 
   private replaceCard(detail: TaskDetail): void {
@@ -679,64 +748,81 @@ export class TasksModule {
     if (this.detail?.id === detail.id) this.detail = detail;
   }
 
-  /** A field change from the detail panel, with the task's revision. */
+  /** The task as known now (the open panel first): queued writes read their revision from here. */
+  private latestDetail(fallback: TaskDetail): TaskDetail {
+    return this.detail?.id === fallback.id ? this.detail : fallback;
+  }
+
+  /** A write from the detail panel, queued per task; a stale answer (another context) is dropped. */
+  private writeDetail(detail: TaskDetail, work: (latest: TaskDetail) => Promise<TaskDetail>, after?: () => void): Promise<void> {
+    if (!this.writable()) return Promise.resolve();
+    const generation = this.generation;
+    const api = this.api;
+    return this.queue(detail.id, async () => {
+      if (!this.fresh(generation, api)) return;
+      try {
+        const saved = await work(this.latestDetail(detail));
+        if (!this.fresh(generation, api)) return;
+        this.replaceCard(saved);
+        this.render();
+        after?.();
+      } catch (error) {
+        if (!this.fresh(generation, api)) return;
+        this.writeFailed(error);
+        await this.refreshDetail(detail.id);
+        this.renderDrawer();
+      }
+    });
+  }
+
+  /** A field change from the detail panel, with the task's latest revision. */
   async save(fields: TaskFields): Promise<void> {
     const detail = this.detail;
-    if (detail === null || !this.writable()) return;
-    try {
-      const saved = await this.call((api) => api.patch(detail.id, fields, detail.revision));
-      this.replaceCard(saved);
-      this.render();
-    } catch (error) {
-      this.writeFailed(error);
-      await this.refreshDetail(detail.id);
-      this.renderDrawer();
-    }
+    if (detail === null) return;
+    await this.writeDetail(detail, (latest) => this.call((client) => client.patch(latest.id, fields, latest.revision)));
   }
 
   /** The single assignee picker: removes the other assignees, adds the chosen one (`''`: nobody). */
   async assign(userId: string): Promise<void> {
     const detail = this.detail;
-    if (detail === null || !this.writable()) return;
-    try {
-      let current = detail;
-      for (const member of detail.members.filter((item) => item.role === 'assignee' && item.user.id !== userId)) {
-        current = await this.call((api) => api.member(current.id, member.user.id, 'assignee', current.revision, true));
+    if (detail === null) return;
+    await this.writeDetail(detail, async (latest) => {
+      let current = latest;
+      for (const member of latest.members.filter((item) => item.role === 'assignee' && item.user.id !== userId)) {
+        current = await this.call((client) => client.member(current.id, member.user.id, 'assignee', current.revision, true));
       }
-      if (userId !== '' && !current.assignees.some((person) => person.id === userId)) current = await this.call((api) => api.member(current.id, userId, 'assignee', current.revision));
-      this.replaceCard(current);
-      this.render();
-    } catch (error) {
-      this.writeFailed(error);
-      await this.refreshDetail(detail.id);
-      this.renderDrawer();
-    }
+      if (userId !== '' && !current.assignees.some((person) => person.id === userId)) current = await this.call((client) => client.member(current.id, userId, 'assignee', current.revision));
+      return current;
+    });
   }
 
   async tick(itemId: string, done: boolean): Promise<void> {
     const detail = this.detail;
-    const item = detail?.checklists.flatMap((list) => list.items).find((entry) => entry.id === itemId);
-    if (detail === null || item === undefined || !this.writable()) return;
-    try {
-      this.replaceCard(await this.call((api) => api.patchChecklistItem(detail.id, itemId, { done }, item.revision)));
-      this.render();
-      this.drawerSlot.querySelector<HTMLElement>(`[data-key="item-${itemId}"]`)?.focus();
-    } catch (error) {
-      this.writeFailed(error);
-      await this.refreshDetail(detail.id);
-      this.renderDrawer();
-    }
+    if (detail === null || !detail.checklists.some((list) => list.items.some((entry) => entry.id === itemId))) return;
+    await this.writeDetail(
+      detail,
+      async (latest) => {
+        const item = latest.checklists.flatMap((list) => list.items).find((entry) => entry.id === itemId);
+        if (item === undefined) throw new ApiError(404, 'not_found', 'The checklist item is gone.');
+        return this.call((client) => client.patchChecklistItem(latest.id, itemId, { done }, item.revision));
+      },
+      () => this.drawerSlot.querySelector<HTMLElement>(`[data-key="item-${itemId}"]`)?.focus(),
+    );
   }
 
   async addItem(checklist: string, title: string): Promise<boolean> {
     const detail = this.detail;
     if (detail === null || title.trim() === '' || !this.writable()) return false;
+    const generation = this.generation;
+    const api = this.api;
     try {
-      this.replaceCard(await this.call((api) => api.addChecklistItem(detail.id, checklist, title.trim())));
+      const saved = await this.call((client) => client.addChecklistItem(detail.id, checklist, title.trim()));
+      if (!this.fresh(generation, api)) return false;
+      this.replaceCard(saved);
       this.render();
       return true;
     } catch (error) {
-      this.writeFailed(error);
+      if (this.fresh(generation, api)) this.writeFailed(error);
       return false;
     }
   }
@@ -751,9 +837,11 @@ export class TasksModule {
     }
     const mine = this.prefs.view === 'mine';
     const dueAt = parsed.dueAt ?? (mine ? `${this.today()}T00:00:00Z` : null);
+    const generation = this.generation;
+    const api = this.api;
     try {
-      const created = await this.call((api) =>
-        api.create({
+      const created = await this.call((client) =>
+        client.create({
           boardId: board.id,
           title: parsed.title,
           ...(parsed.priority !== null ? { priority: parsed.priority } : {}),
@@ -763,13 +851,15 @@ export class TasksModule {
           ...(mine || this.prefs.onlyMine ? { assignees: ['me'] } : {}),
         }),
       );
+      // Created in the organization it was typed in; nothing more here after a switch (no timer in another one).
+      if (!this.fresh(generation, api)) return true;
       this.deps.announce(this.t('added', { task: taskRef(created), board: board.title }));
       if (startTimer) void this.startTimer(created);
       await this.loadView().catch(() => undefined);
       this.render();
       return true;
     } catch (error) {
-      this.writeFailed(error);
+      if (this.fresh(generation, api)) this.writeFailed(error);
       return false;
     }
   }
@@ -1031,8 +1121,12 @@ export class TasksModule {
   private async loadMore(boardId: string, columnId: string): Promise<void> {
     const page = this.columns.get(columnId);
     if (page === undefined || page.nextCursor === null) return;
+    const generation = this.generation;
+    const api = this.api;
     try {
-      const next = await this.call((api) => api.boardTasks(boardId, { column: columnId, cursor: page.nextCursor, limit: this.me?.limits.columnPageSize ?? 30, assignee: this.prefs.onlyMine ? 'me' : undefined }));
+      const next = await this.call((client) => client.boardTasks(boardId, { column: columnId, cursor: page.nextCursor, limit: this.me?.limits.columnPageSize ?? 30, assignee: this.prefs.onlyMine ? 'me' : undefined }));
+      // Another organization's column page never goes into this board (BDA13-M1).
+      if (!this.fresh(generation, api)) return;
       this.columns.set(columnId, { tasks: [...page.tasks, ...next.tasks.filter((task) => !page.tasks.some((known) => known.id === task.id))], nextCursor: next.nextCursor });
       this.renderBody();
     } catch {

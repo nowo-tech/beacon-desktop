@@ -2,6 +2,7 @@
 // The Tasks module (BD-3b) through the DOM against the in-process mock Beacon (TimeTrack + ChatKit + TaskBoard): connect
 // tasks, My tasks, the board and the list, moves (keyboard, conflict, policy refusal), the task panel's edits and
 // checklists, quick add, a timer from a task, polling through `changes`, and `module_forbidden` hiding the module.
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { browserPlatform } from '../../src/platform';
 import { landingModule, loadShellPrefs, SHELL_KEY, Shell } from '../../src/shell/shell';
@@ -26,6 +27,48 @@ async function until(ready: () => boolean | Promise<boolean>, what: string, time
 }
 
 const ORG = 'org:6a0e1f8e-1b2c-4d3e-8f90-a1b2c3d4e5f6';
+
+// ---- held requests (audit BDA13-M1 / L4): a request is held until the test releases it, then goes to the mock or gets
+// a made-up answer; `offline` makes every later TaskBoard request fail as a network error.
+interface Gate {
+  match: (url: string, init: RequestInit) => boolean;
+  hit: boolean;
+  release: () => void;
+  held: Promise<void>;
+  answer?: () => Response;
+}
+// Per app instance (an earlier test's app keeps polling and must not take a later test's gate).
+let gates: Gate[] = [];
+let offline = { on: false };
+function hold(match: Gate['match'], answer?: () => Response): Gate {
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const gate: Gate = { match, hit: false, release, held, answer };
+  gates.push(gate);
+  return gate;
+}
+const route = (url: string) => new URL(url).pathname.replace('/api/task-board/v1/', '');
+const isTasks = (url: string) => url.includes('/api/task-board/v1/');
+const made = (status: number, body: unknown) =>
+  ({ ok: status >= 200 && status < 300, status, statusText: '', headers: { get: () => null }, text: async () => JSON.stringify(body), json: async () => body }) as unknown as Response;
+function gatedFetch(): typeof fetch {
+  const own: Gate[] = [];
+  const down = { on: false };
+  gates = own;
+  offline = down;
+  return (async (input: string, init: RequestInit = {}) => {
+    const url = String(input);
+    if (down.on && isTasks(url)) throw new TypeError('network down');
+    const gate = own.find((item) => !item.hit && item.match(url, init));
+    if (gate !== undefined) {
+      gate.hit = true;
+      await gate.held;
+      if (gate.answer !== undefined) return gate.answer();
+    }
+    return nodeFetch(input, init);
+  }) as unknown as typeof fetch;
+}
+const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
 type Writes = { writes: { kind: string; taskId?: string; ifMatch?: string; done?: boolean; method?: string }[] };
 const writes = async () => ((await env.control('tasks/state')) as Writes).writes;
 
@@ -33,7 +76,7 @@ async function connected(locale: 'en' | 'es' = 'en') {
   document.body.replaceChildren();
   const root = document.createElement('div');
   document.body.append(root);
-  const platform = browserPlatform('0.1.0', nodeFetch);
+  const platform = browserPlatform('0.1.0', gatedFetch());
   const shell = new Shell(root, platform, { locale, storage: localStorage });
   const app = new DesktopApp(shell.timeRoot, platform, { storage: localStorage, locale, onRender: () => shell.onAppRender(), beforeSignOut: () => shell.chat.revokeOnServer(), sleep: () => new Promise((resolve) => setTimeout(resolve, 5)), searchDelayMs: 1 });
   shell.attach(app);
@@ -110,6 +153,8 @@ describe('tasks module', () => {
     ui.key({ key: 'ArrowRight', altKey: true }, stale);
     await until(() => ui.$('#tasks-banner').textContent?.includes('Changed by someone else') === true, 'the conflict notice');
     await until(() => document.querySelector('.col[data-col="env-todo"] .card[data-task="t-142"]') !== null, 'the card back');
+    // The card is put back at once (BDA13-L4); the reload after it brings the other person's revision.
+    await until(() => ui.tasks.columns.get('env-todo')?.tasks.find((task) => task.id === 't-142')?.revision === 3, 'the reloaded revision');
     await env.control('config', { tasksRefuseMove: true });
     const again = document.querySelector<HTMLElement>('.card[data-task="t-142"]') as HTMLElement;
     again.focus();
@@ -280,5 +325,180 @@ describe('tasks module', () => {
     expect(ui.platform.hooks.tasksToken).toBeNull();
     ui.shell.openKeys();
     expect(ui.$('#shell-keys').textContent).toContain('Quick add');
+  });
+});
+
+describe('tasks module: answers from before an organization switch (BDA13-M1) and write order (BDA13-L4)', () => {
+  beforeEach(async () => {
+    localStorage.clear();
+    await env.control('reset', {});
+    await env.control('config', { deviceInterval: 1, contextPolicy: { required: false, refuse: [] } });
+  });
+
+  /** Switches the app and waits until the Tasks module reloaded there (its own switch comes after the time API's). */
+  async function switchTo(ui: Awaited<ReturnType<typeof connected>>, target: string): Promise<void> {
+    ui.$<HTMLButtonElement>(`.ctx-tile[data-context="${target}"]`).click();
+    await until(() => ui.shell.context === target && ui.tasks.api?.currentContext === target, `the switch to ${target}`);
+    await until(() => (ui.tasks.prefs.view === 'mine' ? ui.tasks.mineLoaded : ui.tasks.boardsLoaded), `the tasks of ${target}`);
+  }
+  const toPersonal = (ui: Awaited<ReturnType<typeof connected>>) => switchTo(ui, 'personal');
+
+  const tasksText = () => document.querySelector('#tasks-root')?.textContent ?? '';
+
+  it('a task opened before the switch never comes back into the new organization (refreshDetail, comments)', async () => {
+    const ui = await connected();
+    const gate = hold((url, init) => (init.method ?? 'GET') === 'GET' && route(url) === 'tasks/t-141');
+    (document.querySelector('[data-task="t-141"]') as HTMLButtonElement).click();
+    await until(() => gate.hit, 'the task request');
+    await toPersonal(ui);
+    expect(ui.tasks.detail).toBeNull();
+    gate.release();
+    await settle();
+    expect(ui.tasks.detail).toBeNull();
+    expect(document.querySelector('#task-detail')).toBeNull();
+    expect(ui.tasks.comments).toBeNull();
+    expect(ui.tasks.boardDetails.has('b-envelope')).toBe(false);
+    expect(tasksText()).not.toContain('Streaming parser for envelopes');
+  });
+
+  it('a poll answered after the switch keeps the new cursor and loads nothing (poll)', async () => {
+    const ui = await connected();
+    const cursor = () => (ui.tasks as unknown as { cursor: string | null }).cursor;
+    const gate = hold((url) => route(url) === 'changes', () => made(200, { changes: [{ taskId: 't-141', boardId: 'b-envelope', revision: 9 }], nextCursor: 'STALE', reset: true }));
+    const polled = ui.tasks.poll();
+    await until(() => gate.hit, 'the poll');
+    await toPersonal(ui);
+    await until(() => cursor() !== null, 'the new cursor');
+    const fresh = cursor();
+    gate.release();
+    await polled;
+    await settle();
+    expect(cursor()).toBe(fresh);
+    expect(cursor()).not.toBe('STALE');
+    expect(ui.tasks.mine.some((task) => task.boardId === 'b-envelope')).toBe(false);
+  });
+
+  it('a column page answered after the switch is not put into the new board (loadMore)', async () => {
+    const ui = await connected();
+    (ui.$('[data-view="board"]') as HTMLButtonElement).click();
+    await until(() => document.querySelector('.col .card') !== null, 'the board');
+    const page = ui.tasks.columns.get('env-todo');
+    expect(page).toBeDefined();
+    ui.tasks.columns.set('env-todo', { tasks: page?.tasks ?? [], nextCursor: 'more' });
+    ui.tasks.render();
+    const gate = hold((url) => route(url) === 'boards/b-envelope/tasks' && new URL(url).searchParams.get('cursor') === 'more');
+    (document.querySelector('.col[data-col="env-todo"] .col-more') as HTMLButtonElement).click();
+    await until(() => gate.hit, 'the next page');
+    await toPersonal(ui);
+    await until(() => ui.tasks.columns.size > 0, 'the Personal board');
+    gate.release();
+    await settle();
+    expect(ui.tasks.columns.has('env-todo')).toBe(false);
+    expect([...ui.tasks.columns.keys()].every((key) => key.startsWith('pe-'))).toBe(true);
+    expect(document.querySelector('.col[data-col="env-todo"]')).toBeNull();
+  });
+
+  it('a 401 from before the switch keeps the token; a stale 403 neither hides the module nor refuses the new context (call)', async () => {
+    const ui = await connected();
+    for (const [status, error] of [
+      [401, 'invalid_token'],
+      [403, 'module_forbidden'],
+      [403, 'context_forbidden'],
+    ] as const) {
+      const gate = hold((url) => route(url) === 'my-tasks', () => made(status, { ok: false, error }));
+      const reloaded = ui.tasks.reload();
+      await until(() => gate.hit, `the held ${error}`);
+      // Away and back: a new generation in the same organization (the answer is still stale).
+      await switchTo(ui, ui.shell.context === 'personal' ? ORG : 'personal');
+      gate.release();
+      await reloaded;
+      await settle();
+      expect(ui.tasks.connected, error).toBe(true);
+      expect(ui.platform.hooks.tasksToken, error).not.toBeNull();
+      expect(ui.tasks.forbidden, error).toBe(false);
+      expect(ui.shell.tasksHidden, error).toBe(false);
+      expect(ui.tasks.contextRefused, error).toBe(false);
+      expect(document.querySelector('#tasks-connect'), error).toBeNull();
+    }
+    // The same answers on a current request still act (nothing weakened): a 401 disconnects tasks.
+    const gate = hold((url) => route(url) === 'my-tasks', () => made(401, { ok: false, error: 'invalid_token' }));
+    gate.release();
+    await ui.tasks.reload();
+    expect(gate.hit).toBe(true);
+    await until(() => !ui.tasks.connected, 'disconnected');
+    expect(ui.platform.hooks.tasksToken).toBeNull();
+  });
+
+  it('two quick edits of one task go out one after the other with the fresh revision (no false conflict)', async () => {
+    const ui = await connected();
+    (document.querySelector('[data-task="t-141"]') as HTMLButtonElement).click();
+    await until(() => document.querySelector('#task-detail .comment') !== null, 'the detail');
+    const gate = hold((url, init) => init.method === 'PATCH' && route(url) === 'tasks/t-141');
+    const first = ui.tasks.save({ priority: 'urgent' });
+    const second = ui.tasks.save({ estimateMinutes: 90 });
+    await until(() => gate.hit, 'the first edit');
+    await settle();
+    // The second waits for the first answer.
+    expect((await writes()).filter((write) => write.kind === 'patch')).toHaveLength(0);
+    gate.release();
+    await Promise.all([first, second]);
+    const patches = (await writes()).filter((write) => write.kind === 'patch' && write.taskId === 't-141');
+    expect(patches).toHaveLength(2);
+    expect(Number(patches[1].ifMatch?.replaceAll('"', ''))).toBe(Number(patches[0].ifMatch?.replaceAll('"', '')) + 1);
+    expect(ui.tasks.detail?.priority).toBe('urgent');
+    expect(ui.tasks.detail?.estimateMinutes).toBe(90);
+    expect(ui.$('#tasks-banner').textContent).not.toContain('Changed by someone else');
+    // Two ticks of one checklist item: the second with the item's new revision.
+    await Promise.all([ui.tasks.tick('ci-2', true), ui.tasks.tick('ci-2', false)]);
+    const ticks = (await writes()).filter((write) => write.kind === 'checklist-tick');
+    expect(ticks.map((write) => write.done)).toEqual([true, false]);
+    expect(ui.tasks.detail?.checklists.flatMap((list) => list.items).find((entry) => entry.id === 'ci-2')?.done).toBe(false);
+    expect(ui.$('#tasks-banner').textContent).not.toContain('Changed by someone else');
+  });
+
+  it('a refused move puts the card back even when the reload fails (offline)', async () => {
+    const ui = await connected();
+    (ui.$('[data-view="board"]') as HTMLButtonElement).click();
+    await until(() => document.querySelector('.col[data-col="env-todo"] .card[data-task="t-142"]') !== null, 'the board');
+    hold(
+      (url, init) => init.method === 'POST' && route(url) === 'tasks/t-142/move',
+      () => {
+        offline.on = true;
+        return made(409, { ok: false, error: 'conflict', currentRevision: 7 });
+      },
+    ).release();
+    await ui.tasks.move('t-142', 'env-doing');
+    await settle();
+    expect(ui.$('#tasks-banner').textContent).toContain('Changed by someone else');
+    expect(document.querySelector('.col[data-col="env-todo"] .card[data-task="t-142"]')).not.toBeNull();
+    expect(document.querySelector('.col[data-col="env-doing"] .card[data-task="t-142"]')).toBeNull();
+    expect(ui.tasks.columns.get('env-doing')?.tasks.some((task) => task.id === 't-142')).toBe(false);
+  });
+
+  it('kanban drag and drop: the main window leaves HTML5 drops to the page (BDA13-I3)', () => {
+    const conf = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8')) as { app: { windows: { label: string; dragDropEnabled?: boolean }[] } };
+    expect(conf.app.windows.find((window) => window.label === 'main')?.dragDropEnabled).toBe(false);
+  });
+
+  it('links in task text open through the chat opener (http, mailto); a failure is shown (BDA13-I2)', async () => {
+    const ui = await connected();
+    (document.querySelector('[data-task="t-141"]') as HTMLButtonElement).click();
+    await until(() => document.querySelector('#task-detail .comment') !== null, 'the detail');
+    const deps = (ui.tasks as unknown as { deps: { openLink(url: string): void } }).deps;
+    deps.openLink('http://intranet.example/spec');
+    deps.openLink('mailto:maya@example.com');
+    await until(() => ui.platform.hooks.chatLinks.length === 2, 'the opened links');
+    expect(ui.platform.hooks.chatLinks).toEqual(['http://intranet.example/spec', 'mailto:maya@example.com']);
+    const chat = ui.platform.chat as NonNullable<typeof ui.platform.chat>;
+    const original = chat.openLink;
+    chat.openLink = async () => {
+      throw new Error('refused');
+    };
+    try {
+      deps.openLink('http://intranet.example/x');
+      await until(() => ui.$('#tasks-banner').textContent?.includes('That link could not be opened.') === true, 'the failure notice');
+    } finally {
+      chat.openLink = original;
+    }
   });
 });
