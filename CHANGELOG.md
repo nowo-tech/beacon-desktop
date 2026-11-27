@@ -5,7 +5,9 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
-BD-3b, first part (design `docs/design/BEACON_DESKTOP.md` §7.2): chat writes, 0.12.0 candidate. Needs ChatKitBundle
+## [0.12.0] - 2026-11-27
+
+BD-3b, first part (design `docs/design/BEACON_DESKTOP.md` §7.2): chat writes. Needs ChatKitBundle
 **2.5** (`client_api.writes`) and a chat token approved for sending (`chat:write`); everything is feature-detected
 through `GET me`, so a 2.4 server or a read-only token keeps the 0.10 read-only view.
 
