@@ -177,6 +177,15 @@ export interface AppDeps {
   onContextRefused?: (context: string) => void;
   /** The shell's chat items of the tray menu ("Open chat", pause / resume chat notifications; BD-3b). */
   trayChat?: () => TrayMenuItem[];
+  /** The shell's tasks items of the tray menu ("Quick add task…"; UX batch 7, UXA-41). */
+  trayTasks?: () => TrayMenuItem[];
+  /**
+   * The shell shows the update offer as a pill in the title bar (UX batch 7): the update card is then drawn by the
+   * shell (`updatePanel`) instead of above the task list. The update-required screen stays here.
+   */
+  updateInShell?: boolean;
+  /** A manual check ("Check for updates…") found an update to install: the shell opens its update panel. */
+  showUpdate?: () => void;
 }
 
 /** What `stop()` did: stopped (or queued offline), cancelled in the fields dialog, failed, or nothing was running. */
@@ -2530,6 +2539,7 @@ export class DesktopApp {
           : { id: 'pause-friendly', label: t('trayPauseFriendly') },
       ...this.trayMeetings(),
       ...(signedIn && this.deps.trayChat !== undefined ? { chat: this.deps.trayChat() } : {}),
+      ...(signedIn && this.deps.trayTasks !== undefined ? { tasks: this.deps.trayTasks() } : {}),
       settings: t('traySettings'),
       quit: t('trayQuit'),
     };
@@ -2960,6 +2970,11 @@ export class DesktopApp {
         ? this.t('updateUnavailable', { min })
         : null;
     if (manual) this.reportCheck(this.updateMessage ?? this.t('updateAvailable', { version: result.version }));
+    if (manual && this.updateMessage === null && this.deps.showUpdate !== undefined) {
+      // The person asked: the shell's pill opens its panel (a "Later" from before no longer hides it).
+      this.updateLater = null;
+      this.deps.showUpdate();
+    }
     if (below && satisfiable && installable && !this.updateDismissed) {
       this.show('update-required');
     } else {
@@ -3002,7 +3017,7 @@ export class DesktopApp {
     if (this.state.activeTimer !== null) {
       this.updateStage = 'confirm-running';
       this.render();
-      this.body.querySelector<HTMLButtonElement>('#update-after-stop')?.focus();
+      this.updateButton('update-after-stop')?.focus();
       return;
     }
     void this.installUpdate();
@@ -3019,7 +3034,12 @@ export class DesktopApp {
   cancelUpdateChoice(): void {
     this.updateStage = 'offer';
     this.render();
-    this.body.querySelector<HTMLButtonElement>('#update-now')?.focus();
+    this.updateButton('update-now')?.focus();
+  }
+
+  /** A button of the update card, wherever it is drawn (above the task list, or the shell's update panel). */
+  private updateButton(id: string): HTMLButtonElement | null {
+    return this.root.ownerDocument.getElementById(id) as HTMLButtonElement | null;
   }
 
   /** "Later": hides this version until a manual check or the next launch (the 6-hour check keeps it hidden). */
@@ -4213,7 +4233,7 @@ export class DesktopApp {
       this.promptInWindow() && this.state.idleCheck.phase !== 'watching' && this.renderPromptElsewhere(),
       this.nativeNotice !== null && this.renderNativeNotice(),
       this.pinExpired && this.renderPinExpired(),
-      this.renderUpdateCard(),
+      this.deps.updateInShell !== true && this.renderUpdateCard(),
       ...this.renderMeetingBanners(),
       this.welcome && this.error === null && this.renderWelcome(),
       this.longRunning() && this.renderLongRunning(),
@@ -4356,12 +4376,23 @@ export class DesktopApp {
    * "Version X is available": calm card with the small mascot (moss / mist, never alert colours), non-blocking, a named
    * region; progress in a native <progress>; announcements through the persistent polite live region.
    */
+  /** Whether the update card has something to show (an installable update not put off with "Later"). */
+  updateVisible(): boolean {
+    const update = this.update;
+    if (update === null || !update.installable || this.updateMessage !== null || this.channel === 'store') return false;
+    return !(this.updateStage === 'offer' && this.updateLater === update.version);
+  }
+
+  /** The update card for the shell's update panel (UX batch 7), `null` when there is nothing to show. */
+  updatePanel(): HTMLElement | null {
+    return this.renderUpdateCard();
+  }
+
   private renderUpdateCard(): HTMLElement | null {
     const t = this.t;
     const update = this.update;
-    if (update === null || !update.installable || this.updateMessage !== null || this.channel === 'store') return null;
+    if (update === null || !this.updateVisible()) return null;
     const stage = this.updateStage;
-    if (stage === 'offer' && this.updateLater === update.version) return null;
     const button = (id: string, kind: string, label: string, onClick: () => void, extra: Record<string, string> = {}) =>
       h('button', { class: `${kind} small`, id, key: id, attrs: { type: 'button', ...extra }, on: { click: onClick } }, label);
     let body: Child[];

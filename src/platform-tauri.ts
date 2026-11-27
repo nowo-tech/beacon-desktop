@@ -6,7 +6,7 @@ import { availableMonitors, currentMonitor, getCurrentWindow, type Monitor, Phys
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { type NativeRequest, type NativeResponse, nativeFetch, SESSION_HANDLE } from './lib/nativeFetch';
-import { type ChatHost, type ChatRealtimeMode, type DeepLink, type TasksHost, type ConnectionSecurity, notificationBody, type NotificationPermission, type Platform, type WindowHost, type PromptClient, type PromptHost, type MiniHost, type SessionEvent, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
+import { type ChatHost, type ChromeMode, hostOs, type WindowChromeHost, type ChatRealtimeMode, type DeepLink, type TasksHost, type ConnectionSecurity, notificationBody, type NotificationPermission, type Platform, type WindowHost, type PromptClient, type PromptHost, type MiniHost, type SessionEvent, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
 import { type BrowserChoice, type DetectedBrowser, type OpenOutcome, sanitizeBrowser } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 import type { MiniAction, MiniClient, MiniView } from './ui/miniWindow';
@@ -50,6 +50,35 @@ function windowHost(): WindowHost {
       await win.show();
       await win.unminimize();
       await win.setFocus();
+    },
+  };
+}
+
+/**
+ * The title bar's window buttons (UX batch 7, UXA-45). The chrome comes from Rust (`chrome_for`): macOS always has the
+ * overlay; on Windows / Linux an undecorated window means the app draws the buttons, a decorated one the system
+ * fallback (`BEACON_DESKTOP_SYSTEM_TITLEBAR=1`). `isDecorated` / `isMaximized` are in core:window:default; the buttons use
+ * core:window:allow-minimize / allow-toggle-maximize / allow-close, and dragging allow-start-dragging
+ * (`data-tauri-drag-region`).
+ */
+function chromeHost(): WindowChromeHost {
+  const win = getCurrentWindow();
+  return {
+    mode: async (): Promise<ChromeMode> => (hostOs() === 'mac' ? 'overlay' : (await win.isDecorated()) ? 'native' : 'custom'),
+    minimize: () => win.minimize(),
+    toggleMaximize: () => win.toggleMaximize(),
+    // Rust prevents the close and hides the window: the app stays in the tray.
+    close: () => win.close(),
+    isMaximized: () => win.isMaximized(),
+    onMaximizedChange: (handler) => {
+      let last: boolean | null = null;
+      void win.onResized(async () => {
+        const maximized = await win.isMaximized();
+        if (maximized !== last) {
+          last = maximized;
+          handler(maximized);
+        }
+      });
     },
   };
 }
@@ -177,6 +206,7 @@ export function tauriPlatform(): Platform {
     promptWindow: promptHost,
     miniWindow: miniHost,
     windowHost: windowHost(),
+    chrome: chromeHost(),
     // Title bar / native menus follow the app's theme; `null` hands it back to the system (capability core:window:allow-set-theme).
     setWindowTheme: (theme) => getCurrentWindow().setTheme(theme),
     // Rust command: on Windows only the app's own HKCU value and its Task Manager state.

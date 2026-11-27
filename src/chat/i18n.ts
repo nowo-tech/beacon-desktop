@@ -288,6 +288,21 @@ const en = {
   contextOffline: 'You are offline: reconnect to switch organization (the time recorded offline is saved first).',
   contextQueued: 'Time saved offline still waits to be sent (it may need an activity type): switch organization once it is.',
   contextRefusedTime: 'You can no longer track time in {name}. Switched to Personal.',
+  // UX batch 7: window chrome, update pill, tray quick add.
+  windowControls: 'Window',
+  windowMinimize: 'Minimize',
+  windowMaximize: 'Maximize',
+  windowRestore: 'Restore',
+  windowClose: 'Close',
+  windowCloseHint: 'Close (Beacon Desktop keeps running in the tray)',
+  updatePill: 'Update',
+  updatePillLabel: 'Update to version {version}',
+  updatePillAfterStop: 'Update after stop',
+  updatePillAfterStopLabel: 'Update after stop: version {version} installs when you stop the timer',
+  updatePillDownloading: 'Updating {percent}%',
+  updatePillDownloadingShort: 'Updating…',
+  updatePillInstalling: 'Restarting…',
+  trayQuickAdd: 'Quick add task…',
 } as const;
 
 export type ChatKey = keyof typeof en;
@@ -580,6 +595,21 @@ const es: Record<ChatKey, string> = {
   contextOffline: 'Estás sin conexión: vuelve a conectarte para cambiar de organización (antes se guarda el tiempo registrado sin conexión).',
   contextQueued: 'Aún hay tiempo guardado sin conexión por enviar (quizá necesita un tipo de actividad): cambia de organización cuando se haya enviado.',
   contextRefusedTime: 'Ya no puedes registrar tiempo en {name}. Se ha cambiado a Personal.',
+  // UX batch 7: window chrome, update pill, tray quick add.
+  windowControls: 'Ventana',
+  windowMinimize: 'Minimizar',
+  windowMaximize: 'Maximizar',
+  windowRestore: 'Restaurar',
+  windowClose: 'Cerrar',
+  windowCloseHint: 'Cerrar (Beacon Desktop sigue en la bandeja del sistema)',
+  updatePill: 'Actualizar',
+  updatePillLabel: 'Actualizar a la versión {version}',
+  updatePillAfterStop: 'Al parar',
+  updatePillAfterStopLabel: 'Al parar: la versión {version} se instala cuando pares el temporizador',
+  updatePillDownloading: 'Actualizando {percent} %',
+  updatePillDownloadingShort: 'Actualizando…',
+  updatePillInstalling: 'Reiniciando…',
+  trayQuickAdd: 'Añadir una tarea rápida…',
 };
 
 const CATALOGS: Record<Locale, Record<ChatKey, string>> = { en, es };
