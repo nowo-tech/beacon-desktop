@@ -11,9 +11,12 @@ export default defineConfig({
   timeout: 180_000,
   workers: 1,
   reporter: 'list',
-  use: { baseURL: `http://127.0.0.1:${UI_PORT}`, viewport: { width: 1280, height: 800 }, locale: 'en-US', timezoneId: 'Europe/Madrid' },
+  use: { baseURL: `http://127.0.0.1:${UI_PORT}`, viewport: { width: 1280, height: 800 }, locale: 'en-US', timezoneId: 'Europe/Madrid',
+    // Past the guided first run (UX batch 6): these screens start from the sign-in.
+    storageState: { cookies: [], origins: [{ origin: `http://127.0.0.1:${UI_PORT}`, localStorage: [{ name: 'beacon-desktop-shell', value: '{"setup":"done","module":"time"}' }] }] },
+  },
   webServer: [
     { command: 'node mock-server/server.mjs', url: `http://127.0.0.1:${MOCK_PORT}/__mock/state`, env: { PORT: MOCK_PORT }, reuseExistingServer: false },
-    { command: `./node_modules/.bin/vite build --outDir out/uxb1-ui --emptyOutDir && ./node_modules/.bin/vite preview --outDir out/uxb1-ui --port ${UI_PORT} --strictPort --host 127.0.0.1`, url: `http://127.0.0.1:${UI_PORT}`, reuseExistingServer: false, timeout: 120_000 },
+    { command: `BEACON_SERVER_FIELD=1 ./node_modules/.bin/vite build --outDir out/uxb1-ui --emptyOutDir && ./node_modules/.bin/vite preview --outDir out/uxb1-ui --port ${UI_PORT} --strictPort --host 127.0.0.1`, url: `http://127.0.0.1:${UI_PORT}`, reuseExistingServer: false, timeout: 120_000 },
   ],
 });
