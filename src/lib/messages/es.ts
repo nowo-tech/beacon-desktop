@@ -92,7 +92,7 @@ export const pools: Pools = {
     f('¿Currando en finde? Espero que sea algo que te guste.', 'weekend-start'),
     f('¡Turno de finde! El robot ha traído el picoteo.', 'lunch'),
     f('Psst, es fin de semana. ¿Se ha enterado el calendario?', 'weekend-start'),
-    f('¿Finde y con el cronómetro en marcha? Qué valiente.', 'shades'),
+    f('¿Finde y con el temporizador en marcha? Qué valiente.', 'shades'),
     f('¡Héroe del finde, a sus órdenes!', 'weekend-start'),
     f('El robot técnicamente libra hoy, pero aquí está para ti.', 'wave'),
     f('¿Un arreglo rápido de finde? Que sea rapidito.', 'thumbs'),

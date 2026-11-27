@@ -2,7 +2,7 @@
  * Strings of the one Settings (Account section) and the guided first run (UX batch 6: UXA-2, UXA-4, UXA-30), English
  * and Spanish. Kept apart from `chat/i18n.ts` so the shell's own copy has one home.
  */
-import type { Locale } from '../lib/i18n';
+import { pluralKey, type Locale } from '../lib/i18n';
 
 const en = {
   settingsTitle: 'Settings',
@@ -22,6 +22,7 @@ const en = {
   connTasks: 'Tasks',
   connOn: 'Connected',
   connOff: 'Not connected',
+  connTrouble: 'Connection trouble',
   connChatHint: 'Disconnect chat and stay signed in for time and tasks.',
   connTasksHint: 'Disconnect tasks and stay signed in for time and chat.',
   connTasksHidden: 'Turned off in Beacon for this organization.',
@@ -62,6 +63,23 @@ const en = {
   setupCancel: 'Cancel',
   setupFinished: 'Setup finished. Opening chat.',
   setupTasksOff: 'Tasks are turned off in Beacon for now.',
+
+  switcherPlaceholderAll: 'Jump to a conversation, task or timer…',
+  switcherResults: 'Results',
+  switchBoard: 'Board',
+  switchStart: 'Start timer',
+  switchSwitch: 'Switch timer here',
+  switchStop: 'Stop timer',
+  switchStopLabel: 'Stop the timer',
+  switchTimeView: 'Time',
+  keyPanes: 'Move between areas',
+  keySideRows: 'Move in the conversation list',
+  keysTime: 'Time',
+  keyTimeSearch: 'Search tasks',
+  keyTimeRows: 'Move in the list',
+  keyTimeStart: 'Start or stop on a row',
+  keyTimeQuick: 'Start a pinned or recent task',
+  keyTimeSection: 'Previous / next section',
 };
 
 export type ShellKey = keyof typeof en;
@@ -85,6 +103,7 @@ const es: Record<ShellKey, string> = {
   connTasks: 'Tareas',
   connOn: 'Conectado',
   connOff: 'Sin conectar',
+  connTrouble: 'Problemas de conexión',
   connChatHint: 'Desconecta el chat y sigue con la sesión iniciada para el tiempo y las tareas.',
   connTasksHint: 'Desconecta las tareas y sigue con la sesión iniciada para el tiempo y el chat.',
   connTasksHidden: 'Desactivadas en Beacon para esta organización.',
@@ -125,6 +144,23 @@ const es: Record<ShellKey, string> = {
   setupCancel: 'Cancelar',
   setupFinished: 'Configuración terminada. Abriendo el chat.',
   setupTasksOff: 'Las tareas están desactivadas en Beacon por ahora.',
+
+  switcherPlaceholderAll: 'Saltar a una conversación, tarea o temporizador…',
+  switcherResults: 'Resultados',
+  switchBoard: 'Tablero',
+  switchStart: 'Iniciar temporizador',
+  switchSwitch: 'Cambiar el temporizador aquí',
+  switchStop: 'Parar temporizador',
+  switchStopLabel: 'Parar el temporizador',
+  switchTimeView: 'Tiempo',
+  keyPanes: 'Moverse entre zonas',
+  keySideRows: 'Moverse por la lista de conversaciones',
+  keysTime: 'Tiempo',
+  keyTimeSearch: 'Buscar tareas',
+  keyTimeRows: 'Moverse por la lista',
+  keyTimeStart: 'Iniciar o parar en una fila',
+  keyTimeQuick: 'Iniciar una tarea fijada o reciente',
+  keyTimeSection: 'Sección anterior / siguiente',
 };
 
 const CATALOGS: Record<Locale, Record<ShellKey, string>> = { en, es };
@@ -132,8 +168,9 @@ const CATALOGS: Record<Locale, Record<ShellKey, string>> = { en, es };
 export function shellText(locale: Locale): ShellText {
   const catalog = CATALOGS[locale] ?? en;
   return (key, params) => {
-    let text = catalog[key] ?? en[key];
-    for (const [name, value] of Object.entries(params ?? {})) text = text.split(`{${name}}`).join(String(value));
+    const name = pluralKey(catalog, en, locale, key, params) as ShellKey;
+    let text = catalog[name] ?? en[name];
+    for (const [param, value] of Object.entries(params ?? {})) text = text.split(`{${param}}`).join(String(value));
     return text;
   };
 }

@@ -108,7 +108,7 @@
 .tasks-mod .col { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-lg); display: flex; flex-direction: column; min-height: 0; transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease); }
 .tasks-mod .col.drop { border-color: var(--moss); background: var(--moss-soft); }
 .tasks-mod .col-h { display: flex; align-items: center; gap: 8px; padding: 10px 10px 8px 12px; }
-.tasks-mod .col-h h3 { margin: 0; font-size: var(--fs-sm); font-weight: 700; color: var(--ink); }
+.tasks-mod .col-h h2 { margin: 0; font-size: var(--fs-sm); font-weight: 700; color: var(--ink); }
 .tasks-mod .col-h .cnt { font-size: var(--fs-xs); color: var(--ink-3); font-weight: 600; font-variant-numeric: tabular-nums; }
 .tasks-mod .col-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; flex: none; }
 .tasks-mod .col-emoji { font-size: 14px; line-height: 1; }
@@ -139,8 +139,8 @@
 /* My tasks */
 .tasks-mod .mt { overflow: auto; padding: 8px 20px 24px; min-height: 0; }
 .tasks-mod .mt-group { margin-top: 14px; }
-.tasks-mod .mt-group h3 { display: flex; align-items: center; gap: 8px; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-3); margin: 0 0 4px; padding: 0 8px; }
-.tasks-mod .mt-group h3.over { color: var(--danger); }
+.tasks-mod .mt-group h2 { display: flex; align-items: center; gap: 8px; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-3); margin: 0 0 4px; padding: 0 8px; }
+.tasks-mod .mt-group h2.over { color: var(--danger); }
 .tasks-mod .mt-empty { color: var(--ink-3); font-size: var(--fs-sm); padding: 8px; margin: 0; }
 .tasks-mod .rows { list-style: none; margin: 0; padding: 0; }
 .tasks-mod .row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto auto auto 32px; align-items: center; gap: 10px; min-height: 40px; padding: 4px 8px; border-radius: var(--r-sm); border-bottom: 1px solid var(--line); }

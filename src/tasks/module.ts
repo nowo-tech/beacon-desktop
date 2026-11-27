@@ -16,6 +16,7 @@ import { realClock, type SyncClock } from '../chat/sync';
 import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
 import type { TasksHost } from '../platform';
 import { type Child, h, patch } from '../ui/dom';
+import { Roving } from '../ui/roving';
 import { isModuleForbidden, TasksApi, TasksApiError, type TaskFields } from './api';
 import { apiToDateInput, dateInputToApi, dayAfter, daysToNextWeek, dueInfo, duration, groupMine, localDate, parseDuration, parseQuickAdd, priorityLabel, taskRef } from './format';
 import type { TasksText } from './i18n';
@@ -146,6 +147,8 @@ export class TasksModule {
   private readonly extras: HTMLElement;
   private readonly banner: HTMLElement;
   private readonly body: HTMLElement;
+  /** My tasks and List rows: one Tab stop, ↑ ↓ between rows, ← → within a row (UXA-10). */
+  private readonly rows: Roving;
   private readonly drawerSlot: HTMLElement;
   private readonly quickInput: HTMLInputElement;
   private readonly quickPreview: HTMLElement;
@@ -177,7 +180,14 @@ export class TasksModule {
     this.toolbar = h('div', { class: 'toolbar', id: 'tasks-toolbar' }, h('div', { class: 'qa' }, h('span', { class: 'qa-ico', attrs: { 'aria-hidden': 'true' } }, chatIcon('plus', 'sm')), this.quickInput, this.quickPreview, h('kbd', { attrs: { 'aria-hidden': 'true' } }, 'N'), this.quickHelp), this.extras);
     this.banner = h('div', { class: 'tk-banner', id: 'tasks-banner', attrs: { role: 'status', 'aria-live': 'polite' } });
     this.body = h('div', { class: 'tk-body', id: 'tasks-body' });
-    this.page = h('div', { class: 'page' }, this.head, this.toolbar, this.banner, this.body);
+    // UXA-27: the module's content is its `main` landmark (one visible at a time: the other modules' are hidden).
+    this.page = h('main', { class: 'page', id: 'tasks-main', attrs: { 'aria-labelledby': 'tasks-title' } }, this.head, this.toolbar, this.banner, this.body);
+    this.rows = new Roving(this.body, {
+      items: '.r-title, .t-title',
+      row: 'li.row, tr[data-row]',
+      cells: 'button:not([aria-disabled="true"])',
+      preferred: () => this.body.querySelector<HTMLElement>(`[data-task="${this.detail?.id ?? ''}"]`),
+    });
     this.drawerSlot = h('div', { class: 'drawer-slot', id: 'tasks-drawer' });
     this.root = h('div', { class: 'tasks-mod', id: 'tasks-root' }, this.page, this.drawerSlot);
   }
@@ -706,7 +716,51 @@ export class TasksModule {
     }
     if (mod && !event.shiftKey && event.key.toLowerCase() === 'n') return this.focusQuickAdd();
     if (event.key === 'Escape' && !mod) return this.closeTask();
+    // Alt+↑ / Alt+↓ (UX batch 3): the previous / next board, as Chat's conversations (board and list views).
+    if (event.altKey && !mod && !event.shiftKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) return this.stepBoard(event.key === 'ArrowDown' ? 1 : -1);
     return false;
+  }
+
+  private stepBoard(step: 1 | -1): boolean {
+    const board = this.currentBoard();
+    if (this.prefs.view === 'mine' || board === null || this.boards.length < 2) return false;
+    const index = this.boards.findIndex((item) => item.id === board.id);
+    const next = this.boards[(index + step + this.boards.length) % this.boards.length];
+    this.pickBoard(next.id);
+    this.deps.announce(next.title);
+    return true;
+  }
+
+  /** The quick switcher (UX batch 3, UXA-3): this organization's boards and the tasks loaded here, My tasks first. */
+  switchTargets(): { boards: Board[]; tasks: TaskCard[] } {
+    if (!this.connected || this.forbidden) return { boards: [], tasks: [] };
+    const seen = new Set<string>();
+    const tasks: TaskCard[] = [];
+    for (const task of [...this.mine, ...this.review, ...this.listTasks, ...[...this.columns.values()].flatMap((page) => page.tasks)]) {
+      if (seen.has(task.id)) continue;
+      seen.add(task.id);
+      tasks.push(task);
+    }
+    return { boards: this.boards, tasks };
+  }
+
+  /** Shows a board (the board view when My tasks is shown). */
+  jumpToBoard(id: string): void {
+    if (this.prefs.view === 'mine') this.prefs.view = 'board';
+    this.pickBoard(id);
+  }
+
+  /** F6 into the page (UX batch 3): the row or card that takes Tab, else quick add, else the page heading's view tab. */
+  focusPage(): void {
+    if (this.rows.focus()) return;
+    const target = this.body.querySelector<HTMLElement>('.card[tabindex="0"]') ?? (this.quickInput.disabled ? null : this.quickInput) ?? this.head.querySelector<HTMLElement>('[role="tab"][tabindex="0"]');
+    (target ?? this.page).focus();
+  }
+
+  /** The module's panes for F6 (UX batch 3): the page, then the task panel when open. */
+  panes(): HTMLElement[] {
+    if (this.root.firstChild !== this.page) return [this.root];
+    return [this.page, ...(this.detail !== null ? [this.drawerSlot] : [])];
   }
 
   // ---- writes -------------------------------------------------------------------------------------------------------
@@ -1013,7 +1067,7 @@ export class TasksModule {
       if (state.kind === 'idle' && state.message !== null) body.push(h('p', { class: 'cc-error', attrs: { role: 'alert' } }, state.message));
       body.push(h('div', { class: 'cc-row' }, this.button('btn primary', t('connectButton'), () => void this.connectTasks(), 'tasks-connect', state.kind === 'starting')));
     }
-    return h('section', { class: 'connect-card', id: 'tasks-connect-card', attrs: { 'aria-labelledby': 'tasks-connect-title' } }, h('span', { class: 'cc-ico', attrs: { 'aria-hidden': 'true' } }, chatIcon('tasks', 'lg')), h('h1', { id: 'tasks-connect-title' }, t('connectTitle')), h('p', { class: 'cc-text' }, t('connectText')), h('p', { class: 'cc-points' }, t('connectPoints')), ...body);
+    return h('section', { class: 'connect-card', id: 'tasks-connect-card', attrs: { 'aria-labelledby': 'tasks-connect-title' } }, h('span', { class: 'cc-ico', attrs: { 'aria-hidden': 'true' } }, chatIcon('tasks', 'lg')), h('h1', { id: 'tasks-connect-title' }, t('connectTitle')), h('p', { class: 'cc-text' }, t('connectText')), h('p', { class: 'cc-points' }, t('connectPoints')), h('details', { class: 'cc-how', id: 'tasks-connect-how' }, h('summary', {}, t('connectHow')), h('p', {}, t('connectHowText'))), ...body);
   }
 
   private button(className: string, label: string, onClick: () => void, id?: string, disabled = false): HTMLButtonElement {
@@ -1175,6 +1229,7 @@ export class TasksModule {
     else if (view === 'board') patch(this.body, [this.renderBoard()]);
     else patch(this.body, [this.renderList()]);
     reopenMenus();
+    this.rows.sync();
     const wrap = this.body.querySelector<HTMLElement>('.board-wrap');
     if (wrap === null) return;
     if (scrollLeft > 0) wrap.scrollLeft = scrollLeft;
@@ -1205,7 +1260,7 @@ export class TasksModule {
       ['review', this.review, t('groupReview'), t('emptyGroup')],
     ];
     for (const [id, items, label, empty] of sections) {
-      const heading = h('h3', { id: `mt-${id}`, class: id === 'overdue' && items.length > 0 ? 'over' : '' }, label, h('span', { class: 'cnt' }, `· ${items.length}`));
+      const heading = h('h2', { id: `mt-${id}`, class: id === 'overdue' && items.length > 0 ? 'over' : '' }, label, h('span', { class: 'cnt' }, `· ${items.length}`));
       const section = h('section', { class: 'mt-group', attrs: { 'aria-labelledby': `mt-${id}` } }, heading);
       if (items.length === 0) section.append(h('p', { class: 'mt-empty' }, empty));
       else section.append(h('ul', { class: 'rows', attrs: { role: 'list' } }, ...items.map((task) => this.row(task, id === 'review'))));
@@ -1223,6 +1278,7 @@ export class TasksModule {
     check.addEventListener('click', () => void this.complete(task.id));
     const open = h('button', { class: 'r-title', key: `open-${task.id}`, attrs: { type: 'button', 'data-task': task.id } }, h('span', { class: 'k-id' }, taskRef(task)), h('span', { class: 't' }, task.title), review ? h('span', { class: 'pill' }, t('groupReview')) : null, task.waitingForMe ? h('span', { class: 'pill q' }, t('questionWaiting')) : null);
     open.addEventListener('click', () => void this.openTask(task.id));
+    open.addEventListener('keydown', (event) => this.onRowKey(event, task));
     return h('li', { class: `row${running ? ' live' : ''}` }, check, open, h('span', { class: 'r-b hide-sm' }, board?.title ?? ''), priorityEl(task.priority, t) ?? h('span', {}), due !== null ? h('span', { class: `pill due-${due.tone || 'later'}` }, due.label) : h('span', { class: 'r-b' }, '—'), this.playButton(task, true));
   }
 
@@ -1254,7 +1310,7 @@ export class TasksModule {
       const page = this.columns.get(column.id) ?? { tasks: [], nextCursor: null };
       const label = page.nextCursor !== null ? t('colCountMore', { name: column.name, count: page.tasks.length }) : t('colCount', { name: column.name, count: page.tasks.length });
       const section = h('section', { class: 'col', attrs: { 'aria-label': label, 'data-col': column.id } });
-      section.append(h('div', { class: 'col-h' }, this.marker(column), h('h3', {}, column.name), h('span', { class: 'cnt', attrs: { 'aria-hidden': 'true' } }, page.nextCursor !== null ? `${page.tasks.length}+` : String(page.tasks.length))));
+      section.append(h('div', { class: 'col-h' }, this.marker(column), h('h2', {}, column.name), h('span', { class: 'cnt', attrs: { 'aria-hidden': 'true' } }, page.nextCursor !== null ? `${page.tasks.length}+` : String(page.tasks.length))));
       const list = h('ul', { class: 'col-list', attrs: { role: 'list' } });
       if (page.tasks.length === 0) list.append(h('li', { class: 'col-empty' }, h('b', {}, t('colEmpty')), t('colEmptyHint')));
       for (const task of page.tasks) {
@@ -1390,6 +1446,13 @@ export class TasksModule {
     }
   }
 
+  /** `S` on a row of My tasks or the list starts (or stops) the timer on it, as on a card. */
+  private onRowKey(event: KeyboardEvent, task: TaskCard): void {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.key.toLowerCase() !== 's') return;
+    event.preventDefault();
+    void this.startTimer(task);
+  }
+
   // -- List
 
   private renderList(): HTMLElement {
@@ -1400,7 +1463,7 @@ export class TasksModule {
       wrap.append(skeleton(6));
       return wrap;
     }
-    const table = h('table', { class: 'tbl' }, h('thead', {}, h('tr', {}, ...[t('tableId'), t('tableTitle'), t('tableStatus'), t('tablePriority'), t('tableAssignee'), t('tableDue'), t('tableLogged'), ''].map((label, index) => h('th', { class: index === 4 || index === 6 ? 'hide-sm' : '', attrs: { scope: 'col' } }, label)))));
+    const table = h('table', { class: 'tbl' }, h('thead', {}, h('tr', {}, ...[t('tableId'), t('tableTitle'), t('tableStatus'), t('tablePriority'), t('tableAssignee'), t('tableDue'), t('tableLogged'), t('tableTimer')].map((label, index) => h('th', { class: index === 4 || index === 6 ? 'hide-sm' : '', attrs: { scope: 'col' } }, index === 7 ? h('span', { class: 'sr-only' }, label) : label)))));
     const body = h('tbody');
     for (const column of board.columns) {
       const items = this.listTasks.filter((task) => task.column?.id === column.id);
@@ -1411,11 +1474,12 @@ export class TasksModule {
         const status = this.statusPicker(`status-${task.id}`, 'pick status-pill', t('statusOf', { task: taskRef(task) }), board.columns, column, !this.writable() || !board.canMove, (id) => void this.move(task.id, id));
         const open = h('button', { class: 't-title', key: `open-${task.id}`, attrs: { type: 'button', 'data-task': task.id } }, task.title);
         open.addEventListener('click', () => void this.openTask(task.id));
+        open.addEventListener('keydown', (event) => this.onRowKey(event, task));
         const assignee = task.assignees[0];
         body.append(
           h(
             'tr',
-            { class: this.deps.runningTaskId() === task.id ? 'live' : '' },
+            { class: this.deps.runningTaskId() === task.id ? 'live' : '', attrs: { 'data-row': task.id } },
             h('td', { class: 'k-id' }, taskRef(task)),
             h('td', { class: 'td-title' }, open),
             h('td', {}, status),
@@ -1511,7 +1575,8 @@ export class TasksModule {
       title.dataset.dirty = 'false';
       if (value !== '' && value !== task.title) void this.save({ title: value });
     });
-    body.append(title);
+    // UXA-27: the panel's heading (the title itself is an editable field).
+    body.append(h('h2', { class: 'sr-only', id: 'task-detail-heading' }, task.title), title);
     // The task's time: what TimeTrack logged, the estimate, start / stop / switch.
     const timerButton = running
       ? this.button('btn signal', t('stopTimer'), () => void this.startTimer(task), 'task-timer')

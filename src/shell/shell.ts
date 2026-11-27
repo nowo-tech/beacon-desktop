@@ -30,6 +30,8 @@ import type { MiniAction, MiniView } from '../ui/miniWindow';
 import { shellText, type ShellText } from './i18n';
 import { type AnyTab, isTimeTab, SettingsDialog, type SettingsSource } from './settings';
 import { type SetupState, type SetupStep, SetupView } from './setup';
+import { mergeSwitch, scoreItems, type SwitchGroup, type SwitchItem } from './switcher';
+import { taskRef } from '../tasks/format';
 
 export type ModuleId = 'chat' | 'tasks' | 'time';
 export type Density = 'comfortable' | 'compact';
@@ -160,7 +162,7 @@ export class Shell {
   private started = false;
   private lastBadge = -1;
   private switcherIndex = 0;
-  private switcherItems: Conversation[] = [];
+  private switcherItems: SwitchItem[] = [];
 
   constructor(
     private readonly mount: HTMLElement,
@@ -870,7 +872,6 @@ export class Shell {
     }
     const search = h('button', { class: 'tb-search', id: 'tb-search', attrs: { type: 'button', 'aria-haspopup': 'dialog', 'aria-keyshortcuts': 'Control+K Meta+K' } }, chatIcon('search', 'sm'), h('span', {}, t('searchJump')), h('kbd', {}, `${modKey()} K`));
     search.addEventListener('click', () => this.openSwitcher());
-    search.hidden = !this.chat.connected;
     const right = h('div', { class: 'tb-right' }, this.updatePill(), this.timerPill());
     const dark = document.documentElement.getAttribute('data-theme') === 'dark' || (document.documentElement.getAttribute('data-theme') === null && globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches === true);
     const theme = this.iconButton('tb-btn', dark ? 'sun' : 'moon', dark ? t('themeLight') : t('themeDark'), () => void this.setTheme(dark ? 'light' : 'dark'), 'tb-theme');
@@ -1116,7 +1117,7 @@ export class Shell {
   private buildSwitcher(): HTMLDialogElement {
     const t = this.t;
     const input = h('input', { id: 'sw-input', attrs: { type: 'text', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'sw-list', 'aria-autocomplete': 'list', autocomplete: 'off', spellcheck: 'false', 'aria-label': t('switcherLabel') } });
-    const list = h('div', { class: 'sw-list', id: 'sw-list', attrs: { role: 'listbox', 'aria-label': t('conversations') } });
+    const list = h('div', { class: 'sw-list', id: 'sw-list', attrs: { role: 'listbox', 'aria-label': this.st('switcherResults') } });
     const dialog = h(
       'dialog',
       { class: 'sh-dialog', id: 'switcher', attrs: { 'aria-label': t('switcherLabel'), closedby: 'any' } },
@@ -1149,17 +1150,112 @@ export class Shell {
     return dialog;
   }
 
+  /** The global quick switcher (UX batch 3, UXA-3): conversations, boards and tasks, Time's timer actions and views. */
   openSwitcher(): void {
-    if (!this.chat.connected) return;
+    if (this.root.dataset.bare === 'true') return;
     for (const dialog of [this.settings, this.keys]) if (dialog.open) dialog.close();
     const input = this.switcher.querySelector<HTMLInputElement>('#sw-input');
     if (input === null) return;
     input.value = '';
-    input.placeholder = this.t('switcherPlaceholder');
+    input.placeholder = this.st('switcherPlaceholderAll');
     this.switcherIndex = 0;
     this.renderSwitcher();
     if (!this.switcher.open) this.switcher.showModal();
     input.focus();
+  }
+
+  /** Every module's candidates for `query` (only what is connected and shown). */
+  private switchGroups(query: string): SwitchGroup[] {
+    const t = this.t;
+    const st = this.st;
+    const groups: SwitchGroup[] = [];
+    if (this.chat.connected) {
+      const now = this.now();
+      const items = rankConversations(this.chat.allConversations(), this.chat.recent, query).map((row): SwitchItem => {
+        const section = sectionOf(row);
+        const kind = row.kind === 'direct' ? t('kindDirect') : section === 'projects' ? t('kindProject') : row.kind === 'support' ? t('kindSupport') : t('kindChannel');
+        return {
+          key: `c-${row.uuid}`,
+          module: 'chat',
+          label: row.title,
+          meta: row.unread > 0 ? t('switcherUnread', { count: row.unread }) : this.chat.recent.includes(row.uuid) ? t('switcherRecent') : kind,
+          extra: kind,
+          icon: row.kind === 'direct' ? 'users' : row.kind === 'support' ? 'headset' : section === 'projects' ? 'folder' : 'hash',
+          unread: row.unread,
+          strong: row.unread > 0 && !isMuted(row, now),
+          run: () => {
+            this.show('chat');
+            void this.chat.open(row.uuid);
+          },
+        };
+      });
+      groups.push({ module: 'chat', items: scoreItems(query, items) });
+    }
+    const tasks = this.tasks;
+    if (tasks !== null && tasks.connected && !this.tasksHidden) {
+      const { boards, tasks: cards } = tasks.switchTargets();
+      const boardItems = boards.map((board): SwitchItem => ({
+        key: `b-${board.id}`,
+        module: 'tasks',
+        label: board.title,
+        meta: st('switchBoard'),
+        extra: board.group?.label,
+        icon: 'folder',
+        run: () => {
+          this.show('tasks');
+          tasks.jumpToBoard(board.id);
+        },
+      }));
+      const taskItems = cards.map((card): SwitchItem => {
+        const board = boards.find((item) => item.id === card.boardId)?.title;
+        return {
+          key: `t-${card.id}`,
+          module: 'tasks',
+          label: card.title,
+          meta: board !== undefined ? `${taskRef(card)} · ${board}` : taskRef(card),
+          extra: `${taskRef(card)} ${board ?? ''}`,
+          icon: 'tasks',
+          run: () => {
+            this.show('tasks');
+            void tasks.openTask(card.id);
+          },
+        };
+      });
+      // No query: a few boards, then the tasks (My tasks first), then the other boards.
+      groups.push({ module: 'tasks', items: scoreItems(query, [...boardItems.slice(0, 3), ...taskItems, ...boardItems.slice(3)]) });
+    }
+    const app = this.app;
+    if (app !== null && app.state.session !== null) {
+      const timer = app.state.activeTimer;
+      const items: SwitchItem[] = [];
+      if (timer !== null) {
+        items.push({ key: 'time-stop', module: 'time', label: st('switchStopLabel'), meta: timer.taskTitle, extra: `${timer.taskTitle} ${st('switchStop')}`, icon: 'stop', run: () => void app.stop() });
+      }
+      const seen = new Set<string>(timer !== null ? [timer.taskId] : []);
+      const verb = timer !== null ? st('switchSwitch') : st('switchStart');
+      for (const task of [...app.quickTasks(), ...(query.trim() === '' ? [] : app.tasks)]) {
+        if (seen.has(task.id)) continue;
+        seen.add(task.id);
+        items.push({ key: `s-${task.id}`, module: 'time', label: task.title, meta: verb, extra: `${verb} ${task.boardTitle ?? task.projectTitle ?? ''}`, icon: 'play', run: () => void app.start(task) });
+      }
+      if (app.fullLayout()) {
+        const view = (key: 'quick' | 'time', label: string): SwitchItem => ({
+          key: `v-${key}`,
+          module: 'time',
+          label,
+          meta: st('switchTimeView'),
+          extra: st('switchTimeView'),
+          icon: 'clock',
+          run: () => {
+            this.show('time');
+            app.showSection(key);
+          },
+        });
+        items.push(view('time', app.t('myTime')), view('quick', app.t('pinnedRecent')));
+      }
+      groups.push({ module: 'time', items: scoreItems(query, items) });
+    }
+    return groups;
   }
 
   private renderSwitcher(): void {
@@ -1167,26 +1263,22 @@ export class Shell {
     const input = this.switcher.querySelector<HTMLInputElement>('#sw-input');
     const list = this.switcher.querySelector<HTMLElement>('#sw-list');
     if (input === null || list === null) return;
-    this.switcherItems = rankConversations(this.chat.allConversations(), this.chat.recent, input.value).slice(0, 14);
+    this.switcherItems = mergeSwitch(this.switchGroups(input.value), this.module, input.value);
     this.switcherIndex = Math.min(this.switcherIndex, Math.max(0, this.switcherItems.length - 1));
     if (this.switcherItems.length === 0) {
       list.replaceChildren(h('div', { class: 'sw-empty' }, t('switcherEmpty')));
       input.removeAttribute('aria-activedescendant');
       return;
     }
-    const now = this.now();
     list.replaceChildren(
-      ...this.switcherItems.map((row, index) => {
-        const section = sectionOf(row);
-        const icon: ChatIconName = row.kind === 'direct' ? 'users' : row.kind === 'support' ? 'headset' : section === 'projects' ? 'folder' : 'hash';
-        const meta = row.unread > 0 ? t('switcherUnread', { count: row.unread }) : this.chat.recent.includes(row.uuid) ? t('switcherRecent') : row.kind === 'direct' ? t('kindDirect') : section === 'projects' ? t('kindProject') : row.kind === 'support' ? t('kindSupport') : t('kindChannel');
+      ...this.switcherItems.map((item, index) => {
         const option = h(
           'div',
-          { class: `opt${row.unread > 0 && !isMuted(row, now) ? ' unread' : ''}`, id: `sw-${index}`, attrs: { role: 'option', 'aria-selected': index === this.switcherIndex ? 'true' : 'false' } },
-          h('span', { class: 'o-ico' }, chatIcon(icon, 'sm')),
-          h('span', { class: 'o-t' }, row.title),
-          row.unread > 0 ? h('span', { class: 'badge', attrs: { 'aria-hidden': 'true' } }, String(row.unread)) : null,
-          h('span', { class: 'o-m' }, meta),
+          { class: `opt${item.strong === true ? ' unread' : ''}`, id: `sw-${index}`, attrs: { role: 'option', 'aria-selected': index === this.switcherIndex ? 'true' : 'false', 'data-switch': item.key, 'data-module': item.module } },
+          h('span', { class: 'o-ico' }, chatIcon(item.icon, 'sm')),
+          h('span', { class: 'o-t' }, item.label),
+          item.unread !== undefined && item.unread > 0 ? h('span', { class: 'badge', attrs: { 'aria-hidden': 'true' } }, String(item.unread)) : null,
+          h('span', { class: 'o-m' }, item.meta),
         );
         option.addEventListener('click', () => {
           this.switcherIndex = index;
@@ -1211,11 +1303,10 @@ export class Shell {
   }
 
   private runSwitcher(): void {
-    const row = this.switcherItems[this.switcherIndex];
-    if (row === undefined) return;
+    const item = this.switcherItems[this.switcherIndex];
+    if (item === undefined) return;
     this.switcher.close();
-    this.show('chat');
-    void this.chat.open(row.uuid);
+    item.run();
   }
 
   // ---- settings and the shortcut sheet ------------------------------------------------------------------------------
@@ -1346,7 +1437,12 @@ export class Shell {
     if (this.chat.connected) {
       const manage = h('button', { class: 'btn sm', id: 'settings-chat-manage', attrs: { type: 'button' } }, st('manage'));
       manage.addEventListener('click', () => this.openSettings('account'));
-      connection.append(this.settingRow(t('chatConnection'), st('connOn'), manage));
+      // UXA-14: the connection detail the sidebar no longer shows while healthy ("Checking for new messages every 30 s").
+      const status = this.chat.connectionStatus();
+      const row = this.settingRow(t('chatConnection'), status.text, manage);
+      row.id = 'settings-chat-status';
+      row.querySelector('.s-t')?.append(' ', h('span', { class: `conn-state${status.tone === 'ok' ? ' on' : ''}`, attrs: { title: status.text } }, h('span', { class: `conn-dot ${status.tone}`, attrs: { 'aria-hidden': 'true' } }), st(status.tone === 'ok' ? 'connOn' : 'connTrouble')));
+      connection.append(row);
       // Notifications (BD-3b): opt-in, level None, pause.
       const prefs = this.notifier.prefs;
       connection.append(
@@ -1557,18 +1653,31 @@ export class Shell {
     if (before === null || before === document.body || !this.setup.root.contains(document.activeElement)) this.setup.focus();
   }
 
+  /** The shortcut sheet (`?`, UX batch 3): what works anywhere, then the keys of the module in view, and only those. */
   openKeys(): void {
     const t = this.t;
+    const st = this.st;
     const mod = modKey();
-    const sections: [string, [string, string[]][]][] = [
-      [t('keysAnywhere'), [[t('keySwitcher'), [mod, 'K']], [t('keyModules'), [mod, this.moduleOrder().length === 3 ? '1 2 3' : '1 2']], [t('keySettings'), [mod, ',']], [t('keyTheme'), [mod, 'Shift', 'L']], [t('keyToggleTimer'), [mod, 'Shift', 'S']], [t('keyMini'), [mod, 'Shift', 'M']], [t('keySheet'), ['?']]]],
-      [
+    const anywhere: [string, string[]][] = [
+      [t('keySwitcher'), [mod, 'K']],
+      [t('keyModules'), [mod, this.moduleOrder().length === 3 ? '1 2 3' : '1 2']],
+      [st('keyPanes'), ['F6', 'Shift F6']],
+      [t('keySettings'), [mod, ',']],
+      [t('keyTheme'), [mod, 'Shift', 'L']],
+      [t('keyToggleTimer'), [mod, 'Shift', 'S']],
+      ...(this.platform.miniWindow !== null ? [[t('keyMini'), [mod, 'Shift', 'M']] as [string, string[]]] : []),
+      [t('keySheet'), ['?']],
+    ];
+    const sections: [string, [string, string[]][]][] = [[t('keysAnywhere'), anywhere]];
+    if (this.module === 'chat') {
+      sections.push([
         t('keysChat'),
         [
           [t('keyConv'), ['Alt', '↑ ↓']],
           [t('keyUnread'), ['Alt', 'Shift', '↑ ↓']],
           [t('keyJumpUnread'), [mod, 'J']],
           [t('keyHistory'), [mod, '[ ]']],
+          [st('keySideRows'), ['↑ ↓']],
           [t('keyMessages'), ['↑ ↓']],
           [t('keyThread'), ['Enter']],
           [t('keyReply'), ['R']],
@@ -1577,19 +1686,33 @@ export class Shell {
           [t('keySend'), ['Enter', 'Shift Enter']],
           [t('keyLeave'), ['Esc']],
         ],
-      ],
-    ];
-    if (this.tasks !== null && !this.tasksHidden) {
+      ]);
+    } else if (this.module === 'tasks' && this.tasks !== null && !this.tasksHidden) {
       const tt = this.tt;
       sections.push([
         tt('keysTasks'),
         [
           [tt('keyQuickAdd'), ['N']],
+          [tt('keyBoard'), ['Alt', '↑ ↓']],
           [tt('keyOpenCard'), ['Enter']],
           [tt('keyCardNav'), ['← → ↑ ↓']],
           [tt('keyMoveCard'), ['Alt', '← →']],
+          [tt('keyRows'), ['↑ ↓']],
+          [tt('keyRowCells'), ['← →']],
           [tt('keyStartTimer'), ['S']],
           [tt('keyCloseDetail'), ['Esc']],
+        ],
+      ]);
+    } else if (this.module === 'time') {
+      const full = this.app?.fullLayout() === true;
+      sections.push([
+        st('keysTime'),
+        [
+          [st('keyTimeSearch'), ['/']],
+          [st('keyTimeRows'), ['↑ ↓']],
+          [st('keyTimeStart'), ['Enter', 'S']],
+          [st('keyTimeQuick'), ['Alt', '1…9']],
+          ...(full ? [[st('keyTimeSection'), ['Alt', '↑ ↓']] as [string, string[]]] : []),
         ],
       ]);
     }
@@ -1695,61 +1818,101 @@ export class Shell {
 
   // ---- keys ---------------------------------------------------------------------------------------------------------
 
+  /**
+   * Keys (UX batch 3, UXA-3 / UXA-10, owner approval "global shortcuts in every module"). The app-wide ones are handled
+   * here first, the same in Chat, Tasks and Time, and marked handled (the Time module then leaves them alone):
+   * Ctrl/⌘+K the global switcher, Ctrl/⌘+1…3 the modules, F6 / Shift+F6 the window's areas, Ctrl/⌘+, Settings,
+   * Ctrl/⌘+Shift+L light / dark (its one meaning), Ctrl/⌘+Shift+S the timer, Ctrl/⌘+Shift+M the mini timer, `?` the
+   * sheet. Then Alt+↑ / Alt+↓ and the module's own keys go to the module in view.
+   */
   private onKey(event: KeyboardEvent): void {
-    if (this.root.dataset.bare === 'true') return;
+    // A shell no longer in the page (tests mount several) never takes a key; a key already handled is not ours either.
+    if (!this.root.isConnected || this.root.dataset.bare === 'true' || event.defaultPrevented) return;
     const mod = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
     const dialogOpen = [this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog].some((dialog) => dialog.open);
     const target = event.target as HTMLElement | null;
     const typing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target?.isContentEditable === true;
-    if (mod && !event.shiftKey && key === 'k' && this.module === 'chat') {
+    const handled = (run: () => void) => {
       event.preventDefault();
-      if (this.switcher.open) this.switcher.close();
-      else this.openSwitcher();
-      return;
+      run();
+    };
+    if (mod && !event.shiftKey && !event.altKey && key === 'k') {
+      // Toggles from anywhere, even a text field; not over another dialog.
+      if (dialogOpen && !this.switcher.open) return;
+      return handled(() => (this.switcher.open ? this.switcher.close() : this.openSwitcher()));
     }
     if (dialogOpen) return;
-    if (mod && event.shiftKey && !event.altKey && key === 'm' && this.platform.miniWindow !== null) {
-      event.preventDefault();
-      void this.toggleMini();
-      return;
-    }
+    if (mod && event.shiftKey && !event.altKey && key === 'm' && this.platform.miniWindow !== null) return handled(() => void this.toggleMini());
     const order = this.moduleOrder();
     if (mod && !event.shiftKey && !event.altKey && /^[1-3]$/.test(event.key) && Number(event.key) <= order.length) {
-      event.preventDefault();
-      const next: ModuleId = order[Number(event.key) - 1];
-      this.show(next);
-      this.rail.querySelector<HTMLElement>(`#tab-${next}`)?.focus();
-      return;
+      return handled(() => {
+        const next: ModuleId = order[Number(event.key) - 1];
+        this.show(next);
+        this.rail.querySelector<HTMLElement>(`#tab-${next}`)?.focus();
+      });
     }
-    if (mod && event.shiftKey && key === 'l' && this.module === 'chat') {
-      event.preventDefault();
-      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-      void this.setTheme(dark ? 'light' : 'dark');
-      return;
+    if (mod && event.shiftKey && !event.altKey && key === 'l') {
+      return handled(() => {
+        const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        void this.setTheme(dark ? 'light' : 'dark');
+      });
     }
+    if (mod && event.shiftKey && !event.altKey && key === 's' && this.app !== null && this.app.state.session !== null) return handled(() => void this.app?.toggle());
+    if (mod && !event.shiftKey && !event.altKey && event.key === ',') return handled(() => this.openSettings());
+    if (event.key === 'F6' && !mod && !event.altKey) return handled(() => this.cyclePanes(event.shiftKey ? -1 : 1));
+    if (!typing && !mod && !event.altKey && event.key === '?') return handled(() => this.openKeys());
     if (this.module === 'tasks') {
-      if (mod && event.key === ',') {
-        event.preventDefault();
-        this.openSettings();
-      } else if (!typing && !mod && !event.altKey && event.key === '?') {
-        event.preventDefault();
-        this.openKeys();
-      } else if ((!typing || (event.key === 'Escape' && this.tasks?.detail !== null)) && this.tasks?.onKey(event) === true) event.preventDefault();
+      if ((!typing || (event.key === 'Escape' && this.tasks?.detail !== null)) && this.tasks?.onKey(event) === true) event.preventDefault();
       return;
     }
-    if (this.module !== 'chat') return;
-    if (mod && event.key === ',') {
-      event.preventDefault();
-      this.openSettings();
-      return;
-    }
-    if (!typing && !mod && !event.altKey && event.key === '?') {
-      event.preventDefault();
-      this.openKeys();
+    if (this.module === 'time') {
+      if (!typing && event.altKey && !mod && !event.shiftKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp') && this.app?.stepSection(event.key === 'ArrowDown' ? 1 : -1) === true) event.preventDefault();
       return;
     }
     if (!typing && this.chat.onKey(event)) event.preventDefault();
+  }
+
+  /**
+   * The window's areas for F6 / Shift+F6, in visual order: title bar, rail, then the module's panes (Chat: sidebar,
+   * conversation, thread; Tasks: page, task panel; Time: sidebar, list, details). From outside any area, F6 starts at the
+   * module's first pane (the person is "in" the module), Shift+F6 at its last.
+   */
+  private areas(): HTMLElement[] {
+    const panes = this.setupShown
+      ? [this.setup.root]
+      : this.module === 'chat'
+        ? this.chat.panes()
+        : this.module === 'tasks'
+          ? (this.tasks?.panes() ?? [])
+          : this.app !== null && this.app.state.session !== null
+            ? this.app.panes()
+            : [this.timePanel];
+    return [this.titlebar, this.rail, ...panes.filter((pane) => pane.closest('[hidden]') === null)];
+  }
+
+  cyclePanes(step: 1 | -1): void {
+    const areas = this.areas();
+    const at = areas.findIndex((area) => area.contains(document.activeElement));
+    const next = at === -1 ? areas[step === 1 ? Math.min(2, areas.length - 1) : areas.length - 1] : areas[(at + step + areas.length) % areas.length];
+    this.focusArea(next);
+  }
+
+  private focusArea(area: HTMLElement): void {
+    if (area === this.titlebar) {
+      (this.titlebar.querySelector<HTMLElement>('#tb-search') ?? this.titlebar.querySelector<HTMLElement>('button:not([disabled])'))?.focus();
+    } else if (area === this.rail) {
+      this.rail.querySelector<HTMLElement>('.rail-tab[tabindex="0"]')?.focus();
+    } else if (this.module === 'chat' && !this.setupShown) {
+      this.chat.focusPane(area);
+    } else if (this.module === 'tasks' && !this.setupShown && this.tasks !== null && area !== this.tasks.root) {
+      if (area.tagName === 'MAIN') this.tasks.focusPage();
+      else (area.querySelector<HTMLElement>('#task-close') ?? area).focus();
+    } else if (this.module === 'time' && !this.setupShown && this.app !== null && this.app.state.session !== null) {
+      this.app.focusPane(area);
+    } else {
+      (area.querySelector<HTMLElement>('button:not([disabled]), a[href], input, select, textarea, [tabindex="0"]') ?? area).focus();
+    }
   }
 }
 
