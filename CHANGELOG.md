@@ -5,6 +5,46 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+BD-3b, second part (design `docs/design/BEACON_DESKTOP_TASKS.md` §9, `BEACON_DESKTOP.md` §7.3): the Tasks module, 0.13.0
+candidate. Needs TaskBoardBundle **3.4** (`client_api`, `/api/task-board/v1`) and Beacon's `tasks` scope family
+(`task-board:read task-board:write`); without them the module shows its "Connect tasks" card and a refused request
+says so.
+
+### Added
+
+- **Tasks module** (approved prototype), a third rail tab: Chat, Tasks, Time (`Ctrl/⌘+1..3` follow the tabs, so Time
+  moves from `Ctrl/⌘+2` to `Ctrl/⌘+3`).
+  - **Connect tasks**: a chained device flow of the `tasks` family; the token is a third OS keychain entry
+    (`tasks-token`), attached by Rust to `/api/task-board/v1/` only. *Disconnect tasks* (Settings) keeps time and chat;
+    a `401` disconnects tasks only.
+  - **My tasks**: Overdue, Today, Upcoming, No date (assigned to you) and To review, by the local date; complete a task
+    (to the board's first done column), start its timer.
+  - **Boards**: a picker grouped by folder or space; **kanban** (30 cards per column, *Load more*) and **list** (status
+    select); *Only mine*; column markers as TaskBoard's emojis or colour dots (Settings, owner decision 2026-11-25).
+  - **Moves** with the card's revision (`If-Match`): drag and drop, `Alt+←/→` on a focused card, the list's status. The
+    card moves at once and goes back with "Changed by someone else" on `409 conflict`, or with the board's own message
+    on `403 transition_refused`.
+  - **Task panel**: title, status, priority, assignee, due date, estimate and tags (each saved with `If-Match`),
+    checklists (tick with the item's revision, add an item), the description, links and comments as `tokens/1` text,
+    parent and subtask counts, "Open in Beacon"; `Esc` closes it.
+  - **Quick add** (`N`, the prototype's syntax: `!priority`, `#tag`, `@today` / `@tomorrow`, `~2h`): Enter creates on
+    the board shown (My tasks: assigned to you, due today unless said), `Ctrl/⌘+Enter` also starts the timer; one
+    `Idempotency-Key` per task.
+  - **Timer from a task** (card, row, panel; `S` on a card): the time API starts or switches as from the Time module
+    (required fields and the organization rules of 0.11.0 apply); the running task is marked in every view.
+  - **Polling** through `GET changes` (design §7.3): 20 s for a board or task shown, 60 s for My tasks, 5 min in the
+    background, backoff on errors, `Retry-After` honoured.
+  - **`403 module_forbidden`** (TaskBoard 3.5): the Tasks tab is hidden and the token kept; it comes back when Beacon
+    turns the module on again.
+  - Landing module (owner Q1): a module the server hides falls back to Chat.
+  - English and Spanish, light and dark, axe WCAG 2.1 AA on every view.
+
+### Changed
+
+- Rust (`beacon_fetch`): `PATCH` reaches only `…/task-board/v1/tasks/{id}` and `…/checklist-items/{id}`, `PUT` /
+  `DELETE` only `…/tasks/{id}/members/{user}` (and the chat reaction route of 0.12.0); `If-Match` may be sent and the
+  `ETag` header is read back. Everything else stays deny by default.
+
 ## [0.12.0] - 2026-11-27
 
 BD-3b, first part (design `docs/design/BEACON_DESKTOP.md` §7.2): chat writes. Needs ChatKitBundle

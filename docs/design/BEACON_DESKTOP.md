@@ -550,6 +550,24 @@ never patched directly, so `after=` never skips a message). Drafts and unsent me
 | `mock-server/chat.mjs`, `mock-server/server.mjs` | changed | Write routes with key replay / mismatch, `read_only`, writes off, read-only chat family |
 | `tests/unit/chat-writes.test.ts`, `tests/unit/shell-writes.test.ts`, `tests/e2e/chat-writes.spec.ts`, `tests/screenshots/bd3b.spec.ts` | new | API, outbox, composer, module, e2e with axe, owner screenshots |
 
+### 7.3 BD-3b, part 2: the Tasks module (app 0.13.0 candidate)
+
+Built against the released **TaskBoardBundle 3.4.1** client API (`docs/CLIENT-API.md`,
+`docs/openapi/task-board-client-v1.yaml`), behaviour as [BEACON_DESKTOP_TASKS.md §9](BEACON_DESKTOP_TASKS.md#9-the-tasks-module-in-the-app).
+Differences from the TASKS design, from the released contract: the description is answered as `tokens/1` only (no
+Markdown source), so the panel shows it and offers "Edit in Beacon"; comments, questions and subtask writes are 3.5;
+a single-assignee picker removes the other assignees (`DELETE members/{user}` drops every role of that person).
+Beacon still has to register the `tasks` family and the TaskBoard `client_api` (B-T1..B-T4, B-T8, B-T9).
+
+| File | New / changed | Role |
+|---|---|---|
+| `src/tasks/api.ts`, `src/tasks/types.ts` | new | Client and parsers of `/api/task-board/v1` (If-Match, Idempotency-Key, `module_forbidden`) |
+| `src/tasks/module.ts`, `src/tasks/format.ts`, `src/tasks/i18n.ts`, `src/tasks/tasks.css` | new | The module: connect, My tasks, kanban, list, panel, quick add, polling through `changes` |
+| `src/shell/shell.ts`, `src/platform*.ts`, `src/api/client.ts` | changed | Third tab (Chat, Tasks, Time), markers setting, `TasksHost`, `tasksDeviceCode` |
+| `src-tauri/src/secret.rs`, `src-tauri/src/net.rs`, `src-tauri/src/lib.rs`, `src-tauri/app-commands.rs`, `src-tauri/capabilities/default.json` | changed | `tasks-token`, `Route::Tasks`, `tasks_status` / `tasks_connect_begin` / `tasks_disconnect`, task write routes, `if-match` / `etag` |
+| `mock-server/tasks.mjs`, `mock-server/server.mjs` | new / changed | TaskBoard client API mock (revisions, conflicts, policy refusal, `module_forbidden`) |
+| `tests/unit/tasks.test.ts`, `tests/unit/tasks-module.test.ts`, `tests/e2e/tasks.spec.ts`, `tests/screenshots/tasks.spec.ts` | new | API, parsers, module, e2e with axe, owner screenshots |
+
 ## 8. Open questions
 
 Each question has options and a recommendation. **[Beacon]** = needs Beacon's answer; the rest are the owner's.

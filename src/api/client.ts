@@ -430,6 +430,14 @@ export class TimeTrackApi {
     }
   }
 
+  /**
+   * Device flow step 1 for the `tasks` scope family (BD-3b, `BEACON_DESKTOP_TASKS.md` §3.1): chained like chat, scopes
+   * `task-board:read task-board:write`; the answer of `device/token` carries `scopeFamily: "tasks"`.
+   */
+  async tasksDeviceCode(clientName: string): Promise<DeviceCode> {
+    return this.requestDeviceCode({ clientType: this.source, clientName, scopes: ['task-board:read', 'task-board:write'], family: 'tasks' }, true);
+  }
+
   private async requestDeviceCode(body: Record<string, unknown>, chained: boolean): Promise<DeviceCode> {
     const data = await this.json<Partial<DeviceCode>>('device/code', {
       method: 'POST',

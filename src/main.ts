@@ -8,6 +8,7 @@ import { startPromptWindow } from './ui/promptWindow';
 import './styles.css';
 // After styles.css: the shell's rules win over the Time module's element defaults.
 import './chat/chat.css';
+import './tasks/tasks.css';
 
 const isTauri = '__TAURI_INTERNALS__' in window;
 const root = document.getElementById('app');

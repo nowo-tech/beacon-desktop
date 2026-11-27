@@ -1234,9 +1234,11 @@ pub fn run() {
             app.manage(prompt::PromptState::default());
             app.manage(mini::MiniState::default());
             // The pause after a declined sign-in survives a restart (audit GO-I2).
-            // Time token (`session-token`) and chat token (`chat-token`, BD-2): two entries of the same service.
+            // Time token (`session-token`), chat token (`chat-token`, BD-2) and tasks token (`tasks-token`, BD-3b):
+            // three entries of the same service.
             let session = secret::Session::new(Box::new(secret::Keychain::time()))
-                .with_chat_store(Box::new(secret::Keychain::chat()));
+                .with_chat_store(Box::new(secret::Keychain::chat()))
+                .with_tasks_store(Box::new(secret::Keychain::tasks()));
             let session = match app.path().app_data_dir() {
                 Ok(dir) => session.with_declines_file(dir.join("sign-in-pause.json")),
                 Err(_) => session,
@@ -1299,6 +1301,9 @@ pub fn run() {
             secret::chat_status,
             secret::chat_connect_begin,
             secret::chat_disconnect,
+            secret::tasks_status,
+            secret::tasks_connect_begin,
+            secret::tasks_disconnect,
             realtime::chat_realtime_start,
             realtime::chat_realtime_stop,
             set_unread_badge,

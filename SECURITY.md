@@ -113,6 +113,12 @@ Only the latest release receives fixes. The server can force an update with `min
   `X-Beacon-Context` and (0.12.0, chat writes) `Idempotency-Key` are the only extra request headers the window may
   set; `PUT` and `DELETE` reach only `…/messages/{uuid}/reactions/{emoji}` (deny by default on every other route, no
   `PATCH`; audit ZDG-L1).
+- **Tasks token** (0.13.0). A third keychain entry (`tasks-token`), stored only from a 2xx `device/token` answer with
+  `scopeFamily: "tasks"` after `tasks_connect_begin` (same rules as chat), pinned to the base path it was stored
+  under, attached only to `<server base path>/api/task-board/v1/…` (anchored; look-alikes get no token). Writes:
+  `PATCH` only on `…/tasks/{id}` and `…/tasks/{id}/checklist-items/{id}`, `PUT` / `DELETE` only on
+  `…/tasks/{id}/members/{user}`, `POST` as any route; `If-Match` is an allowed request header and `ETag` a returned
+  one. Sign-out deletes the tasks entry first; "Disconnect tasks" deletes it alone.
 - **Revocation.** "Disconnect chat" and sign-out call `POST …/api/chat/v1/logout` with the chat token first (best
   effort, 3 s), then delete it from the keychain.
 - **Realtime** (`src-tauri/src/realtime.rs`): the ticket (`GET …/api/chat/v1/realtime`) and the SSE stream are made in

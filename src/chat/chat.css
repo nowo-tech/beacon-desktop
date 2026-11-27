@@ -4,7 +4,7 @@
  * on a 4 / 8 px grid, radii 4 / 6 / 8 / 12, motion 120–180 ms and off with reduced motion. Light and dark sets; the
  * system decides unless Settings → Theme forces one (data-theme on <html>, as styles.css).
  */
-:where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) {
+:where(.titlebar, .rail, #mod-chat, #mod-tasks, .sh-dialog, .ctx-menu, .mini-timer) {
   --ink: #0f1c18; --ink-2: #3f514a; --ink-3: #5f6e68;
   --surface: #ffffff; --surface-2: #f6f8f7; --surface-3: #edf2ef; --hover: #f1f5f3;
   --line: #e2e8e4; --line-strong: #cbd5cf;
@@ -29,7 +29,7 @@
   font-family: var(--font-ui);
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) :where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) {
+  :root:not([data-theme='light']) :where(.titlebar, .rail, #mod-chat, #mod-tasks, .sh-dialog, .ctx-menu, .mini-timer) {
     --ink: #e5eee9; --ink-2: #b4c4bc; --ink-3: #93a49c;
     --surface: #121a17; --surface-2: #161f1b; --surface-3: #1c2722; --hover: #18221e;
     --line: #233029; --line-strong: #34453d;
@@ -45,7 +45,7 @@
     --shadow-lg: 0 2px 8px rgb(0 0 0 / 50%), 0 24px 60px rgb(0 0 0 / 60%);
   }
 }
-:root[data-theme='dark'] :where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) {
+:root[data-theme='dark'] :where(.titlebar, .rail, #mod-chat, #mod-tasks, .sh-dialog, .ctx-menu, .mini-timer) {
   --ink: #e5eee9; --ink-2: #b4c4bc; --ink-3: #93a49c;
   --surface: #121a17; --surface-2: #161f1b; --surface-3: #1c2722; --hover: #18221e;
   --line: #233029; --line-strong: #34453d;
@@ -71,19 +71,19 @@
 .shell .module { min-width: 0; min-height: 0; position: relative; }
 .shell .module[hidden] { display: none; }
 .shell #app { height: 100%; }
-#mod-chat { background: var(--surface); }
+#mod-chat, #mod-tasks { background: var(--surface); }
 
 /* Buttons of the shell's own parts start from nothing (styles.css styles the Time module's buttons). */
-:where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) button {
+:where(.titlebar, .rail, #mod-chat, #mod-tasks, .sh-dialog, .ctx-menu, .mini-timer) button {
   font: inherit; color: inherit; min-height: 0; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; gap: 0; cursor: pointer; justify-content: center;
 }
-:where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-:where(.titlebar, .rail, #mod-chat, .sh-dialog) h1, :where(.titlebar, .rail, #mod-chat, .sh-dialog) h2 { color: var(--ink); flex: none; }
+:where(.titlebar, .rail, #mod-chat, #mod-tasks, .sh-dialog, .ctx-menu, .mini-timer) :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:where(.titlebar, .rail, #mod-chat, #mod-tasks, .sh-dialog) h1, :where(.titlebar, .rail, #mod-chat, #mod-tasks, .sh-dialog) h2 { color: var(--ink); flex: none; }
 svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 svg.i.sm { width: 14px; height: 14px; }
 svg.i.xs { width: 12px; height: 12px; }
 svg.i.lg { width: 20px; height: 20px; }
-:where(.titlebar, .rail, #mod-chat, .sh-dialog) kbd {
+:where(.titlebar, .rail, #mod-chat, #mod-tasks, .sh-dialog) kbd {
   font: 500 var(--fs-2xs)/1 var(--font-mono); padding: 3px 5px; border-radius: var(--r-xs);
   border: 1px solid var(--line-strong); border-bottom-width: 2px; background: var(--surface); color: var(--ink-2); white-space: nowrap;
 }
@@ -217,8 +217,8 @@ svg.i.lg { width: 20px; height: 20px; }
 .ch-topic { color: var(--ink-3); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .ch-tools { display: flex; align-items: center; gap: 4px; color: var(--ink-2); }
 .ch-tools .members { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); padding: 0 8px; }
-#mod-chat .btn-ghost { height: 30px; min-width: 30px; padding: 0 8px; color: var(--ink-2); display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: var(--fs-sm); font-weight: 500; }
-#mod-chat .btn-ghost:hover { background: var(--hover); color: var(--ink); }
+:where(#mod-chat, #mod-tasks) .btn-ghost { height: 30px; min-width: 30px; padding: 0 8px; color: var(--ink-2); display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: var(--fs-sm); font-weight: 500; }
+:where(#mod-chat, #mod-tasks) .btn-ghost:hover { background: var(--hover); color: var(--ink); }
 .ch-banner { flex: none; display: flex; align-items: center; gap: 12px; padding: 6px 20px; font-size: var(--fs-xs); color: var(--warn); background: var(--warn-soft); border-bottom: 1px solid var(--line); animation: fade 160ms var(--ease); }
 .ch-banner[hidden] { display: none; }
 .cb-text { flex: 1; }
@@ -367,8 +367,8 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .th-head h2 { margin: 0; font: 700 var(--fs-md)/1.2 var(--font-display); }
 .th-head .sub { color: var(--ink-3); font-size: var(--fs-xs); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .th-head .pill { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: var(--r-xs); font-size: var(--fs-2xs); font-weight: 600; background: var(--moss-soft); color: var(--moss); }
-#mod-chat .x-btn { width: 30px; height: 30px; color: var(--ink-3); display: grid; place-items: center; }
-#mod-chat .x-btn:hover { background: var(--hover); color: var(--ink); }
+:where(#mod-chat, #mod-tasks) .x-btn { width: 30px; height: 30px; color: var(--ink-3); display: grid; place-items: center; }
+:where(#mod-chat, #mod-tasks) .x-btn:hover { background: var(--hover); color: var(--ink); }
 .th-root { border-bottom: 1px solid var(--line); background: var(--surface-2); padding: 4px 0; }
 .th-root .msg:hover { background: transparent; }
 .thread .msg { padding-left: 16px; padding-right: 16px; }
@@ -387,13 +387,13 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .cc-code-label { color: var(--ink-3); font-size: var(--fs-xs); }
 .cc-code-value { font: 600 1.375rem/1 var(--font-mono); letter-spacing: 0.08em; color: var(--ink); }
 .cc-error { margin: 0; padding: 8px 12px; border-radius: var(--r-sm); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-sm); }
-:where(#mod-chat, .sh-dialog) .btn { height: 32px; padding: 0 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease); }
-:where(#mod-chat, .sh-dialog) .btn:hover { background: var(--hover); border-color: var(--ink-3); }
-:where(#mod-chat, .sh-dialog) .btn.primary { background: var(--moss); border-color: var(--moss); color: var(--on-moss); }
-:where(#mod-chat, .sh-dialog) .btn.primary:hover { background: var(--moss-strong); border-color: var(--moss-strong); }
-:where(#mod-chat, .sh-dialog) .btn.sm { height: 26px; padding: 0 10px; font-size: var(--fs-xs); }
-:where(#mod-chat, .sh-dialog) .btn.danger { color: var(--danger); }
-:where(#mod-chat, .sh-dialog) .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+:where(#mod-chat, #mod-tasks, .sh-dialog) .btn { height: 32px; padding: 0 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease); }
+:where(#mod-chat, #mod-tasks, .sh-dialog) .btn:hover { background: var(--hover); border-color: var(--ink-3); }
+:where(#mod-chat, #mod-tasks, .sh-dialog) .btn.primary { background: var(--moss); border-color: var(--moss); color: var(--on-moss); }
+:where(#mod-chat, #mod-tasks, .sh-dialog) .btn.primary:hover { background: var(--moss-strong); border-color: var(--moss-strong); }
+:where(#mod-chat, #mod-tasks, .sh-dialog) .btn.sm { height: 26px; padding: 0 10px; font-size: var(--fs-xs); }
+:where(#mod-chat, #mod-tasks, .sh-dialog) .btn.danger { color: var(--danger); }
+:where(#mod-chat, #mod-tasks, .sh-dialog) .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 
 /* ---------- Dialogs: switcher, settings, shortcuts, stop-and-switch ---------- */
 .sh-dialog { border: 0; padding: 0; background: transparent; color: var(--ink); max-width: calc(100vw - 32px); margin-top: 12vh; }
@@ -469,7 +469,7 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
   .msg { padding-left: 12px; padding-right: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  :where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) *, :where(.titlebar, .rail, #mod-chat, .sh-dialog, .ctx-menu, .mini-timer) *::before, .sh-dialog .dlg { animation: none !important; transition: none !important; }
+  :where(.titlebar, .rail, #mod-chat, #mod-tasks, .sh-dialog, .ctx-menu, .mini-timer) *, :where(.titlebar, .rail, #mod-chat, #mod-tasks, .sh-dialog, .ctx-menu, .mini-timer) *::before, .sh-dialog .dlg { animation: none !important; transition: none !important; }
 }
 
 /* ---------- BD-3a: required time fields dialog (Q5) ---------- */

@@ -23,6 +23,9 @@ Trabajadores (working time record). Your employer, who runs Beacon, is the data 
 - With chat connected and sending approved (0.12.0, `chat:write`): the messages and thread replies you send and the
   reactions you add or remove, each with a random id of that write (`Idempotency-Key`) so a retry is never posted
   twice. Nothing is sent while you type: only when you press Enter or Send.
+- With tasks connected (0.13.0): the organization you show with every tasks request, the boards and tasks you open,
+  the local date (for My tasks), a polling cursor, and the changes you make (new tasks, fields, moves, members,
+  checklist items) with the task's revision or a random id of that write.
 - Nothing else: no screenshots, keystrokes, applications, window titles, URLs, activity or idle state. With meeting
   detection on, which meeting app holds the microphone is checked on this computer and never sent (below).
 
@@ -35,7 +38,11 @@ mismatch is logged locally with the server name only, never a token.
 
 ## Stored on this computer
 
-- The session token, in the OS keychain; with chat connected, the chat token too (a second entry).
+- The session token, in the OS keychain; with chat connected, the chat token too (a second entry); with tasks
+  connected, the tasks token (a third entry).
+- Tasks are **never written to disk** either: boards, tasks and what you type in a task stay in memory and are
+  forgotten on an organization switch, "Disconnect tasks" and sign-out. On disk only: the tasks view, the last board
+  per organization (its id), *Only mine* and the column-marker setting.
 - Chat messages are **never written to disk**: they stay in memory while the app runs and are forgotten on an
   organization switch, "Disconnect chat" and sign-out. The same goes for what you type and have not sent (drafts per
   conversation) and for messages that could not be sent yet. On disk only view settings: the organization last shown, the

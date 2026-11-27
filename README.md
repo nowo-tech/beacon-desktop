@@ -120,6 +120,21 @@ servers: revoke the device in Beacon, Account → Security) and removes it from 
 signed in. Needs Beacon with
 TimeTrackBundle 2.2 and ChatKitBundle 2.4. Shortcuts: `?` in Chat.
 
+## Tasks (0.13.0)
+
+Your Beacon tasks next to chat and the timer: **Chat**, **Tasks** and **Time** on the left rail (`Ctrl/Cmd+1..3`).
+
+1. Open Tasks and press **Connect tasks**: Beacon asks you to approve a third, separate device request (tasks only).
+2. **My tasks** lists what is assigned to you (overdue, today, upcoming, no date) and what waits for your review.
+   **Board** and **List** show one board of the organization; *Only mine* narrows it.
+3. Move a card by dragging it, with `Alt+←/→`, or with its status. Open a task (`Enter`) to change its fields, tick its
+   checklist, read its description and comments, or start the timer on it (`S` on a card). `N` adds a task
+   (`!high #tag @tomorrow ~2h`).
+
+Tasks stay in memory only; a change made elsewhere shows within a minute. Needs Beacon with TaskBoardBundle 3.4 and
+the tasks approval turned on. If Beacon turns the module off for you, the tab disappears and comes back when it is on
+again (the approval is kept).
+
 ## Organizations, required fields and the mini timer (0.11.0)
 
 - **Organization**: time tracking follows the organization chosen on the rail (or the title-bar dropdown): every
@@ -392,6 +407,8 @@ required" screen send you to the Store listing instead.
 - **Chat token apart** (0.10.0). The chat approval has its own token in the OS keychain (`chat-token`), attached by
   Rust to chat routes only; the time token never goes there and the chat token never goes anywhere else. The realtime
   stream runs in Rust and hands the window ids only.
+- **Tasks token apart** (0.13.0). The tasks approval is a third keychain entry (`tasks-token`), attached by Rust to
+  `/api/task-board/v1/` routes only; no other token goes there and it goes nowhere else.
 - Reporting and design notes: [SECURITY.md](SECURITY.md).
 
 ## Tauri capabilities

@@ -1,7 +1,8 @@
 /**
  * The app shell (BD-2, approved prototype): title bar (brand, organization, quick switcher, timer pill, theme, help),
- * left rail (organization tiles, Chat / Time module tabs, settings) and the modules. The Time module is the existing
- * DesktopApp, unchanged inside its panel; Tasks is registered but off (BEACON_DESKTOP_TASKS.md, BD-2 row).
+ * left rail (organization tiles, Chat / Tasks / Time module tabs, settings) and the modules. The Time module is the
+ * existing DesktopApp, unchanged inside its panel; Tasks (BD-3b) is the TaskBoard client API module
+ * (BEACON_DESKTOP_TASKS.md §9), hidden while the server answers `403 module_forbidden`.
  *
  * Owner decisions 2026-11-25: landing = Chat on first launch, then the last-used module, Time when a timer runs (Q1);
  * timer in the title bar, optionally also in the sidebar (Q2); sidebar density comfortable / compact (Q3); organization
@@ -15,6 +16,8 @@ import type { ThemePreference } from '../lib/theme';
 import { chatText, type ChatText } from '../chat/i18n';
 import { chatIcon, type ChatIconName } from '../chat/icons';
 import { ChatModule, showMenu } from '../chat/module';
+import { tasksText, type TasksText } from '../tasks/i18n';
+import { type Markers, TasksModule } from '../tasks/module';
 import { rankConversations } from '../chat/format';
 import type { Context, Conversation } from '../chat/types';
 import { isMuted, sectionOf } from '../chat/store';
@@ -23,7 +26,7 @@ import { type AskOn, meContexts } from '../lib/allocation';
 import { AllocationDialog, type AllocationRequest } from './allocationDialog';
 import type { MiniAction, MiniView } from '../ui/miniWindow';
 
-export type ModuleId = 'chat' | 'time';
+export type ModuleId = 'chat' | 'tasks' | 'time';
 export type Density = 'comfortable' | 'compact';
 export type SwitcherStyle = 'tiles' | 'dropdown';
 export type TimerPlacement = 'title' | 'title-sidebar';
@@ -36,30 +39,38 @@ export interface ShellPrefs {
   timer: TimerPlacement;
   /** Last context (`personal`, `org:<uuid>`). */
   context: string | null;
+  /** Column markers (owner decision 2026-11-25): TaskBoard's emojis or colour dots. */
+  markers: Markers;
 }
 
 export const SHELL_KEY = 'beacon-desktop-shell';
-const DEFAULTS: ShellPrefs = { module: null, density: 'comfortable', switcher: 'tiles', timer: 'title', context: null };
+const DEFAULTS: ShellPrefs = { module: null, density: 'comfortable', switcher: 'tiles', timer: 'title', context: null, markers: 'emoji' };
 
 export function loadShellPrefs(storage: Storage | undefined): ShellPrefs {
   try {
     const raw = JSON.parse(storage?.getItem(SHELL_KEY) ?? 'null') as Partial<ShellPrefs> | null;
     if (raw === null || typeof raw !== 'object') return { ...DEFAULTS };
     return {
-      module: raw.module === 'chat' || raw.module === 'time' ? raw.module : null,
+      module: raw.module === 'chat' || raw.module === 'time' || raw.module === 'tasks' ? raw.module : null,
       density: raw.density === 'compact' ? 'compact' : 'comfortable',
       switcher: raw.switcher === 'dropdown' ? 'dropdown' : 'tiles',
       timer: raw.timer === 'title-sidebar' ? 'title-sidebar' : 'title',
       context: typeof raw.context === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(raw.context) ? raw.context : null,
+      markers: raw.markers === 'dots' ? 'dots' : 'emoji',
     };
   } catch {
     return { ...DEFAULTS };
   }
 }
 
-/** Landing module (owner Q1): a running timer wins; else the last module; first launch: Chat. */
-export function landingModule(prefs: ShellPrefs, timerRunning: boolean): ModuleId {
+/**
+ * Landing module (owner Q1, `BEACON_DESKTOP_TASKS.md` §9): a running timer wins; else the last module; first launch:
+ * Chat. A module without its token opens on its "Connect" card in place (never another module silently); a module the
+ * server hides (`tasksHidden`) falls back to Chat.
+ */
+export function landingModule(prefs: ShellPrefs, timerRunning: boolean, tasksHidden = false): ModuleId {
   if (timerRunning) return 'time';
+  if (prefs.module === 'tasks' && tasksHidden) return 'chat';
   return prefs.module ?? 'chat';
 }
 
@@ -89,6 +100,10 @@ export class Shell {
   readonly root: HTMLElement;
   readonly timeRoot: HTMLElement;
   readonly chat: ChatModule;
+  /** Tasks (BD-3b); `null` on hosts without it. */
+  readonly tasks: TasksModule | null;
+  /** `403 module_forbidden`: the Tasks tab is hidden, the token kept. */
+  tasksHidden = false;
   app: DesktopApp | null = null;
   prefs: ShellPrefs;
   module: ModuleId = 'chat';
@@ -101,6 +116,8 @@ export class Shell {
   private readonly rail: HTMLElement;
   private readonly chatPanel: HTMLElement;
   private readonly timePanel: HTMLElement;
+  private readonly tasksPanel: HTMLElement;
+  private readonly tt: TasksText;
   private readonly live: HTMLElement;
   private readonly switcher: HTMLDialogElement;
   private readonly settings: HTMLDialogElement;
@@ -155,8 +172,10 @@ export class Shell {
           this.prefs.context = current;
           this.save();
         }
-        // The time API follows the chosen organization (`X-Beacon-Context`, BD-3a); its tasks are reloaded.
+        // The time API follows the chosen organization (`X-Beacon-Context`, BD-3a); its tasks are reloaded. So does the
+        // Tasks module (BD-3b).
         if (current !== null) this.followTimeContext(current);
+        void this.tasks?.switchContext();
         this.renderChrome();
       },
       onUnread: (total, capped) => {
@@ -173,6 +192,42 @@ export class Shell {
       preferredContext: () => this.prefs.context,
       storage: deps.storage,
     });
+    this.tt = tasksText(deps.locale);
+    const tasksHost = platform.tasks;
+    this.tasks =
+      tasksHost === undefined
+        ? null
+        : new TasksModule({
+            t: this.tt,
+            chatT: this.t,
+            locale: deps.locale,
+            host: tasksHost,
+            fetchImpl: platform.fetch,
+            timeApi: () => this.app?.timeApi() ?? null,
+            server: () => this.app?.state.session?.server ?? null,
+            openVerification: (url) => void this.app?.openVerification(url),
+            openLink: (url) => void this.platform.openExternal(url).catch(() => undefined),
+            copy: (text) => this.copy(text),
+            announce: (text) => this.announce(text),
+            context: () => this.context,
+            contextLabel: () => this.currentContext()?.context.label ?? this.t('moduleTasks'),
+            onConnection: () => this.renderRail(),
+            onForbidden: (hidden) => {
+              this.tasksHidden = hidden;
+              if (hidden && this.module === 'tasks') this.show('chat', false);
+              this.renderRail();
+            },
+            startTimer: async (task) => {
+              await this.app?.start({ id: task.id, title: task.title, boardTitle: task.boardTitle, url: task.url });
+            },
+            stopTimer: async () => {
+              await this.app?.stop();
+            },
+            runningTaskId: () => this.app?.state.activeTimer?.taskId ?? null,
+            markers: () => this.prefs.markers,
+            storage: deps.storage,
+          });
+    this.tasksPanel = h('section', { class: 'module', id: 'mod-tasks', attrs: { role: 'tabpanel', 'aria-labelledby': 'tab-tasks', hidden: true } }, this.tasks?.root ?? null);
     this.chatPanel = h('section', { class: 'module', id: 'mod-chat', attrs: { role: 'tabpanel', 'aria-labelledby': 'tab-chat' } }, this.chat.root);
     this.timePanel = h('section', { class: 'module', id: 'mod-time', attrs: { role: 'tabpanel', 'aria-labelledby': 'tab-time' } }, this.timeRoot);
     this.live = h('p', { class: 'sr-only', id: 'shell-live', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
@@ -181,13 +236,17 @@ export class Shell {
     this.keys = h('dialog', { class: 'sh-dialog', id: 'shell-keys', attrs: { 'aria-labelledby': 'shell-keys-title', closedby: 'any' } });
     this.confirm = h('dialog', { class: 'sh-dialog', id: 'shell-confirm', attrs: { 'aria-labelledby': 'shell-confirm-title' } });
     this.allocation = new AllocationDialog(this.t, (text) => this.announce(text), () => this.now());
-    this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.timePanel), this.live, this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog);
+    this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.tasksPanel, this.timePanel), this.live, this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog);
     platform.miniWindow?.onAction((action) => void this.onMiniAction(action));
     this.mount.replaceChildren(this.root);
     this.root.addEventListener('chat-switcher', () => this.openSwitcher());
     document.addEventListener('keydown', (event) => this.onKey(event));
-    globalThis.addEventListener?.('focus', () => this.chat.setShown(this.module === 'chat' && !document.hidden));
-    document.addEventListener('visibilitychange', () => this.chat.setShown(this.module === 'chat' && !document.hidden));
+    const visible = () => {
+      this.chat.setShown(this.module === 'chat' && !document.hidden);
+      this.tasks?.setShown(this.module === 'tasks' && !document.hidden);
+    };
+    globalThis.addEventListener?.('focus', visible);
+    document.addEventListener('visibilitychange', visible);
     this.applyDensity();
   }
 
@@ -247,6 +306,7 @@ export class Shell {
     if (!changed && current === this.context) return false;
     this.contexts = own.contexts;
     this.context = current;
+    void this.tasks?.switchContext();
     this.renderRail();
     this.renderTitlebar();
     return true;
@@ -272,6 +332,8 @@ export class Shell {
       this.signedIn = false;
       this.started = false;
       this.chat.signedOut();
+      this.tasks?.signedOut();
+      this.tasksHidden = false;
       this.contexts = [];
       this.context = null;
       // Audit ZCD-L3: the next sign-in (maybe another account or server) starts in Personal. Written only when the
@@ -287,7 +349,13 @@ export class Shell {
     this.renderTitlebar();
     this.syncTicker();
     this.pushMini();
+    // The running timer's task is marked in the Tasks views.
+    const running = app.state.activeTimer?.taskId ?? null;
+    if (this.tasks?.connected === true && running !== this.lastRunning) this.tasks.render();
+    this.lastRunning = running;
   }
+
+  private lastRunning: string | null = null;
 
   /** Signed in (at start-up or after the sign-in): landing module, then chat. */
   private async enter(): Promise<void> {
@@ -297,6 +365,7 @@ export class Shell {
     // A fresh interactive sign-in stays on Time (where it happened); a launch follows the landing rule (Q1).
     this.show(this.freshSignIn ? 'time' : landingModule(this.prefs, app.state.activeTimer !== null), false);
     await this.chat.init(this.prefs.context);
+    await this.tasks?.init();
     this.renderChrome();
   }
 
@@ -306,6 +375,7 @@ export class Shell {
   show(module: ModuleId, remember = true): void {
     this.module = module;
     this.chatPanel.hidden = module !== 'chat';
+    this.tasksPanel.hidden = module !== 'tasks';
     this.timePanel.hidden = module !== 'time';
     this.root.dataset.module = module;
     if (remember && this.signedIn) {
@@ -313,8 +383,14 @@ export class Shell {
       this.save();
     }
     this.chat.setShown(module === 'chat' && !document.hidden);
+    this.tasks?.setShown(module === 'tasks' && !document.hidden);
     this.renderRail();
     this.renderTitlebar();
+  }
+
+  /** The module tabs shown, in the prototype's order (Chat, Tasks, Time); `Ctrl/Cmd+1..3` follow it. */
+  private moduleOrder(): ModuleId[] {
+    return this.tasks !== null && !this.tasksHidden ? ['chat', 'tasks', 'time'] : ['chat', 'time'];
   }
 
   private save(): void {
@@ -352,6 +428,8 @@ export class Shell {
     this.renderTitlebar();
     this.renderRail();
     this.chat.render();
+    if (this.tasks?.connected === true) this.tasks.renderBody();
+    else this.tasks?.render();
     this.pushMini();
   }
 
@@ -488,10 +566,12 @@ export class Shell {
       nodes.push(tiles, h('div', { class: 'rail-sep', attrs: { 'aria-hidden': 'true' } }));
     }
     const tabs = h('div', { class: 'rail-tabs', attrs: { role: 'tablist', 'aria-label': t('modules'), 'aria-orientation': 'vertical' } });
-    const specs: [ModuleId, ChatIconName, string, string][] = [
-      ['chat', 'chat', t('moduleChat'), this.unread > 0 ? t('moduleChatUnread', { count: this.badgeText() }) : t('moduleChat')],
-      ['time', 'clock', t('moduleTime'), this.app?.state.activeTimer ? t('moduleTimeRunning') : t('moduleTime')],
-    ];
+    const all: Record<ModuleId, [ModuleId, ChatIconName, string, string]> = {
+      chat: ['chat', 'chat', t('moduleChat'), this.unread > 0 ? t('moduleChatUnread', { count: this.badgeText() }) : t('moduleChat')],
+      tasks: ['tasks', 'tasks', t('moduleTasks'), t('moduleTasks')],
+      time: ['time', 'clock', t('moduleTime'), this.app?.state.activeTimer ? t('moduleTimeRunning') : t('moduleTime')],
+    };
+    const specs = this.moduleOrder().map((id) => all[id]);
     specs.forEach(([id, icon, label, aria], index) => {
       const selected = this.module === id;
       const tab = h(
@@ -580,6 +660,7 @@ export class Shell {
         this.prefs.context = key;
         this.save();
       }
+      void this.tasks?.switchContext();
     }
     if (this.context === key) this.announce(this.t('contextSwitched', { name: label }));
     this.renderChrome();
@@ -807,7 +888,7 @@ export class Shell {
       });
       connection.append(this.settingRow(t('chatConnection'), `${t('chatConnected')}. ${t('disconnectHint')}`, disconnect));
     } else {
-      const connect = h('button', { class: 'btn sm primary', attrs: { type: 'button' } }, t('connectButton'));
+      const connect = h('button', { class: 'btn sm primary', id: 'settings-chat-connect', attrs: { type: 'button' } }, t('connectButton'));
       connect.addEventListener('click', () => {
         this.settings.close();
         this.show('chat');
@@ -815,14 +896,33 @@ export class Shell {
       });
       connection.append(this.settingRow(t('chatConnection'), t('chatNotConnected'), connect));
     }
-    this.settings.replaceChildren(h('div', { class: 'dlg settings' }, h('div', { class: 'dlg-h' }, h('h1', { id: 'shell-settings-title' }, t('shellSettings')), close), h('div', { class: 'dlg-b' }, look, time, connection)));
+    const tasks = this.tasks;
+    const tasksGroup = tasks === null ? null : h('div', { class: 'set-group' }, h('h3', {}, this.tt('settingsTasks')));
+    if (tasks !== null && tasksGroup !== null) {
+      const tt = this.tt;
+      if (tasks.connected) {
+        const disconnect = h('button', { class: 'btn sm danger', id: 'tasks-disconnect', attrs: { type: 'button' } }, tt('disconnect'));
+        disconnect.addEventListener('click', () => void tasks.disconnect().then(() => this.renderSettings()));
+        tasksGroup.append(this.settingRow(tt('tasksConnection'), `${tt('tasksConnected')}. ${tt('disconnectHint')}`, disconnect));
+      } else {
+        const connect = h('button', { class: 'btn sm primary', id: 'settings-tasks-connect', attrs: { type: 'button' } }, tt('connectButton'));
+        connect.addEventListener('click', () => {
+          this.settings.close();
+          this.show('tasks');
+          void tasks.connectTasks();
+        });
+        tasksGroup.append(this.settingRow(tt('tasksConnection'), tt('tasksNotConnected'), connect));
+      }
+      tasksGroup.append(this.settingRow(tt('markers'), tt('markersHint'), this.segmented<Markers>(tt('markers'), [['emoji', tt('markersEmoji')], ['dots', tt('markersDots')]], this.prefs.markers, (markers) => update({ markers }))));
+    }
+    this.settings.replaceChildren(h('div', { class: 'dlg settings' }, h('div', { class: 'dlg-h' }, h('h1', { id: 'shell-settings-title' }, t('shellSettings')), close), h('div', { class: 'dlg-b' }, look, time, connection, tasksGroup)));
   }
 
   openKeys(): void {
     const t = this.t;
     const mod = modKey();
     const sections: [string, [string, string[]][]][] = [
-      [t('keysAnywhere'), [[t('keySwitcher'), [mod, 'K']], [t('keyModules'), [mod, '1 2']], [t('keySettings'), [mod, ',']], [t('keyTheme'), [mod, 'Shift', 'L']], [t('keyToggleTimer'), [mod, 'Shift', 'S']], [t('keyMini'), [mod, 'Shift', 'M']], [t('keySheet'), ['?']]]],
+      [t('keysAnywhere'), [[t('keySwitcher'), [mod, 'K']], [t('keyModules'), [mod, this.moduleOrder().length === 3 ? '1 2 3' : '1 2']], [t('keySettings'), [mod, ',']], [t('keyTheme'), [mod, 'Shift', 'L']], [t('keyToggleTimer'), [mod, 'Shift', 'S']], [t('keyMini'), [mod, 'Shift', 'M']], [t('keySheet'), ['?']]]],
       [
         t('keysChat'),
         [
@@ -840,8 +940,23 @@ export class Shell {
         ],
       ],
     ];
+    if (this.tasks !== null && !this.tasksHidden) {
+      const tt = this.tt;
+      sections.push([
+        tt('keysTasks'),
+        [
+          [tt('keyQuickAdd'), ['N']],
+          [tt('keyOpenCard'), ['Enter']],
+          [tt('keyCardNav'), ['← → ↑ ↓']],
+          [tt('keyMoveCard'), ['Alt', '← →']],
+          [tt('keyStartTimer'), ['S']],
+          [tt('keyCloseDetail'), ['Esc']],
+        ],
+      ]);
+    }
     const close = this.iconButton('x-btn', 'x', t('close'), () => this.keys.close(), 'keys-close');
-    const body = h('div', { class: 'keys' });
+    // Scrollable when the window is short: focusable, so the keyboard can scroll it (axe scrollable-region-focusable).
+    const body = h('div', { class: 'keys', attrs: { tabindex: '0', role: 'region', 'aria-label': t('keysTitle') } });
     for (const [title, rows] of sections) {
       body.append(h('h2', {}, title));
       for (const [label, combo] of rows) body.append(h('div', { class: 'k' }, h('span', {}, label), h('span', {}, ...combo.map((key) => h('kbd', {}, key)))));
@@ -960,9 +1075,10 @@ export class Shell {
       void this.toggleMini();
       return;
     }
-    if (mod && !event.shiftKey && !event.altKey && (event.key === '1' || event.key === '2')) {
+    const order = this.moduleOrder();
+    if (mod && !event.shiftKey && !event.altKey && /^[1-3]$/.test(event.key) && Number(event.key) <= order.length) {
       event.preventDefault();
-      const next: ModuleId = event.key === '1' ? 'chat' : 'time';
+      const next: ModuleId = order[Number(event.key) - 1];
       this.show(next);
       this.rail.querySelector<HTMLElement>(`#tab-${next}`)?.focus();
       return;
@@ -971,6 +1087,16 @@ export class Shell {
       event.preventDefault();
       const dark = document.documentElement.getAttribute('data-theme') === 'dark';
       void this.setTheme(dark ? 'light' : 'dark');
+      return;
+    }
+    if (this.module === 'tasks') {
+      if (mod && event.key === ',') {
+        event.preventDefault();
+        this.openSettings();
+      } else if (!typing && !mod && !event.altKey && event.key === '?') {
+        event.preventDefault();
+        this.openKeys();
+      } else if ((!typing || (event.key === 'Escape' && this.tasks?.detail !== null)) && this.tasks?.onKey(event) === true) event.preventDefault();
       return;
     }
     if (this.module !== 'chat') return;

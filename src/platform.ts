@@ -237,10 +237,27 @@ export interface ChatHost {
   setUnreadBadge(count: number): Promise<void>;
 }
 
+/**
+ * What the tasks module needs from the host (BD-3b, `BEACON_DESKTOP_TASKS.md` §3.4). In the Tauri app the tasks token
+ * stays in Rust (a third keychain entry, `tasks-token`, attached to `/api/task-board/v1/` routes only).
+ */
+export interface TasksHost {
+  /** `SESSION_HANDLE` when a tasks token is stored for the signed-in server (Tauri), the token itself (browser), else `null`. */
+  token(): Promise<string | null>;
+  /** Keeps the token of a "Connect tasks" answer (the Tauri app stored it in Rust already and only accepts the handle). */
+  tokenSet(token: string): Promise<void>;
+  /** Arms the capture of the next `tasks` answer of `device/token` (Rust `tasks_connect_begin`). */
+  connectBegin(): Promise<void>;
+  /** Deletes the tasks token only (time and chat stay connected). */
+  disconnect(): Promise<void>;
+}
+
 export interface Platform {
   readonly kind: 'tauri' | 'browser';
   /** Chat (BD-2); absent on hosts without it. */
   readonly chat?: ChatHost;
+  /** Tasks (BD-3b); absent on hosts without it. */
+  readonly tasks?: TasksHost;
   fetch: typeof fetch;
   /** TLS pinning state for `server`; `null` when the host does not know (plain browser: the browser validates TLS). */
   connectionSecurity(server: string): Promise<ConnectionSecurity | null>;
@@ -413,6 +430,9 @@ export interface BrowserHooks {
   chatRealtime: { server: string; context: string } | null;
   badge: number;
   chatLinks: string[];
+  /** Tasks (BD-3b): the stored tasks token and "Connect tasks" calls. */
+  tasksToken: string | null;
+  tasksConnectBegins: number;
   /** The fake stream sends a hint / changes mode. */
   chatHint(hint: unknown): void;
   chatMode(mode: ChatRealtimeMode): void;
@@ -450,6 +470,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     chatToken: null,
     chatConnectBegins: 0,
     chatRealtime: null,
+    tasksToken: null,
+    tasksConnectBegins: 0,
     badge: 0,
     chatLinks: [],
     chatHint: (hint) => hintHandlers.forEach((handler) => handler(hint)),
@@ -563,10 +585,20 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     openLink: async (url) => void hooks.chatLinks.push(url),
     setUnreadBadge: async (count) => void (hooks.badge = count),
   };
+  const tasks: TasksHost = {
+    token: async () => (secret === null ? null : hooks.tasksToken),
+    tokenSet: async (token) => void (hooks.tasksToken = token),
+    connectBegin: async () => {
+      if (secret === null) throw new Error('sign in first');
+      hooks.tasksConnectBegins += 1;
+    },
+    disconnect: async () => void (hooks.tasksToken = null),
+  };
   return {
     kind: 'browser',
     hooks,
     chat,
+    tasks,
     fetch: fetchImpl,
     connectionSecurity: async () => hooks.connectionSecurity,
     appVersion: async () => version,
@@ -596,6 +628,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
       hooks.boundServer = null;
       hooks.chatToken = null;
       hooks.chatRealtime = null;
+      hooks.tasksToken = null;
     },
     idleSeconds: async () => hooks.idleSeconds,
     openExternal: async (url) => {

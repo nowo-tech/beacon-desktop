@@ -76,7 +76,7 @@ async function inOrg(ui: Awaited<ReturnType<typeof connected>>) {
 describe('shell preferences', () => {
   it('parses stored preferences safely and picks the landing module (Q1)', () => {
     localStorage.setItem(SHELL_KEY, JSON.stringify({ module: 'time', density: 'compact', switcher: 'dropdown', timer: 'title-sidebar', context: 'bad key!' }));
-    expect(loadShellPrefs(localStorage)).toEqual({ module: 'time', density: 'compact', switcher: 'dropdown', timer: 'title-sidebar', context: null });
+    expect(loadShellPrefs(localStorage)).toEqual({ module: 'time', density: 'compact', switcher: 'dropdown', timer: 'title-sidebar', context: null, markers: 'emoji' });
     localStorage.setItem(SHELL_KEY, '{');
     expect(loadShellPrefs(localStorage).module).toBeNull();
     localStorage.setItem(SHELL_KEY, '"x"');
@@ -123,7 +123,10 @@ describe('shell and chat module', () => {
     ui.key({ key: '1', ctrlKey: true });
     expect(ui.shell.module).toBe('chat');
     expect(JSON.parse(localStorage.getItem(SHELL_KEY) ?? '{}').module).toBe('chat');
+    // The prototype's order: Chat, Tasks, Time.
     ui.$('#tab-chat').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    expect(ui.shell.module).toBe('tasks');
+    ui.$('#tab-tasks').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     expect(ui.shell.module).toBe('time');
   });
 

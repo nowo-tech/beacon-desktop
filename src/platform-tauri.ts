@@ -6,7 +6,7 @@ import { availableMonitors, currentMonitor, getCurrentWindow, type Monitor, Phys
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { type NativeRequest, type NativeResponse, nativeFetch, SESSION_HANDLE } from './lib/nativeFetch';
-import { type ChatHost, type ChatRealtimeMode, type ConnectionSecurity, notificationBody, type NotificationPermission, type Platform, type WindowHost, type PromptClient, type PromptHost, type MiniHost, type SessionEvent, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
+import { type ChatHost, type ChatRealtimeMode, type TasksHost, type ConnectionSecurity, notificationBody, type NotificationPermission, type Platform, type WindowHost, type PromptClient, type PromptHost, type MiniHost, type SessionEvent, type UpdateCheck, type UpdateProgress, type WakeReason } from './platform';
 import { type BrowserChoice, type DetectedBrowser, type OpenOutcome, sanitizeBrowser } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 import type { MiniAction, MiniClient, MiniView } from './ui/miniWindow';
@@ -97,10 +97,21 @@ const chatHost: ChatHost = {
   setUnreadBadge: (count) => invoke('set_unread_badge', { count: Math.max(0, Math.min(Math.trunc(count), 9999)) }),
 };
 
+/** Tasks (BD-3b): the tasks token stays in Rust (src-tauri/src/secret.rs, `tasks-token`). */
+const tasksHost: TasksHost = {
+  token: async () => ((await invoke<boolean>('tasks_status')) ? SESSION_HANDLE : null),
+  tokenSet: async (token) => {
+    if (token !== SESSION_HANDLE) throw new Error('The tasks token is stored by the app from the connect answer only.');
+  },
+  connectBegin: () => invoke('tasks_connect_begin', { locale: typeof document === 'undefined' ? null : document.documentElement.lang || null }),
+  disconnect: () => invoke('tasks_disconnect'),
+};
+
 export function tauriPlatform(): Platform {
   return {
     kind: 'tauri',
     chat: chatHost,
+    tasks: tasksHost,
     // Rust HTTP client with TLS public-key pinning for the official Beacon host (src-tauri/src/net.rs, docs/PINNING.md).
     // No redirects: the Bearer token stays bound to the configured server (audit CN D8).
     fetch: nativeFetch((request: NativeRequest) => invoke<NativeResponse>('beacon_fetch', { request })),

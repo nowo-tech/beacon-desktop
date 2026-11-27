@@ -34,6 +34,12 @@
 //! - No native dialog: the approval page in Beacon accepts a chained request only from the time token's owner
 //!   (contract v0.5), so the origin and the person are already fixed. An OS notification still announces it.
 //! - "Disconnect chat" deletes the chat entry only; sign-out deletes the chat entry first, then the time entry.
+//!
+//! **Tasks token (BD-3b, design `BEACON_DESKTOP_TASKS.md` §3.4).** A third entry, user `tasks-token`, holds the `tasks`
+//! family token (`task-board:read task-board:write`). The same rules as the chat token: attached only to the anchored
+//! `<base path>/api/task-board/v1/` routes (never the time or chat token there, never the tasks token anywhere else),
+//! captured only from a 2xx `device/token` answer whose `scopeFamily` is `tasks` after `tasks_connect_begin`, pinned to
+//! the base path it was stored under, deleted by "Disconnect tasks" alone and first on sign-out.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -46,6 +52,8 @@ const KEYCHAIN_SERVICE: &str = "tech.nowo.time-track-desktop";
 const KEYCHAIN_USER: &str = "session-token";
 /// The chat token's keychain user (same service): BD-2, design §4.5. Never changes (installed copies read it).
 const KEYCHAIN_CHAT_USER: &str = "chat-token";
+/// The tasks token's keychain user (same service): BD-3b, `BEACON_DESKTOP_TASKS.md` §3.4. Never changes.
+const KEYCHAIN_TASKS_USER: &str = "tasks-token";
 
 /// What the UI gets in place of the token (sign-in answers). Not a credential: Rust ignores it.
 pub const SESSION_HANDLE: &str = "stored-in-os-keychain";
@@ -63,6 +71,9 @@ pub const SIGNED_IN_ELSEWHERE: &str = "signed in to another server: sign out fir
 /// Refusal of a rebind to another base path of the same server while a chat token is stored (ZBZ-v-I1).
 pub const CHAT_BOUND_ELSEWHERE: &str =
     "chat is connected under another path of this server: disconnect chat first";
+/// The same refusal for a stored tasks token.
+pub const TASKS_BOUND_ELSEWHERE: &str =
+    "tasks are connected under another path of this server: disconnect tasks first";
 /// Refusal of a sign-in while a token is stored.
 pub const ALREADY_SIGNED_IN: &str = "already signed in: sign out first";
 
@@ -137,6 +148,13 @@ impl Keychain {
     pub fn chat() -> Self {
         Self {
             user: KEYCHAIN_CHAT_USER,
+        }
+    }
+
+    /// User `tasks-token`: the tasks token (BD-3b).
+    pub fn tasks() -> Self {
+        Self {
+            user: KEYCHAIN_TASKS_USER,
         }
     }
 
@@ -254,12 +272,16 @@ pub fn is_sign_in(method: &reqwest::Method, url: &url::Url) -> bool {
 
 /// The chat client API v1 under the bound server's base path (ChatKit 2.4, Beacon `/api/chat/v1`).
 pub const CHAT_PREFIX: &str = "/api/chat/v1/";
+/// The TaskBoard client API v1 under the bound server's base path (TaskBoardBundle 3.4, Beacon `/api/task-board/v1`).
+pub const TASKS_PREFIX: &str = "/api/task-board/v1/";
 
 /// Which token a request may carry (audit ZBZ-L1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Route {
     /// `<base path>/api/chat/v1/…` exactly (decoded path, anchored): the chat token or nothing.
     Chat,
+    /// `<base path>/api/task-board/v1/…` exactly (decoded path, anchored): the tasks token or nothing.
+    Tasks,
     /// Any other route: the time token or nothing.
     Time,
     /// Looks like a chat route but is not the anchored one (another base, other case, doubled slashes, `/api/chat`
@@ -275,11 +297,14 @@ pub fn route_of(url: &url::Url, base: &str) -> Route {
     if path.starts_with(&format!("{base}{CHAT_PREFIX}")) {
         return Route::Chat;
     }
+    if path.starts_with(&format!("{base}{TASKS_PREFIX}")) {
+        return Route::Tasks;
+    }
     let mut folded = path.to_ascii_lowercase();
     while folded.contains("//") {
         folded = folded.replace("//", "/");
     }
-    if folded.contains("/api/chat") {
+    if folded.contains("/api/chat") || folded.contains("/api/task-board") {
         Route::Neither
     } else {
         Route::Time
@@ -309,11 +334,39 @@ pub fn is_reaction_path(url: &url::Url, base: &str) -> bool {
     )
 }
 
+/// A TaskBoard id (UUIDs; people's public ids too): a safe path segment.
+fn is_task_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+}
+
+/// What a task route takes besides `GET` / `POST` (raw path under `<base>/api/task-board/v1/`):
+/// `(PUT/DELETE, PATCH)`. `tasks/{id}` → PATCH; `tasks/{id}/checklist-items/{id}` → PATCH;
+/// `tasks/{id}/members/{user|me}` → PUT / DELETE. Every other path: neither (BD-3b, deny by default).
+pub fn task_write_methods(url: &url::Url, base: &str) -> (bool, bool) {
+    let Some(rest) = url.path().strip_prefix(&format!("{base}{TASKS_PREFIX}")) else {
+        return (false, false);
+    };
+    let parts: Vec<&str> = rest.split('/').collect();
+    match parts.as_slice() {
+        ["tasks", id] if is_task_id(id) => (false, true),
+        ["tasks", id, "checklist-items", item] if is_task_id(id) && is_task_id(item) => {
+            (false, true)
+        }
+        ["tasks", id, "members", user] if is_task_id(id) && is_task_id(user) => (true, false),
+        _ => (false, false),
+    }
+}
+
 /// The scope family of a `device/token` answer (`scopeFamily`, contract v0.5). Absent: `time` (older servers).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
     Time,
     Chat,
+    Tasks,
     /// A family this app does not hold (never stored).
     Other,
 }
@@ -324,6 +377,7 @@ impl Family {
             None | Some(Value::Null) => Self::Time,
             Some(Value::String(family)) if family == "time" => Self::Time,
             Some(Value::String(family)) if family == "chat" => Self::Chat,
+            Some(Value::String(family)) if family == "tasks" => Self::Tasks,
             _ => Self::Other,
         }
     }
@@ -389,6 +443,8 @@ pub fn scrub(body: Vec<u8>) -> Vec<u8> {
 pub const RESPONSE_HEADERS: &[&str] = &[
     "content-type",
     "content-disposition",
+    // A task's revision (TaskBoard 3.4 client API): sent back as `If-Match` (BD-3b).
+    "etag",
     "retry-after",
     "x-min-supported-version",
 ];
@@ -521,6 +577,11 @@ struct State {
     chat: Option<Stored>,
     /// The "Connect chat" `chat_connect_begin` started.
     chat_connect: Option<Pending>,
+    /// The tasks keychain entry was read (`tasks` is then what it holds).
+    tasks_loaded: bool,
+    tasks: Option<Stored>,
+    /// The "Connect tasks" `tasks_connect_begin` started.
+    tasks_connect: Option<Pending>,
 }
 
 /// The session of the app (managed by Tauri). Two locks, always taken in this order: `io` serialises every keychain
@@ -530,6 +591,8 @@ pub struct Session {
     store: Box<dyn TokenStore>,
     /// The chat token's entry (`chat-token`).
     chat_store: Box<dyn TokenStore>,
+    /// The tasks token's entry (`tasks-token`).
+    tasks_store: Box<dyn TokenStore>,
     io: Mutex<()>,
     state: Mutex<State>,
     sign_in_window: Duration,
@@ -608,12 +671,16 @@ pub struct Captured {
     pub stored_for: Option<(String, bool)>,
     /// A chat token was stored ("Connect chat"): its origin and the notification language.
     pub chat_stored_for: Option<(String, bool)>,
+    /// A tasks token was stored ("Connect tasks"): its origin and the notification language.
+    pub tasks_stored_for: Option<(String, bool)>,
 }
 
 /// Refusal of "Connect chat" without a time session for the bound server.
 pub const CHAT_NEEDS_SIGN_IN: &str = "sign in first";
 /// Refusal of "Connect chat" while a chat token is stored.
 pub const CHAT_ALREADY_CONNECTED: &str = "chat already connected: disconnect first";
+/// Refusal of "Connect tasks" while a tasks token is stored.
+pub const TASKS_ALREADY_CONNECTED: &str = "tasks already connected: disconnect first";
 
 /// The chat entry of a build without a keychain in tests: memory only (the real one in the app).
 fn default_chat_store() -> Box<dyn TokenStore> {
@@ -624,6 +691,34 @@ fn default_chat_store() -> Box<dyn TokenStore> {
     #[cfg(test)]
     {
         Box::new(tests::MemoryStore::default())
+    }
+}
+
+/// The tasks entry of a build without a keychain in tests: memory only (the real one in the app).
+fn default_tasks_store() -> Box<dyn TokenStore> {
+    #[cfg(not(test))]
+    {
+        Box::new(Keychain::tasks())
+    }
+    #[cfg(test)]
+    {
+        Box::new(tests::MemoryStore::default())
+    }
+}
+
+/// The two extra families (each its own keychain entry, connect window and route).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Extra {
+    Chat,
+    Tasks,
+}
+
+impl Extra {
+    fn route(self) -> Route {
+        match self {
+            Self::Chat => Route::Chat,
+            Self::Tasks => Route::Tasks,
+        }
     }
 }
 
@@ -646,6 +741,7 @@ impl Session {
         Self {
             store,
             chat_store: default_chat_store(),
+            tasks_store: default_tasks_store(),
             io: Mutex::new(()),
             state: Mutex::new(State::default()),
             sign_in_window,
@@ -659,6 +755,12 @@ impl Session {
     /// Keeps the chat token in `store` (the app: [`Keychain::chat`], the default outside tests).
     pub fn with_chat_store(mut self, store: Box<dyn TokenStore>) -> Self {
         self.chat_store = store;
+        self
+    }
+
+    /// Keeps the tasks token in `store` (the app: [`Keychain::tasks`], the default outside tests).
+    pub fn with_tasks_store(mut self, store: Box<dyn TokenStore>) -> Self {
+        self.tasks_store = store;
         self
     }
 
@@ -729,37 +831,51 @@ impl Session {
         Ok(self.lock()?.stored.clone())
     }
 
-    /// Reads the chat entry once; the caller holds `io`.
-    fn load_chat_locked(&self) -> Result<(), String> {
-        if self.lock()?.chat_loaded {
+    fn extra_store(&self, extra: Extra) -> &dyn TokenStore {
+        match extra {
+            Extra::Chat => self.chat_store.as_ref(),
+            Extra::Tasks => self.tasks_store.as_ref(),
+        }
+    }
+
+    /// Reads an extra family's entry once; the caller holds `io`.
+    fn load_extra_locked(&self, extra: Extra) -> Result<(), String> {
+        if *slot(&mut *self.lock()?, extra).0 {
             return Ok(());
         }
-        let chat = self.chat_store.read()?;
+        let read = self.extra_store(extra).read()?;
         let mut state = self.lock()?;
-        state.chat = chat;
-        state.chat_loaded = true;
+        let (loaded, stored, _) = slot(&mut state, extra);
+        *stored = read;
+        *loaded = true;
         Ok(())
     }
 
-    /// The stored chat token, read from the keychain on first use.
-    fn current_chat(&self) -> Result<Option<Stored>, String> {
+    /// An extra family's stored token, read from the keychain on first use.
+    fn current_extra(&self, extra: Extra) -> Result<Option<Stored>, String> {
         {
-            let state = self.lock()?;
-            if state.chat_loaded {
-                return Ok(state.chat.clone());
+            let mut state = self.lock()?;
+            let (loaded, stored, _) = slot(&mut state, extra);
+            if *loaded {
+                return Ok(stored.clone());
             }
         }
         let _io = self.io()?;
-        self.load_chat_locked()?;
-        Ok(self.lock()?.chat.clone())
+        self.load_extra_locked(extra)?;
+        Ok(slot(&mut *self.lock()?, extra).1.clone())
     }
 
     /// Whether a chat token is stored for the time token's origin (`chat_status`). Never the token.
     pub fn chat_connected(&self) -> Result<bool, String> {
+        self.extra_connected(Extra::Chat)
+    }
+
+    /// Whether an extra family's token is stored for the time token's origin. Never the token.
+    pub fn extra_connected(&self, extra: Extra) -> Result<bool, String> {
         let time = self.current()?;
-        let chat = self.current_chat()?;
-        Ok(match (time, chat) {
-            (Some(time), Some(chat)) => time.origin.is_some() && time.origin == chat.origin,
+        let other = self.current_extra(extra)?;
+        Ok(match (time, other) {
+            (Some(time), Some(other)) => time.origin.is_some() && time.origin == other.origin,
             _ => false,
         })
     }
@@ -767,12 +883,22 @@ impl Session {
     /// Starts "Connect chat" (BD-2): only with the time token stored for the bound origin, no chat token, and a person
     /// at the app. The next 2xx `chat` answer of `device/token` from that origin (within the window) is stored.
     pub fn begin_chat_connect(&self, present: bool, locale: Option<&str>) -> Result<(), String> {
+        self.begin_extra_connect(Extra::Chat, present, locale)
+    }
+
+    /// Starts "Connect chat" / "Connect tasks" (same rules for both families).
+    pub fn begin_extra_connect(
+        &self,
+        extra: Extra,
+        present: bool,
+        locale: Option<&str>,
+    ) -> Result<(), String> {
         if !present {
             return Err(SIGN_IN_NOT_PRESENT.into());
         }
         let _io = self.io()?;
         self.load_locked()?;
-        self.load_chat_locked()?;
+        self.load_extra_locked(extra)?;
         let mut state = self.lock()?;
         let Some(bound) = state.bound.clone() else {
             return Err(CHAT_NEEDS_SIGN_IN.into());
@@ -784,27 +910,37 @@ impl Session {
         if owner.as_deref() != Some(bound.ascii_serialization().as_str()) {
             return Err(CHAT_NEEDS_SIGN_IN.into());
         }
-        if state.chat.is_some() {
-            return Err(CHAT_ALREADY_CONNECTED.into());
+        let (_, stored, connect) = slot(&mut state, extra);
+        if stored.is_some() {
+            return Err(match extra {
+                Extra::Chat => CHAT_ALREADY_CONNECTED,
+                Extra::Tasks => TASKS_ALREADY_CONNECTED,
+            }
+            .into());
         }
-        let spanish = spanish(locale);
-        state.chat_connect = Some(Pending {
+        *connect = Some(Pending {
             origin: bound,
             at: Instant::now(),
-            spanish,
+            spanish: spanish(locale),
         });
         Ok(())
     }
 
     /// "Disconnect chat": deletes the chat entry only (first), then forgets it. On failure nothing changes.
     pub fn disconnect_chat(&self) -> Result<(), String> {
+        self.disconnect_extra(Extra::Chat)
+    }
+
+    /// "Disconnect chat" / "Disconnect tasks": deletes that entry only (first), then forgets it.
+    pub fn disconnect_extra(&self, extra: Extra) -> Result<(), String> {
         let _io = self.io.lock().unwrap_or_else(PoisonError::into_inner);
         self.io.clear_poison();
-        self.chat_store.delete()?;
+        self.extra_store(extra).delete()?;
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        state.chat = None;
-        state.chat_loaded = true;
-        state.chat_connect = None;
+        let (loaded, stored, connect) = slot(&mut state, extra);
+        *stored = None;
+        *loaded = true;
+        *connect = None;
         drop(state);
         self.state.clear_poison();
         Ok(())
@@ -813,11 +949,20 @@ impl Session {
     /// The chat token for a request to `url` (the realtime client, realtime.rs): only a chat route of the chat token's
     /// own origin, which must also be the bound one.
     pub fn chat_bearer_for(&self, url: &url::Url) -> Result<Option<HeaderValue>, String> {
-        if self.route(url)? != Route::Chat || self.bound_origin() != Some(url.origin()) {
+        self.extra_bearer_for(Extra::Chat, url)
+    }
+
+    /// An extra family's token for a request to `url`: only that family's route, of its own origin, the bound one.
+    pub fn extra_bearer_for(
+        &self,
+        extra: Extra,
+        url: &url::Url,
+    ) -> Result<Option<HeaderValue>, String> {
+        if self.route(url)? != extra.route() || self.bound_origin() != Some(url.origin()) {
             return Ok(None);
         }
         let origin = url.origin().ascii_serialization();
-        match self.current_chat()? {
+        match self.current_extra(extra)? {
             Some(Stored {
                 origin: Some(owner),
                 token,
@@ -835,6 +980,11 @@ impl Session {
     /// Whether `url` is the reaction route of the bound server's chat API ([`is_reaction_path`]).
     pub fn is_reaction_route(&self, url: &url::Url) -> Result<bool, String> {
         Ok(is_reaction_path(url, &self.lock()?.base))
+    }
+
+    /// The write methods a task route of the bound server takes ([`task_write_methods`]).
+    pub fn task_write_route(&self, url: &url::Url) -> Result<(bool, bool), String> {
+        Ok(task_write_methods(url, &self.lock()?.base))
     }
 
     /// Whether a token is stored (`secret_status`). A keychain that cannot be read is an error.
@@ -856,31 +1006,39 @@ impl Session {
         let base = base_path(server);
         let _io = self.io()?;
         self.load_locked()?;
-        // An unreadable chat entry does not block the time binding: the chat token is then never used either
-        // (`chat_bearer_for` reads it again and fails closed).
-        let chat = match self.load_chat_locked() {
-            Ok(()) => self.lock()?.chat.clone(),
-            Err(_) => None,
-        };
-        match chat {
-            Some(Stored {
-                base: Some(stored_base),
-                ..
-            }) if stored_base != base => return Err(CHAT_BOUND_ELSEWHERE.into()),
-            Some(Stored {
-                origin: Some(owner),
-                token,
-                base: None,
-            }) if owner == serialised => {
-                let adopted = Stored {
+        // An unreadable chat or tasks entry does not block the time binding: that token is then never used either
+        // (`extra_bearer_for` reads it again and fails closed).
+        for extra in [Extra::Chat, Extra::Tasks] {
+            let held = match self.load_extra_locked(extra) {
+                Ok(()) => slot(&mut *self.lock()?, extra).1.clone(),
+                Err(_) => None,
+            };
+            match held {
+                Some(Stored {
+                    base: Some(stored_base),
+                    ..
+                }) if stored_base != base => {
+                    return Err(match extra {
+                        Extra::Chat => CHAT_BOUND_ELSEWHERE,
+                        Extra::Tasks => TASKS_BOUND_ELSEWHERE,
+                    }
+                    .into())
+                }
+                Some(Stored {
                     origin: Some(owner),
                     token,
-                    base: Some(base.clone()),
-                };
-                self.chat_store.write(&adopted)?;
-                self.lock()?.chat = Some(adopted);
+                    base: None,
+                }) if owner == serialised => {
+                    let adopted = Stored {
+                        origin: Some(owner),
+                        token,
+                        base: Some(base.clone()),
+                    };
+                    self.extra_store(extra).write(&adopted)?;
+                    *slot(&mut *self.lock()?, extra).1 = Some(adopted);
+                }
+                _ => {}
             }
-            _ => {}
         }
         let stored = self.lock()?.stored.clone();
         match stored {
@@ -979,6 +1137,13 @@ impl Session {
                     None => Authorization::None,
                 })
             }
+            // Task routes likewise get the tasks token or nothing (BD-3b).
+            Route::Tasks => {
+                return Ok(match self.extra_bearer_for(Extra::Tasks, url)? {
+                    Some(value) => Authorization::Bearer(value),
+                    None => Authorization::None,
+                })
+            }
             Route::Neither => return Ok(Authorization::None),
             Route::Time => {}
         }
@@ -1002,6 +1167,7 @@ impl Session {
                 body: b"{}".to_vec(),
                 stored_for: None,
                 chat_stored_for: None,
+                tasks_stored_for: None,
             });
         };
         let token = answer
@@ -1013,8 +1179,12 @@ impl Session {
         let family = Family::of(&answer);
         let mut stored_for = None;
         let mut chat_stored_for = None;
+        let mut tasks_stored_for = None;
         if let (Some(token), Family::Chat) = (token.clone(), family) {
-            chat_stored_for = self.capture_chat(&origin, token)?;
+            chat_stored_for = self.capture_extra(Extra::Chat, &origin, token)?;
+        }
+        if let (Some(token), Family::Tasks) = (token.clone(), family) {
+            tasks_stored_for = self.capture_extra(Extra::Tasks, &origin, token)?;
         }
         if let (Some(token), Family::Time) = (token, family) {
             let _io = self.io()?;
@@ -1041,7 +1211,7 @@ impl Session {
             }
         }
         scrub_value(&mut answer);
-        if stored_for.is_some() || chat_stored_for.is_some() {
+        if stored_for.is_some() || chat_stored_for.is_some() || tasks_stored_for.is_some() {
             answer["token"] = Value::String(SESSION_HANDLE.into());
         }
         let body =
@@ -1050,36 +1220,40 @@ impl Session {
             body,
             stored_for,
             chat_stored_for,
+            tasks_stored_for,
         })
     }
 
-    /// A `chat` answer: stored in the chat entry when "Connect chat" was started for this origin (within the window),
-    /// no chat token is stored, and the time token belongs to the same origin.
-    fn capture_chat(
+    /// A `chat` / `tasks` answer: stored in that family's entry when its "Connect" was started for this origin (within
+    /// the window), no token of that family is stored, and the time token belongs to the same origin.
+    fn capture_extra(
         &self,
+        extra: Extra,
         origin: &url::Origin,
         token: String,
     ) -> Result<Option<(String, bool)>, String> {
         let _io = self.io()?;
         self.load_locked()?;
-        self.load_chat_locked()?;
+        self.load_extra_locked(extra)?;
         let pending = {
-            let state = self.lock()?;
+            let mut state = self.lock()?;
             let serialised = origin.ascii_serialization();
             let time_here = state
                 .stored
                 .as_ref()
                 .is_some_and(|stored| stored.origin.as_deref() == Some(serialised.as_str()));
-            state
-                .chat_connect
+            let base = state.base.clone();
+            let (_, stored, connect) = slot(&mut state, extra);
+            let none_stored = stored.is_none();
+            connect
                 .clone()
                 .filter(|pending| {
                     pending.origin == *origin
                         && pending.at.elapsed() <= self.sign_in_window
-                        && state.chat.is_none()
+                        && none_stored
                         && time_here
                 })
-                .map(|pending| (pending, state.base.clone()))
+                .map(|pending| (pending, base))
         };
         let Some((pending, base)) = pending else {
             return Ok(None);
@@ -1089,11 +1263,12 @@ impl Session {
             token,
             base: Some(base),
         };
-        self.chat_store.write(&stored)?;
+        self.extra_store(extra).write(&stored)?;
         let mut state = self.lock()?;
-        state.chat = Some(stored);
-        state.chat_loaded = true;
-        state.chat_connect = None;
+        let (loaded, held, connect) = slot(&mut state, extra);
+        *held = Some(stored);
+        *loaded = true;
+        *connect = None;
         Ok(Some((origin.ascii_serialization(), pending.spanish)))
     }
 
@@ -1103,24 +1278,42 @@ impl Session {
     pub fn sign_out(&self) -> Result<(), String> {
         let _io = self.io.lock().unwrap_or_else(PoisonError::into_inner);
         self.io.clear_poison();
-        // The chat token first (BD-2): a time sign-out never leaves a chat token behind.
-        self.chat_store.delete()?;
-        {
+        // The tasks and chat tokens first (BD-3b, BD-2): a time sign-out never leaves one behind.
+        for extra in [Extra::Tasks, Extra::Chat] {
+            self.extra_store(extra).delete()?;
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            state.chat = None;
-            state.chat_loaded = true;
-            state.chat_connect = None;
+            let (loaded, stored, connect) = slot(&mut state, extra);
+            *stored = None;
+            *loaded = true;
+            *connect = None;
         }
         self.store.delete()?;
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         *state = State {
             loaded: true,
             chat_loaded: true,
+            tasks_loaded: true,
             ..State::default()
         };
         drop(state);
         self.state.clear_poison();
         Ok(())
+    }
+}
+
+/// The state of an extra family: whether its entry was read, the token, a "Connect" in progress.
+fn slot(state: &mut State, extra: Extra) -> (&mut bool, &mut Option<Stored>, &mut Option<Pending>) {
+    match extra {
+        Extra::Chat => (
+            &mut state.chat_loaded,
+            &mut state.chat,
+            &mut state.chat_connect,
+        ),
+        Extra::Tasks => (
+            &mut state.tasks_loaded,
+            &mut state.tasks,
+            &mut state.tasks_connect,
+        ),
     }
 }
 
@@ -1150,6 +1343,28 @@ pub fn notify_chat_connected(app: &tauri::AppHandle, origin: &str, spanish: bool
     use tauri_plugin_notification::NotificationExt;
     let (title, body) = chat_connected_notice(origin, spanish);
     let _ = app.notification().builder().title(title).body(body).show();
+}
+
+/// The "tasks connected" OS notification, from Rust (best effort), after every stored tasks token.
+pub fn notify_tasks_connected(app: &tauri::AppHandle, origin: &str, spanish: bool) {
+    use tauri_plugin_notification::NotificationExt;
+    let (title, body) = tasks_connected_notice(origin, spanish);
+    let _ = app.notification().builder().title(title).body(body).show();
+}
+
+/// Title and text of the "tasks connected" notification.
+pub fn tasks_connected_notice(origin: &str, spanish: bool) -> (String, String) {
+    if spanish {
+        (
+            "Tareas conectadas en Beacon Desktop".into(),
+            format!("Las tareas de {origin} están conectadas. Si no fuiste tú, desconecta las tareas en Beacon Desktop y revoca este dispositivo en Beacon (Cuenta → Seguridad)."),
+        )
+    } else {
+        (
+            "Beacon Desktop tasks connected".into(),
+            format!("Tasks on {origin} are connected. If this was not you, disconnect tasks in Beacon Desktop and revoke this device in Beacon (Account → Security)."),
+        )
+    }
 }
 
 /// Title and text of the "chat connected" notification.
@@ -1206,6 +1421,45 @@ pub async fn chat_disconnect(
     realtime.stop();
     let session = Arc::clone(&session);
     blocking(move || session.disconnect_chat()).await
+}
+
+/// Whether a tasks token is stored for the signed-in server (BD-3b). Never the token itself.
+#[tauri::command]
+pub async fn tasks_status(
+    window: tauri::Window,
+    session: tauri::State<'_, Arc<Session>>,
+) -> Result<bool, String> {
+    crate::only_from(&window, "main")?;
+    let session = Arc::clone(&session);
+    blocking(move || session.extra_connected(Extra::Tasks)).await
+}
+
+/// Starts "Connect tasks": the next `tasks` answer of `device/token` from the bound server is stored. Only for a
+/// person at the app (read here, in Rust).
+#[tauri::command]
+pub async fn tasks_connect_begin(
+    window: tauri::Window,
+    session: tauri::State<'_, Arc<Session>>,
+    locale: Option<String>,
+) -> Result<(), String> {
+    crate::only_from(&window, "main")?;
+    let present = person_at_the_app(
+        window.is_focused().unwrap_or(false),
+        crate::read_idle_seconds(),
+    );
+    let session = Arc::clone(&session);
+    blocking(move || session.begin_extra_connect(Extra::Tasks, present, locale.as_deref())).await
+}
+
+/// "Disconnect tasks": deletes the tasks token only.
+#[tauri::command]
+pub async fn tasks_disconnect(
+    window: tauri::Window,
+    session: tauri::State<'_, Arc<Session>>,
+) -> Result<(), String> {
+    crate::only_from(&window, "main")?;
+    let session = Arc::clone(&session);
+    blocking(move || session.disconnect_extra(Extra::Tasks)).await
 }
 
 /// Whether a session token is stored (the UI then starts signed in). Never the token itself.
@@ -1702,6 +1956,166 @@ pub mod tests {
             Some("Bearer time-secret")
         );
         assert_eq!(time.stored().unwrap().token, "time-secret");
+    }
+
+    /// A session over time, chat and tasks stores (all in memory).
+    fn tasks_session(time: &MemoryStore, chat: &MemoryStore, tasks: &MemoryStore) -> Arc<Session> {
+        Arc::new(
+            Session::with_timing(Box::new(time.clone()), SIGN_IN_WINDOW, Duration::ZERO)
+                .with_chat_store(Box::new(chat.clone()))
+                .with_tasks_store(Box::new(tasks.clone())),
+        )
+    }
+
+    #[test]
+    fn task_routes_get_the_tasks_token_only_and_no_other_route_does() {
+        let (time, chat, tasks) = (
+            MemoryStore::with(A, "time-secret"),
+            MemoryStore::with(A, "chat-secret"),
+            MemoryStore::with(A, "tasks-secret"),
+        );
+        let session = tasks_session(&time, &chat, &tasks);
+        session.bind(&url(A)).unwrap();
+        assert!(session.extra_connected(Extra::Tasks).unwrap());
+        assert_eq!(Keychain::tasks().user, "tasks-token");
+        for route in [
+            "/api/task-board/v1/me",
+            "/api/task-board/v1/tasks/x/move",
+            "/api/%74ask-board/v1/me",
+        ] {
+            assert_eq!(
+                bearer_of(&session, &format!("{A}{route}")).as_deref(),
+                Some("Bearer tasks-secret"),
+                "{route}"
+            );
+        }
+        assert_eq!(
+            bearer_of(&session, &format!("{A}/api/chat/v1/me")).as_deref(),
+            Some("Bearer chat-secret")
+        );
+        assert_eq!(
+            bearer_of(&session, &format!("{A}/api/time-track/me")).as_deref(),
+            Some("Bearer time-secret")
+        );
+        // Look-alikes of the tasks prefix get no token at all (the time API's `/api/tasks/v2` is not one).
+        for route in [
+            "/API/task-board/v1/me",
+            "/api//task-board/v1/me",
+            "/api/task-board/me",
+            "/x/api/task-board/v1/me",
+        ] {
+            assert_eq!(bearer_of(&session, &format!("{A}{route}")), None, "{route}");
+        }
+        assert_eq!(
+            bearer_of(&session, &format!("{B}/api/task-board/v1/me")),
+            None
+        );
+        assert_eq!(
+            route_of(&url(&format!("{A}/beacon/api/task-board/v1/me")), "/beacon"),
+            Route::Tasks
+        );
+        // "Disconnect tasks" deletes the tasks entry only.
+        session.disconnect_extra(Extra::Tasks).unwrap();
+        assert_eq!(tasks.stored(), None);
+        assert_eq!(
+            bearer_of(&session, &format!("{A}/api/task-board/v1/me")),
+            None
+        );
+        assert_eq!(chat.stored().unwrap().token, "chat-secret");
+        assert_eq!(time.stored().unwrap().token, "time-secret");
+    }
+
+    #[test]
+    fn connect_tasks_stores_only_a_started_tasks_answer_and_sign_out_deletes_it_first() {
+        let (time, chat, tasks) = (
+            MemoryStore::with(A, "time-secret"),
+            MemoryStore::default(),
+            MemoryStore::default(),
+        );
+        let session = tasks_session(&time, &chat, &tasks);
+        session.bind(&url(A)).unwrap();
+        let device_token = url(&format!("{A}/api/time-track/device/token"));
+        let answer = br#"{"token":"tasks-secret","scopes":["task-board:read","task-board:write"],"scopeFamily":"tasks"}"#;
+        // Not started: scrubbed, nothing stored.
+        let out = session.capture(&device_token, answer).unwrap();
+        assert!(out.tasks_stored_for.is_none());
+        assert_eq!(tasks.stored(), None);
+        assert!(!String::from_utf8(out.body)
+            .unwrap()
+            .contains("tasks-secret"));
+        // Nobody at the app: refused.
+        assert_eq!(
+            session
+                .begin_extra_connect(Extra::Tasks, false, None)
+                .unwrap_err(),
+            SIGN_IN_NOT_PRESENT
+        );
+        session
+            .begin_extra_connect(Extra::Tasks, true, Some("es"))
+            .unwrap();
+        // A chat answer never lands in the tasks entry (and the chat connect was not started).
+        assert!(session
+            .capture(&device_token, br#"{"token":"c","scopeFamily":"chat"}"#)
+            .unwrap()
+            .chat_stored_for
+            .is_none());
+        let out = session.capture(&device_token, answer).unwrap();
+        assert_eq!(out.tasks_stored_for, Some((A.to_string(), true)));
+        assert_eq!(tasks.stored().unwrap().token, "tasks-secret");
+        assert_eq!(chat.stored(), None);
+        assert_eq!(
+            session
+                .begin_extra_connect(Extra::Tasks, true, None)
+                .unwrap_err(),
+            TASKS_ALREADY_CONNECTED
+        );
+        // A second answer while one is stored is not taken.
+        assert!(session
+            .capture(&device_token, br#"{"token":"other","scopeFamily":"tasks"}"#)
+            .unwrap()
+            .tasks_stored_for
+            .is_none());
+        assert_eq!(tasks.stored().unwrap().token, "tasks-secret");
+        // Bound under another base path while stored: refused.
+        assert_eq!(
+            session.bind(&url(&format!("{A}/other/"))).unwrap_err(),
+            TASKS_BOUND_ELSEWHERE
+        );
+        session.sign_out().unwrap();
+        assert_eq!(tasks.stored(), None);
+        assert_eq!(time.stored(), None);
+        assert!(!session.extra_connected(Extra::Tasks).unwrap());
+        let (es_title, _) = tasks_connected_notice(A, true);
+        assert!(es_title.contains("Tareas"));
+        assert!(tasks_connected_notice(A, false).1.contains(A));
+    }
+
+    #[test]
+    fn connect_tasks_needs_the_time_session_of_the_bound_server() {
+        let (time, chat, tasks) = (
+            MemoryStore::default(),
+            MemoryStore::default(),
+            MemoryStore::default(),
+        );
+        let session = tasks_session(&time, &chat, &tasks);
+        assert_eq!(
+            session
+                .begin_extra_connect(Extra::Tasks, true, None)
+                .unwrap_err(),
+            CHAT_NEEDS_SIGN_IN
+        );
+        session.bind(&url(A)).unwrap();
+        assert_eq!(
+            session
+                .begin_extra_connect(Extra::Tasks, true, None)
+                .unwrap_err(),
+            CHAT_NEEDS_SIGN_IN
+        );
+        // A 0.11 tasks entry without a base path adopts the bound one.
+        let legacy = MemoryStore::with(A, "tasks-secret");
+        let session = tasks_session(&MemoryStore::with(A, "t"), &MemoryStore::default(), &legacy);
+        session.bind(&url(&format!("{A}/beacon/"))).unwrap();
+        assert_eq!(legacy.stored().unwrap().base.as_deref(), Some("/beacon"));
     }
 
     #[test]

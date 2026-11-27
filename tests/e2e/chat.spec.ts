@@ -106,7 +106,7 @@ test('disconnect chat keeps time signed in; sign-out ends both', async ({ page }
   await connectChat(page);
   await page.locator('#rail-settings').click();
   await page.locator('#chat-disconnect').click();
-  await expect(page.locator('#shell-settings .btn.primary')).toHaveText('Connect chat');
+  await expect(page.locator('#settings-chat-connect')).toHaveText('Connect chat');
   await page.keyboard.press('Escape');
   await expect(page.locator('#chat-connect')).toBeVisible();
   await page.locator('#tab-time').click();
