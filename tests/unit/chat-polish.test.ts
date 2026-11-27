@@ -304,3 +304,92 @@ describe('chat polish helpers', () => {
     expect(parseConversation({ uuid: '0c000000-0000-4000-8000-000000000001', kind: 'channel', title: 'x', peerUuid: '0f000000-0000-4000-8000-000000000002' })?.peerUuid).toBeNull();
   });
 });
+
+describe('chat status and undo (UX batch 4)', () => {
+  beforeEach(async () => {
+    localStorage.clear();
+    await env.control('reset', {});
+    await env.control('config', { deviceInterval: 1 });
+  });
+
+  const button = (row: Element, label: string) => [...row.querySelectorAll('button')].find((item) => item.textContent === label) as HTMLButtonElement;
+
+  it('Cancel offers Undo (UXA-8): Ctrl+Z in the untouched message box puts the message back in line, sent once', async () => {
+    const ui = await connected();
+    await env.control('config', { chatFailNext: { status: 503, error: 'server_error', writesOnly: true, times: 1000 } });
+    type(ui.$<HTMLTextAreaElement>('#composer'), 'Never mind');
+    enter(ui.$<HTMLTextAreaElement>('#composer'));
+    await until(() => document.querySelector('#msg-list li.msg.pending.queued') !== null, 'the queued message');
+    const key = ui.shell.chat.outbox?.pending(ENVELOPE, null)[0]?.key;
+    button(ui.$('#msg-list li.msg.pending.queued'), 'Cancel').click();
+    expect(ui.$<HTMLTextAreaElement>('#composer').value).toBe('Never mind');
+    expect(ui.$('#undo-toasts .ut-text').textContent).toBe('Message cancelled');
+    // Focus stays in the message box (the toast never takes it); Ctrl+Z there, text untouched, is the toast's undo.
+    expect(document.activeElement).toBe(ui.$('#composer'));
+    ui.key({ key: 'z', ctrlKey: true }, ui.$('#composer'));
+    expect(ui.$<HTMLTextAreaElement>('#composer').value).toBe('');
+    expect(ui.shell.chat.outbox?.pending(ENVELOPE, null).map((item) => item.key)).toEqual([key]);
+    expect(document.querySelector('#msg-list li.msg.pending.queued')).not.toBeNull();
+    await env.control('config', { chatFailNext: null });
+    button(ui.$('#msg-list li.msg.pending.queued'), 'Try now').click();
+    await until(async () => (await writes()).length === 1, 'the write');
+    expect((await writes())[0].key).toBe(key);
+  });
+
+  it('Discard offers Undo (UXA-8); a context switch drops it and a stale undo restores nothing', async () => {
+    const ui = await connected();
+    await env.control('config', { chatFailNext: { status: 422, error: 'text_too_long', writesOnly: true } });
+    type(ui.$<HTMLTextAreaElement>('#composer'), 'Refused words');
+    enter(ui.$<HTMLTextAreaElement>('#composer'));
+    await until(() => document.querySelector('#msg-list li.msg.pending .m-status.failed') !== null, 'the failed message');
+    button(ui.$('#msg-list li.msg.pending'), 'Discard').click();
+    expect(document.querySelector('#msg-list li.msg.pending')).toBeNull();
+    expect(ui.$('#undo-toasts .ut-text').textContent).toBe('Message discarded');
+    ui.$<HTMLButtonElement>('#undo-toasts .ut-undo').click();
+    await until(() => document.querySelector('#msg-list li.msg.pending .m-status.failed') !== null, 'back as failed');
+    expect((await writes()).length).toBe(0);
+    // Discard again, then switch organization: the toast goes, and its undo does nothing there.
+    button(ui.$('#msg-list li.msg.pending'), 'Discard').click();
+    const offer = ui.shell.toasts.offers.at(-1);
+    expect(offer).toBeDefined();
+    await until(() => document.querySelector('.ctx-tile[data-context="personal"]') !== null, 'the personal tile');
+    ui.$<HTMLButtonElement>('.ctx-tile[data-context="personal"]').click();
+    await until(() => ui.shell.context === 'personal', 'personal');
+    expect(ui.shell.toasts.offers).toHaveLength(0);
+    offer?.undo();
+    expect(ui.shell.chat.outbox?.pending(ENVELOPE, null) ?? []).toEqual([]);
+  });
+
+  it('a 429 while a conversation loads says so in the pane after 1.5 s, Retry waits for the pause (UXA-13); the strip counts down (UXA-7)', async () => {
+    const ui = await connected();
+    // The read mark of the conversation left and the new conversation's first page both meet the 429.
+    await env.control('config', { chatFailNext: { status: 429, error: 'rate_limited', retryAfter: 30, times: 2 } });
+    // Leo Brandt's direct messages: no unread, so nothing of it is loaded yet (the home view peeks only unread ones).
+    const leo = '0c000000-0000-4000-8000-000000000007';
+    expect(ui.shell.chat.sync?.store.timeline(leo)).toBeNull();
+    ui.$<HTMLButtonElement>(`[data-conv="${leo}"]`).click();
+    await until(() => ui.shell.chat.netState === 'limited', 'the pause');
+    expect(ui.$('#chat-pause-note')).toBeNull();
+    await until(() => ui.$('#chat-pause-note') !== null, 'the pause note', 4000);
+    expect(ui.$('#chat-pause-text').textContent).toMatch(/^Taking a short pause\. Loading again in 0:(29|30)\.$/);
+    expect(ui.$<HTMLButtonElement>('#chat-pause-retry').disabled).toBe(true);
+    expect(document.querySelectorAll('#msg-list .skel-msg').length).toBeGreaterThan(0);
+    expect(ui.$('#chat-banner-text').textContent).toMatch(/^Paused for a moment\. Back in 0:(29|30)\.$/);
+    expect(ui.$('#chat-banner').className).toBe('ss-box info');
+  });
+
+  it('the jump button says "new below" when the only unread messages are in the open conversation (UXA-11)', async () => {
+    const ui = await connected();
+    const store = ui.shell.chat.sync?.store;
+    for (const row of store?.conversations() ?? []) (row as { unread: number }).unread = 0;
+    const open = store?.conversation(ENVELOPE) as { unread: number };
+    open.unread = 2;
+    ui.shell.chat.render();
+    expect(ui.$('#chat-jump').textContent).toContain('2 new messages below');
+    expect(ui.$<HTMLButtonElement>('#chat-jump').disabled).toBe(false);
+    open.unread = 0;
+    ui.shell.chat.render();
+    expect(ui.$('#chat-jump').textContent).toContain('All caught up');
+    expect(ui.$<HTMLButtonElement>('#chat-jump').disabled).toBe(true);
+  });
+});

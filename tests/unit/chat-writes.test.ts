@@ -712,3 +712,66 @@ describe('composer', () => {
     expect([field.selectionStart, field.selectionEnd]).toEqual([3, 4]);
   });
 });
+
+describe('outbox: undo of a discard (UX batch 4, UXA-8)', () => {
+  let ctx: ReturnType<typeof outboxFor>;
+  beforeEach(async () => {
+    ctx = outboxFor();
+    await ctx.sync.start();
+    await ctx.sync.open(ENVELOPE);
+  });
+
+  it('a cancelled queued message comes back where it stood, with its key, and goes out once in order', async () => {
+    ctx.outbox.setOnline(false);
+    const first = ctx.outbox.send(ENVELOPE, null, 'One');
+    const second = ctx.outbox.send(ENVELOPE, null, 'Two');
+    const point = ctx.outbox.undoPoint(first);
+    expect(point.index).toBe(0);
+    expect(ctx.outbox.discard(first.key)).toBe(first);
+    expect(ctx.outbox.pending(ENVELOPE, null)).toEqual([second]);
+    expect(ctx.outbox.restore(first, point)).toBe(true);
+    expect(ctx.outbox.pending(ENVELOPE, null)).toEqual([first, second]);
+    expect(first).toMatchObject({ state: 'queued', error: 'network_error' });
+    // Restoring twice does nothing.
+    expect(ctx.outbox.restore(first, point)).toBe(false);
+    ctx.outbox.setOnline(true);
+    for (let i = 0; i < 8; i += 1) await settle();
+    expect(ctx.calls.map((call) => [call.text, call.key])).toEqual([
+      ['One', first.key],
+      ['Two', second.key],
+    ]);
+  });
+
+  it('never overtakes: a newer message sent meanwhile brings it back as not sent, with Retry', async () => {
+    ctx.outbox.setOnline(false);
+    const first = ctx.outbox.send(ENVELOPE, null, 'One');
+    const second = ctx.outbox.send(ENVELOPE, null, 'Two');
+    const point = ctx.outbox.undoPoint(first);
+    ctx.outbox.discard(first.key);
+    ctx.outbox.setOnline(true);
+    for (let i = 0; i < 6; i += 1) await settle();
+    expect(second.state).toBe('sent');
+    expect(ctx.outbox.restore(first, point)).toBe(true);
+    expect(first).toMatchObject({ state: 'failed', canRetry: true });
+    await settle();
+    expect(ctx.calls.map((call) => call.text)).toEqual(['Two']);
+  });
+
+  it('a failed message comes back failed (nothing sent); nothing comes back after a context switch', async () => {
+    ctx.failures.push(new ApiError(422, 'text_too_long', 'too long'));
+    const refused = ctx.outbox.send(ENVELOPE, null, 'Too long');
+    await settle();
+    await settle();
+    expect(refused).toMatchObject({ state: 'failed', canRetry: false });
+    const point = ctx.outbox.undoPoint(refused);
+    ctx.outbox.discard(refused.key);
+    expect(ctx.outbox.restore(refused, point)).toBe(true);
+    expect(refused).toMatchObject({ state: 'failed', canRetry: false, error: 'text_too_long' });
+    expect(ctx.calls).toHaveLength(1);
+    const again = ctx.outbox.undoPoint(refused);
+    ctx.outbox.discard(refused.key);
+    ctx.outbox.clear();
+    expect(ctx.outbox.restore(refused, again)).toBe(false);
+    expect(ctx.outbox.pending(ENVELOPE, null)).toEqual([]);
+  });
+});

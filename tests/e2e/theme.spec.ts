@@ -87,13 +87,13 @@ test('theme follows the system by default; Dark / Light override it, persist and
 });
 
 for (const scheme of ['light', 'dark'] as const) {
-  test(`mascot moments (${scheme}): welcome, no results, saved, long-running, offline — decorative art, axe clean`, async ({ page, context }) => {
+  test(`mascot moments (${scheme}): no results, saved, long-running — decorative art; welcome and offline in the status strip — axe clean`, async ({ page, context }) => {
     await page.emulateMedia({ colorScheme: scheme });
     await signIn(page);
-    const welcome = page.getByRole('region', { name: "You're in!" });
-    await expect(welcome).toBeVisible();
-    await expect(welcome.locator('img')).toHaveAttribute('aria-hidden', 'true');
-    await expect(welcome.locator('img')).toHaveAttribute('alt', '');
+    // UX batch 4 (UXA-23, UXA-7): "You're in" is a line in the status strip, without art; the strip keeps its height.
+    const welcome = page.locator('#time-strip-text');
+    await expect(welcome).toContainText("You're in");
+    await expect(page.locator('#time-strip-strip')).toHaveCSS('height', '36px');
     await axe(page, 'welcome');
 
     await page.locator('#search').fill('zzz');
@@ -119,9 +119,9 @@ for (const scheme of ['light', 'dark'] as const) {
 
     await context.setOffline(true);
     await tt(page).refresh();
-    const offline = page.getByRole('region', { name: 'Working offline' });
-    await expect(offline).toBeVisible();
-    await expect(offline.locator('img')).toHaveAttribute('data-pose', 'pose-reconnect');
+    const offline = page.locator('#offline');
+    await expect(offline).toContainText('action(s)');
+    await expect(page.locator('#offline-card')).toHaveCount(0);
     await axe(page, 'offline');
     await context.setOffline(false);
   });

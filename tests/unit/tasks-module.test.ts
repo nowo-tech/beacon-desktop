@@ -393,7 +393,9 @@ describe('tasks module', () => {
     ui.key({ key: 'ArrowRight', altKey: true }, card);
     await until(() => banner().textContent?.includes('Review takes at most 3 tasks.') === true, 'the refusal');
     expect(banner().hidden).toBe(false);
-    expect(banner().className).toBe('tk-banner warn');
+    expect(banner().className).toBe('ss-box warn');
+    // UXA-7: the strip's slot keeps its height with or without a message (nothing below moves).
+    expect(ui.$('#tasks-banner-strip').hidden).toBe(false);
     // A later read does not clear it: only a write that goes through does.
     await ui.tasks.reload();
     expect(banner().textContent).toContain('Review takes at most 3 tasks.');
@@ -405,17 +407,19 @@ describe('tasks module', () => {
     await until(async () => (await writes()).some((write) => write.kind === 'move' && write.taskId === 't-143'), 'the move');
     await until(() => banner().hidden === true, 'the cleared banner');
     expect(ui.tasks.notice).toBeNull();
-    // A 429: "slowing down" until Beacon answers again (not for the whole session).
-    await env.control('config', { tasksFailNext: { status: 429, error: 'rate_limited', retryAfter: 1 } });
+    // A 429: a calm countdown (UXA-7) until Beacon answers again (not for the whole session).
+    expect(ui.$('#tasks-banner-strip').hidden).toBe(false);
+    await env.control('config', { tasksFailNext: { status: 429, error: 'rate_limited', retryAfter: 30 } });
     await ui.tasks.reload();
-    expect(banner().textContent).toContain('Slowing down for a moment');
+    expect(banner().textContent).toContain('Paused for a moment. Back in 0:30.');
+    expect(banner().className).toBe('ss-box info');
     expect(ui.tasks.noticeKind).toBe('rate');
     // Offline at the same time: one message, the more severe one, never both joined.
     net.online = false;
     await ui.tasks.reload();
-    expect(banner().querySelectorAll('.tb-msg')).toHaveLength(1);
+    expect(banner().querySelectorAll('.ss-text')).toHaveLength(1);
     expect(banner().textContent).toContain('You are offline.');
-    expect(banner().textContent).not.toContain('Slowing down');
+    expect(banner().textContent).not.toContain('Paused');
     net.online = true;
     await ui.tasks.reload();
     await until(() => banner().hidden === true, 'back online and answered');
@@ -423,7 +427,7 @@ describe('tasks module', () => {
     // A server error offers Retry and can be dismissed; it stays hidden until the message changes.
     await env.control('config', { tasksFailNext: { status: 500, error: 'server_error' } });
     await ui.tasks.reload();
-    expect(banner().className).toBe('tk-banner danger');
+    expect(banner().className).toBe('ss-box danger');
     expect(document.querySelector('#tasks-retry')).not.toBeNull();
     (ui.$('#tasks-banner-dismiss') as HTMLButtonElement).focus();
     (ui.$('#tasks-banner-dismiss') as HTMLButtonElement).click();
@@ -822,5 +826,76 @@ describe('tasks module: answers from before an organization switch (BDA13-M1) an
     } finally {
       chat.openLink = original;
     }
+  });
+  // ---- UX batch 4: undo toasts (UXA-8) ------------------------------------------------------------------------------
+
+  const moves = async (taskId: string) => (await writes()).filter((write) => write.kind === 'move' && write.taskId === taskId);
+
+  it('undo (UXA-8): completing a task offers Undo; Undo puts it back in its column with the revision the move returned', async () => {
+    const ui = await connected();
+    (ui.$('[data-view="board"]') as HTMLButtonElement).click();
+    await until(() => document.querySelector('.col[data-col="env-todo"] .card[data-task="t-141"]') !== null, 'the board');
+    await ui.tasks.complete('t-141');
+    await until(() => document.querySelector('.col[data-col="env-done"] .card[data-task="t-141"]') !== null, 'done');
+    // One toast in the one region, announced, never focused.
+    expect(ui.$('#undo-toasts').getAttribute('role')).toBe('region');
+    expect(ui.$('#undo-toasts').getAttribute('aria-label')).toBe('Notifications');
+    expect(ui.$('#undo-toasts').hidden).toBe(false);
+    expect(ui.$('#undo-toasts .ut-text').textContent).toBe('#141 completed');
+    expect(document.activeElement?.closest('#undo-toasts')).toBeNull();
+    const first = await moves('t-141');
+    expect(first).toHaveLength(1);
+    ui.$<HTMLButtonElement>('#undo-toasts .ut-undo').click();
+    expect(ui.$('#undo-toasts').hidden).toBe(true);
+    await until(async () => (await moves('t-141')).length === 2, 'the undo move');
+    // The undo is queued behind the completion and sends the revision it returned (no false conflict).
+    expect((await moves('t-141'))[1].ifMatch).toBe('"2"');
+    await until(() => document.querySelector('.col[data-col="env-todo"] .card[data-task="t-141"]') !== null, 'back in To do');
+    expect(ui.tasks.notice).toBeNull();
+  });
+
+  it('undo (UXA-8): two moves of a card are one toast back to where it was; Ctrl/⌘+Z; never inside a text field', async () => {
+    const ui = await connected();
+    (ui.$('[data-view="board"]') as HTMLButtonElement).click();
+    await until(() => document.querySelector('.col .card[data-task="t-141"]') !== null, 'the board');
+    let card = document.querySelector<HTMLElement>('.card[data-task="t-141"]') as HTMLElement;
+    card.focus();
+    ui.key({ key: 'ArrowRight', altKey: true }, card);
+    await until(async () => (await moves('t-141')).length === 1, 'the first move');
+    card = document.querySelector<HTMLElement>('.card[data-task="t-141"]') as HTMLElement;
+    card.focus();
+    ui.key({ key: 'ArrowRight', altKey: true }, card);
+    await until(async () => (await moves('t-141')).length === 2, 'the second move');
+    await until(() => document.querySelector('.col[data-col="env-review"] .card[data-task="t-141"]') !== null, 'in Review');
+    expect(document.querySelectorAll('#undo-toasts .ut')).toHaveLength(1);
+    expect(ui.$('#undo-toasts .ut-text').textContent).toBe('Moved #141 to Review');
+    // Ctrl+Z in the quick-add field is the field's own undo.
+    ui.key({ key: 'z', ctrlKey: true }, ui.$('#qa-input'));
+    expect(document.querySelectorAll('#undo-toasts .ut')).toHaveLength(1);
+    ui.key({ key: 'z', ctrlKey: true });
+    await until(async () => (await moves('t-141')).length === 3, 'the undo');
+    await until(() => document.querySelector('.col[data-col="env-todo"] .card[data-task="t-141"]') !== null, 'back where it started');
+    expect(document.querySelectorAll('#undo-toasts .ut')).toHaveLength(0);
+    // The undo itself offers no undo.
+    await settle();
+    expect(document.querySelectorAll('#undo-toasts .ut')).toHaveLength(0);
+  });
+
+  it('undo (UXA-8, BDA13): an organization switch drops the toast, and an undo that still fires sends nothing', async () => {
+    const ui = await connected();
+    (ui.$('[data-view="board"]') as HTMLButtonElement).click();
+    await until(() => document.querySelector('.col .card[data-task="t-141"]') !== null, 'the board');
+    const card = document.querySelector<HTMLElement>('.card[data-task="t-141"]') as HTMLElement;
+    card.focus();
+    ui.key({ key: 'ArrowRight', altKey: true }, card);
+    await until(() => ui.shell.toasts.offers.length === 1, 'the toast');
+    const offer = ui.shell.toasts.offers[0];
+    await toPersonal(ui);
+    expect(ui.shell.toasts.offers).toHaveLength(0);
+    expect(ui.$('#undo-toasts').hidden).toBe(true);
+    const before = (await writes()).length;
+    offer.undo();
+    await settle();
+    expect((await writes()).length).toBe(before);
   });
 });

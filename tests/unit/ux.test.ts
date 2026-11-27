@@ -306,8 +306,12 @@ describe('0.2.0 UX', () => {
     const ui = await signedIn();
     await env.control('config', { failNext: { status: 429, error: 'rate_limited', retryAfter: 7 } });
     await ui.app.refresh();
-    expect(ui.$('#error-title').textContent).toBe('Too many requests');
-    expect(ui.$('#error-text').textContent).toBe('Try again in 7 s.');
+    // UX batch 4 (UXA-7): a background 429 is a calm countdown in the status strip, not an error card.
+    expect(ui.$('#error')).toBeNull();
+    expect(ui.$('#time-strip-text').textContent).toBe('Paused for a moment. Back in 0:07.');
+    expect(ui.$('#time-strip').className).toBe('ss-box info');
+    expect(ui.app.rateLimit).not.toBeNull();
+    ui.app.rateLimit = null;
     await env.control('config', { failNext: { status: 409, error: 'timer_running' } });
     await ui.app.refresh();
     expect(ui.$('#error-title').textContent).toBe('A timer is already running');
@@ -318,5 +322,27 @@ describe('0.2.0 UX', () => {
     expect(ui.$('#error-title').textContent).toBe('This connection is missing permissions');
     ui.click('#error-reconnect');
     await vi.waitFor(() => expect(ui.app.view).toBe('login'));
+  });
+
+  it('a 429 pause counts down in the status strip and tries the action again once it ends (UX batch 4, UXA-7)', async () => {
+    const ui = await signedIn();
+    expect(ui.$('#time-strip-strip').hidden).toBe(false);
+    expect(ui.$('#time-strip').hidden).toBe(true);
+    await env.control('config', { failNext: { status: 429, error: 'rate_limited', retryAfter: 1 } });
+    const before = ((await env.control('state')) as { requests: unknown[] }).requests.length;
+    await ui.app.refresh();
+    expect(ui.$('#time-strip-text').textContent).toBe('Paused for a moment. Back in 0:01.');
+    expect(ui.$('#time-strip-dismiss')).not.toBeNull();
+    await vi.waitFor(() => expect(ui.app.rateLimit).toBeNull(), { timeout: 3000 });
+    await vi.waitFor(async () => expect(((await env.control('state')) as { requests: unknown[] }).requests.length).toBeGreaterThan(before + 1), { timeout: 3000 });
+    await vi.waitFor(() => expect(ui.$('#time-strip').hidden).toBe(true));
+    expect(ui.$('#error')).toBeNull();
+    // The next answer ends a pause early (the strip goes).
+    await env.control('config', { failNext: { status: 429, error: 'rate_limited', retryAfter: 30 } });
+    await ui.app.refresh();
+    expect(ui.app.rateLimit?.retry).not.toBeNull();
+    await ui.app.refresh();
+    expect(ui.app.rateLimit).toBeNull();
+    expect(ui.$('#time-strip').hidden).toBe(true);
   });
 });
