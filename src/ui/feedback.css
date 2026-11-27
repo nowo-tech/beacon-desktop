@@ -13,7 +13,7 @@
 .status-strip .ss-ico { display: grid; flex: none; }
 .status-strip .ss-ico svg { width: 16px; height: 16px; }
 .status-strip .ss-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.status-strip .ss-action { flex: none; min-height: 0; height: 26px; padding: 0 10px; border: 1px solid currentColor; border-radius: var(--r-sm); background: transparent; color: inherit; font: inherit; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; }
+.status-strip .ss-action { flex: none; min-height: 0; height: 26px; padding: 0 var(--sp-2); border: 1px solid currentColor; border-radius: var(--r-sm); background: transparent; color: inherit; font: inherit; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; }
 .status-strip .ss-action:hover:not([disabled]) { background: color-mix(in srgb, currentColor 10%, transparent); }
 .status-strip .ss-action[disabled] { opacity: 0.6; cursor: default; }
 .status-strip .ss-close { flex: none; display: grid; place-items: center; width: 28px; height: 28px; min-height: 0; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: inherit; cursor: pointer; }

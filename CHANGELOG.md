@@ -253,6 +253,14 @@ candidate. Needs TaskBoardBundle **3.4** (`client_api`, `/api/task-board/v1`) an
 (`task-board:read task-board:write`); without them the module shows its "Connect tasks" card and a refused request
 says so.
 
+### UX stack: spacing (UXA-37, deferred by batch 6)
+
+- The off-grid `10px` and `14px` paddings, margins and gaps in Chat, the shell, Tasks and the status strip snap to the
+  4 / 8 px grid one step down (`10px` to `--sp-2` 8 px, `14px` to `--sp-3` 12 px), so nothing grows and no label
+  wraps where it fitted before; sizes, radii, icon boxes, shadows and the 1–7 px optical offsets stay as they are. The
+  spacing tokens `--sp-1..6` now live on `:root`, so menus, popovers and dialogs share them.
+- Task panel: the logged time ("1 h 35 min") never wraps inside its box.
+
 ## [0.12.0] - 2026-11-27
 
 BD-3b, first part (design `docs/design/BEACON_DESKTOP.md` §7.2): chat writes. Needs ChatKitBundle
