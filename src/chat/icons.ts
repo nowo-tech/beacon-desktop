@@ -52,6 +52,9 @@ const ICONS = {
   plus: [['path', 'M12 5v14M5 12h14']],
   bell: [['path', 'M6 11a6 6 0 0 1 12 0v4l1.5 2.5h-15L6 15zM10 20.5a2.2 2.2 0 0 0 4 0']],
   check: [['path', 'm5 12.5 4.5 4.5L19 7.5']],
+  // UX batch 5: the chat home view (sidebar entry) and its mentions section.
+  home: [['path', 'M4 11 12 4.5l8 6.5M6.5 9.5v10h11v-10M10 19.5v-5h4v5']],
+  at: [['circle', 12, 12, 3.5], ['path', 'M15.5 12v1.5a2.5 2.5 0 0 0 5 0V12a8.5 8.5 0 1 0-3.4 6.8']],
 } satisfies Record<string, Shape[]>;
 
 export type ChatIconName = keyof typeof ICONS;

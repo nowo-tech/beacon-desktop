@@ -12,6 +12,7 @@ import type { TimeTrackApi } from '../api/client';
 import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
 import type { ChatHost, ChatRealtimeMode } from '../platform';
 import { type Child, h } from '../ui/dom';
+import { art, type Pose } from '../ui/mascot';
 import { ChatApi } from './api';
 import { plainText, renderBlocks } from './body';
 import { Composer } from './composer';
@@ -124,6 +125,12 @@ export class ChatModule {
   private readonly scroller: HTMLElement;
   private readonly list: HTMLElement;
   private readonly pill: HTMLButtonElement;
+  /** The chat home view (UX batch 5): unread, mentions, recent; shown while no conversation is open. */
+  private readonly home: HTMLElement;
+  /** Unread conversations whose newest page the home view loaded (once per context), for their mentions. */
+  private readonly peeked = new Set<string>();
+  /** A render of the timeline skipped while the person selects text in it (UXA-26); done when the selection ends. */
+  private deferredRender = false;
   private readonly head: HTMLElement;
   private readonly banner: HTMLElement;
   private readonly ask: HTMLElement;
@@ -169,7 +176,9 @@ export class ChatModule {
     this.pill = h('button', { class: 'new-pill', id: 'new-pill', attrs: { type: 'button', hidden: true } });
     this.pill.addEventListener('click', () => this.scrollToBottom(true));
     this.foot = h('div', { class: 'ch-foot', id: 'chat-foot' });
-    this.main = h('div', { class: 'chat-main', id: 'chat-main' }, this.head, this.ask, this.banner, h('div', { class: 'msgs-wrap' }, this.scroller, this.pill), this.foot);
+    this.home = h('section', { class: 'ch-home', id: 'chat-home', attrs: { 'aria-labelledby': 'chat-home-title', hidden: true } });
+    this.home.addEventListener('keydown', (event) => this.onHomeKey(event));
+    this.main = h('div', { class: 'chat-main', id: 'chat-main' }, this.head, this.ask, this.banner, h('div', { class: 'msgs-wrap' }, this.scroller, this.home, this.pill), this.foot);
     this.threadSlot = h('div', { class: 'thread-slot', id: 'thread-slot' });
     this.root = h('div', { class: 'chat', id: 'chat' }, this.side, this.main, this.threadSlot);
     this.scroller.addEventListener('scroll', () => this.onScroll(), { passive: true });
@@ -185,6 +194,13 @@ export class ChatModule {
     this.list.addEventListener('keydown', (event) => this.onMessageKey(event, this.list));
     this.list.addEventListener('contextmenu', (event) => this.onContextMenu(event));
     this.list.addEventListener('focusin', (event) => this.roving(event, this.list));
+    // A poll never clears a selection in progress: the timeline is drawn again once it ends (UXA-26).
+    globalThis.document?.addEventListener('selectionchange', () => {
+      if (this.deferredRender && !this.selectingInList()) {
+        this.deferredRender = false;
+        this.renderMessages();
+      }
+    });
   }
 
   private get t(): ChatText {
@@ -227,6 +243,7 @@ export class ChatModule {
         unauthorized: () => void this.lostAuthorization(),
         status: (state) => {
           this.netState = state;
+          this.outbox?.setOnline(state !== 'offline');
           this.renderBanner();
           this.renderSideFoot();
         },
@@ -239,6 +256,7 @@ export class ChatModule {
         changed: (conversation, root) => this.outboxChanged(conversation, root),
         sent: (pending) => this.deps.announce(pending.root === null ? this.t('messageSent') : this.t('replySent')),
         failed: () => this.deps.announce(this.t('messageNotSent')),
+        queued: () => this.deps.announce(this.t('messageQueued')),
         reactionFailed: (error) => {
           if (!(error instanceof ApiError && error.status === 401)) this.showNotice(this.t('reactionFailed'));
         },
@@ -285,6 +303,7 @@ export class ChatModule {
     this.api.setContext(context);
     this.history.clear();
     this.outbox?.clear();
+    this.peeked.clear();
     // Unsent text of the previous organization goes too (PRIVACY.md, audit ZDG-L2).
     this.drafts.clear();
     this.dropComposers();
@@ -472,6 +491,7 @@ export class ChatModule {
   }
 
   private outboxChanged(conversation: string, root: string | null): void {
+    this.renderBanner();
     if (conversation !== this.openUuid()) return;
     if (root === null) {
       this.renderMessages();
@@ -722,6 +742,7 @@ export class ChatModule {
     if (scope === 'list') {
       this.renderSide();
       this.renderHead();
+      if (this.connected && this.openUuid() === null) this.renderHome();
       const store = this.sync?.store;
       if (store !== undefined) this.deps.onUnread(store.badgeCount(this.clock.now()), store.unreadTotalCapped);
       if (store !== undefined && store.loaded) this.deps.onList?.(store.conversations(), this.openUuid());
@@ -868,7 +889,8 @@ export class ChatModule {
 
   private convIcon(row: Conversation, size: '' | 'sm' = 'sm'): Element {
     if (row.kind === 'direct') {
-      return h('span', { class: `av s22 ${avatarHue(row.uuid)}`, attrs: { 'aria-hidden': 'true' } }, row.initials, presence(row.peerStatus));
+      // The person's colour, as on their messages (UXA-12): from their id, the conversation's only without one.
+      return h('span', { class: `av s22 ${avatarHue(row.peerUuid ?? row.uuid)}`, attrs: { 'aria-hidden': 'true' } }, row.initials, presence(row.peerStatus));
     }
     const name: ChatIconName = row.kind === 'support' ? 'headset' : sectionOf(row) === 'projects' ? 'folder' : 'hash';
     return chatIcon(name, size);
@@ -903,6 +925,9 @@ export class ChatModule {
         this.iconButton('side-icon', 'search', t('searchConversations'), () => this.root.dispatchEvent(new CustomEvent('chat-switcher', { bubbles: true })), 'chat-search'),
       ),
     );
+    const homeLink = h('button', { class: 'side-home', id: 'chat-home-link', attrs: { type: 'button', 'aria-current': open === null ? 'page' : 'false' } }, chatIcon('home', 'sm'), h('span', {}, t('homeTitle')));
+    homeLink.addEventListener('click', () => void this.goHome());
+    nodes.push(homeLink);
     const anyUnread = store.conversations().some((row) => row.unread > 0 && row.uuid !== open && !isMuted(row, this.clock.now()));
     const jump = h('button', { class: 'jump', id: 'chat-jump', attrs: { type: 'button', disabled: !anyUnread || undefined, 'aria-keyshortcuts': 'Control+J Meta+J' } }, chatIcon('down', 'sm'), h('span', {}, anyUnread ? t('jumpUnread') : t('caughtUp')), h('kbd', {}, `${modKey()} J`));
     jump.addEventListener('click', () => this.jumpUnread());
@@ -1015,7 +1040,11 @@ export class ChatModule {
   private renderBanner(): void {
     const t = this.t;
     let text: string | null = null;
-    if (this.netState === 'offline') text = t('bannerOffline');
+    const queued = this.outbox?.queuedCount() ?? 0;
+    const waiting = this.outbox?.waitingCount() ?? 0;
+    if (this.netState === 'offline') text = queued === 0 ? t('bannerOffline') : queued === 1 ? t('bannerOfflineQueuedOne') : t('bannerOfflineQueued', { count: queued });
+    // Reads work again but the server still does not take the waiting messages (a `5xx`): say so, calmly.
+    else if (waiting > 0) text = queued === 1 ? t('bannerQueuedOne') : t('bannerQueued', { count: queued });
     else if (this.wasLive && this.mode === 'polling') text = t('bannerReconnecting');
     const nodes: Child[] = [];
     if (text !== null) nodes.push(h('span', { class: 'cb-text' }, text));
@@ -1073,7 +1102,11 @@ export class ChatModule {
     this.pill.replaceChildren(chatIcon('down', 'xs'), this.newBelow === 1 ? this.t('newPillOne') : this.t('newPill', { count: this.newBelow }));
   }
 
-  /** The timeline, keeping the reading position (anchor message and its offset) or the bottom. */
+  /**
+   * The timeline, keeping the reading position (anchor message and its offset) or the bottom. Keyed (UXA-26): rows whose
+   * content did not change keep their node (hover, focus and a text selection survive a poll); new rows are added and
+   * changed rows replaced. While the person selects text in the list the render waits for the selection to end.
+   */
   renderMessages(): void {
     const t = this.t;
     const sync = this.sync;
@@ -1081,19 +1114,23 @@ export class ChatModule {
     this.renderHead();
     this.renderFoot();
     this.main.dataset.open = open === null ? 'false' : 'true';
+    this.home.hidden = open !== null;
+    this.scroller.hidden = open === null;
     if (sync === null || open === null) {
-      const store = sync?.store;
-      const empty =
-        store !== undefined && store.loaded && store.conversations().length === 0
-          ? emptyState('chat', t('emptyContext', { name: this.contextName() }), t('emptyContextHint'))
-          : emptyState('chat', t('emptyPick'), t('emptyPickHint', { keys: `${modKey()} K` }));
-      this.list.replaceChildren(h('li', { class: 'empty-li' }, empty));
+      this.list.replaceChildren();
+      delete this.scroller.dataset.conv;
+      this.deferredRender = false;
       this.pill.hidden = true;
+      this.renderHome();
       return;
     }
     const timeline = sync.store.timeline(open);
     if (timeline === null) {
       this.list.replaceChildren(...skeletonMessages(6));
+      return;
+    }
+    if (this.scroller.dataset.conv === open && this.selectingInList()) {
+      this.deferredRender = true;
       return;
     }
     // Anchor: the first message visible at the top, and how far from the top it is.
@@ -1103,18 +1140,43 @@ export class ChatModule {
     const anchorUuid = anchor?.dataset.uuid ?? null;
     const focused = document.activeElement instanceof HTMLElement && this.list.contains(document.activeElement) ? document.activeElement.closest<HTMLElement>('li.msg')?.dataset.uuid : undefined;
     const row = sync.store.conversation(open);
-    const items: Node[] = [];
-    if (timeline.hasMore) items.push(...skeletonMessages(2, true));
-    else if (row !== null) items.push(h('li', { class: 'conv-start' }, this.convIcon(row, ''), h('span', {}, t('startOfConversation', { title: row.title }))));
+    // What every row of this list depends on besides its message (rights, the reaction row, the language).
+    const base = JSON.stringify([row?.canSend ?? false, this.access(), this.me?.reactions.quick ?? [], this.me?.user.uuid ?? null, this.deps.locale]);
+    const wanted: Keyed[] = [];
+    if (timeline.hasMore) skeletonMessages(2, true).forEach((node, i) => wanted.push({ key: `older-${i}`, sig: '', build: () => node }));
+    else if (row !== null) wanted.push({ key: `start:${open}`, sig: row.title, build: () => h('li', { class: 'conv-start' }, this.convIcon(row, ''), h('span', {}, t('startOfConversation', { title: row.title }))) });
     const [shown, pending] = this.withPending(open, null, timeline.messages);
-    for (const item of rows(shown, this.dividerAt, this.now(), t, this.deps.locale)) {
-      if (item.day !== null) items.push(h('li', { class: 'day-div', attrs: { 'aria-hidden': 'true' } }, h('span', {}, item.day)));
-      if (item.firstUnread) items.push(h('li', { class: 'new-div', id: 'new-div', attrs: { 'aria-hidden': 'true' } }, t('newDivider')));
-      const node = this.messageItem(item.message, item.continued, false, pending.get(item.message.uuid));
-      if (item.firstUnread) node.setAttribute('aria-label', `${t('newMessages')}. ${node.getAttribute('aria-label') ?? ''}`);
-      items.push(node);
+    const now = this.now();
+    for (const item of rows(shown, this.dividerAt, now, t, this.deps.locale)) {
+      if (item.day !== null) {
+        const day = item.day;
+        wanted.push({ key: `day:${day}`, sig: day, build: () => h('li', { class: 'day-div', attrs: { 'aria-hidden': 'true' } }, h('span', {}, day)) });
+      }
+      if (item.firstUnread) wanted.push({ key: 'new-div', sig: '', build: () => h('li', { class: 'new-div', id: 'new-div', attrs: { 'aria-hidden': 'true' } }, t('newDivider')) });
+      const message = item.message;
+      const waiting = pending.get(message.uuid);
+      const sig = JSON.stringify([
+        base,
+        message,
+        item.continued,
+        item.firstUnread,
+        dayLabel(message.createdAt, now, t, this.deps.locale),
+        waiting === undefined ? null : [waiting.state, waiting.error, waiting.canRetry],
+      ]);
+      wanted.push({
+        key: `m:${message.uuid}`,
+        sig,
+        build: () => {
+          const node = this.messageItem(message, item.continued, false, waiting);
+          if (item.firstUnread) node.setAttribute('aria-label', `${t('newMessages')}. ${node.getAttribute('aria-label') ?? ''}`);
+          return node;
+        },
+      });
     }
-    this.list.replaceChildren(...items);
+    reconcile(this.list, wanted);
+    // Long histories: rows far above the fold skip rendering until they come close (Modern Web Guidance
+    // `defer-rendering-heavy-content`); the newest rows, where reading starts, always render.
+    this.list.classList.toggle('long', wanted.length > LONG_LIST);
     this.setRovingStop(this.list, focused);
     if (wasBottom) {
       const divider = this.list.querySelector<HTMLElement>('#new-div');
@@ -1126,8 +1188,198 @@ export class ChatModule {
       if (again !== null) this.scroller.scrollTop += again.getBoundingClientRect().top - this.scroller.getBoundingClientRect().top - anchorOffset;
     }
     this.scroller.dataset.conv = open;
-    if (focused !== undefined) this.list.querySelector<HTMLElement>(`li.msg[data-uuid="${focused}"]`)?.focus({ preventScroll: true });
+    if (focused !== undefined && !(document.activeElement instanceof HTMLElement && this.list.contains(document.activeElement))) this.list.querySelector<HTMLElement>(`li.msg[data-uuid="${focused}"]`)?.focus({ preventScroll: true });
     this.renderPill();
+  }
+
+  /** A non-empty text selection inside the timeline (a poll must not clear it, UXA-26). */
+  private selectingInList(): boolean {
+    const selection = globalThis.getSelection?.() ?? null;
+    if (selection === null || selection.isCollapsed || selection.rangeCount === 0) return false;
+    const node = selection.getRangeAt(0).commonAncestorContainer;
+    return this.list.contains(node);
+  }
+
+  // ---- home view (UX batch 5, owner approval 2026-11-27) ----------------------------------------------------------------
+
+  /** Back to the home view (sidebar "Home"): the open conversation is marked read and left. */
+  async goHome(): Promise<void> {
+    const sync = this.sync;
+    const open = sync?.openUuid ?? null;
+    if (sync !== null && open !== null) {
+      await sync.markRead(open).catch(() => undefined);
+      sync.openUuid = null;
+      sync.closeThread();
+    }
+    this.render();
+    this.focusHome();
+  }
+
+  /** Focus on the home view's current row (its single tab stop), else its heading region. */
+  focusHome(): boolean {
+    if (this.home.hidden) return false;
+    const target = this.home.querySelector<HTMLElement>('.hm-row[tabindex="0"]') ?? this.home.querySelector<HTMLElement>('.hm-row');
+    if (target === null) return false;
+    target.focus();
+    return true;
+  }
+
+  /**
+   * Unread conversations, recent mentions and recent conversations of the context, in place of "Pick a conversation".
+   * Everything comes from memory: the list and the timelines loaded in this session; the newest page of up to
+   * {@link HOME_PEEK} unread conversations is loaded once per context so their mentions show.
+   */
+  private renderHome(): void {
+    const t = this.t;
+    const sync = this.sync;
+    const focusedKey = document.activeElement instanceof HTMLElement && this.home.contains(document.activeElement) ? document.activeElement.dataset.homeKey : undefined;
+    const nodes: Node[] = [];
+    const store = sync?.store;
+    const title = h('h1', { id: 'chat-home-title' }, t('homeTitle'));
+    if (store === undefined || !store.loaded) {
+      nodes.push(h('header', { class: 'hm-head' }, title, h('p', { class: 'hm-sub' }, this.contextName())), h('div', { class: 'hm-sec' }, skeletonRows(5)));
+      this.home.replaceChildren(...nodes);
+      return;
+    }
+    const now = this.clock.now();
+    const all = store.conversations();
+    if (all.length === 0) {
+      nodes.push(
+        h('header', { class: 'hm-head' }, title, h('p', { class: 'hm-sub' }, this.contextName())),
+        h('div', { class: 'empty hm-empty' }, homeArt('pose-reading'), h('b', {}, t('emptyContext', { name: this.contextName() })), h('span', {}, t('emptyContextHint'))),
+      );
+      this.home.replaceChildren(...nodes);
+      return;
+    }
+    const unread = all.filter((row) => row.unread > 0 && !isMuted(row, now)).sort((a, b) => (a.lastMessageAt < b.lastMessageAt ? 1 : a.lastMessageAt > b.lastMessageAt ? -1 : 0));
+    const mentions = store.mentions(HOME_MENTIONS);
+    const unreadIds = new Set(unread.map((row) => row.uuid));
+    const recent = [...new Set([...this.recent, ...all.map((row) => row.uuid)])]
+      .filter((uuid) => !unreadIds.has(uuid))
+      .map((uuid) => store.conversation(uuid))
+      .filter((row): row is Conversation => row !== null)
+      .slice(0, HOME_RECENT);
+    const summary = unread.length === 0 ? t('homeCaughtUp') : unread.length === 1 ? t('homeSummaryOne') : t('homeSummary', { count: unread.length });
+    nodes.push(h('header', { class: 'hm-head' }, title, h('p', { class: 'hm-sub' }, `${this.contextName()} · ${summary}`)));
+    // Unread first: what needs the reader.
+    const unreadList = h('ul', { class: 'hm-list', attrs: { 'aria-labelledby': 'hm-unread' } });
+    for (const row of unread.slice(0, HOME_UNREAD)) unreadList.append(h('li', {}, this.homeConversation(row, `u:${row.uuid}`, true)));
+    const unreadBody: Child =
+      unread.length === 0 ? h('div', { class: 'hm-calm' }, homeArt('mascot-small'), h('span', {}, h('b', {}, t('caughtUp')), h('span', {}, t('homeCaughtUpHint')))) : unreadList;
+    nodes.push(this.homeSection('hm-unread', 'chat', t('homeUnread'), unreadBody, unread.length > HOME_UNREAD ? t('homeMore', { count: unread.length - HOME_UNREAD }) : null));
+    // Mentions: who asked for the reader, with the words around it.
+    const mentionList = h('ul', { class: 'hm-list', attrs: { 'aria-labelledby': 'hm-mentions' } });
+    for (const item of mentions) {
+      const key = `m:${item.message.uuid}`;
+      const author = item.message.author;
+      const where = item.conversation.title;
+      const button = h(
+        'button',
+        { class: `hm-row mention${item.unread ? ' unread' : ''}`, attrs: { type: 'button', tabindex: '-1', 'data-home-key': key } },
+        h('span', { class: `av s22 ${author.bot ? 'bot' : avatarHue(author.uuid ?? author.name)}`, attrs: { 'aria-hidden': 'true' } }, author.initials),
+        h(
+          'span',
+          { class: 'hm-main' },
+          h('span', { class: 'hm-line' }, h('span', { class: 'hm-name' }, t('homeMentionBy', { author: author.name, title: where })), h('time', { class: 'hm-time', attrs: { datetime: item.message.createdAt } }, this.homeTime(item.message.createdAt))),
+          h('span', { class: 'hm-text' }, plainText(item.message.blocks, 140)),
+        ),
+        item.unread ? h('span', { class: 'sr-only' }, `, ${t('homeUnreadMention')}`) : null,
+      );
+      button.addEventListener('click', () => void this.openAt(item.conversation.uuid, item.message.uuid));
+      mentionList.append(h('li', {}, button));
+    }
+    const mentionBody: Child = mentions.length === 0 ? h('p', { class: 'hm-none' }, t('homeNoMentions')) : mentionList;
+    nodes.push(this.homeSection('hm-mentions', 'at', t('homeMentions'), mentionBody, null));
+    if (recent.length > 0) {
+      const recentList = h('ul', { class: 'hm-list', attrs: { 'aria-labelledby': 'hm-recent' } });
+      for (const row of recent) recentList.append(h('li', {}, this.homeConversation(row, `r:${row.uuid}`, false)));
+      nodes.push(this.homeSection('hm-recent', 'clock', t('homeRecent'), recentList, null));
+    }
+    this.home.replaceChildren(...nodes);
+    // One tab stop for the rows (↑ ↓ Home End move, Enter opens): the one that had focus, else the first.
+    const rowsShown = [...this.home.querySelectorAll<HTMLElement>('.hm-row')];
+    const stop = rowsShown.find((item) => item.dataset.homeKey === focusedKey) ?? rowsShown[0];
+    if (stop !== undefined) stop.tabIndex = 0;
+    if (focusedKey !== undefined) stop?.focus({ preventScroll: true });
+    this.peekUnread(unread);
+  }
+
+  private homeSection(id: string, icon: ChatIconName, label: string, body: Child, more: string | null): HTMLElement {
+    return h('section', { class: 'hm-sec', attrs: { 'aria-labelledby': id } }, h('h2', { id, class: 'hm-h' }, chatIcon(icon, 'sm'), h('span', {}, label)), body, more !== null ? h('p', { class: 'hm-more' }, more) : null);
+  }
+
+  private homeConversation(row: Conversation, key: string, unread: boolean): HTMLButtonElement {
+    const muted = isMuted(row, this.clock.now());
+    const button = h(
+      'button',
+      { class: `hm-row${unread ? ' unread' : ''}`, attrs: { type: 'button', tabindex: '-1', 'data-home-key': key } },
+      h('span', { class: 'c-ico' }, this.convIcon(row)),
+      h('span', { class: 'sr-only' }, `${this.convKind(row)} `),
+      h(
+        'span',
+        { class: 'hm-main' },
+        h('span', { class: 'hm-line' }, h('span', { class: 'hm-name' }, row.title), row.lastMessageAt !== '' ? h('time', { class: 'hm-time', attrs: { datetime: row.lastMessageAt } }, this.homeTime(row.lastMessageAt)) : null),
+        row.preview !== null && row.preview !== '' ? h('span', { class: 'hm-text' }, row.preview) : row.subtitle !== '' ? h('span', { class: 'hm-text' }, row.subtitle) : null,
+      ),
+      h('span', { class: 'sr-only' }, this.convSuffix(row)),
+      muted ? chatIcon('bell-off', 'xs') : null,
+      unread ? h('span', { class: 'badge', attrs: { 'aria-hidden': 'true' } }, row.unread > 99 ? '99+' : String(row.unread)) : null,
+    );
+    button.addEventListener('click', () => void this.open(row.uuid));
+    return button;
+  }
+
+  /** Today: the time; earlier: the day (as the timeline's dividers say it). */
+  private homeTime(iso: string): string {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return '';
+    const now = this.now();
+    return date.toDateString() === now.toDateString() ? this.time(iso) : dayLabel(iso, now, this.t, this.deps.locale);
+  }
+
+  /** Opens a conversation at a message (a mention of the home view): focused and centred once drawn. */
+  private async openAt(conversation: string, message: string): Promise<void> {
+    await this.open(conversation, false);
+    const item = this.list.querySelector<HTMLElement>(`li.msg[data-uuid="${message}"]`);
+    if (item === null) {
+      this.scroller.focus({ preventScroll: true });
+      return;
+    }
+    this.stick = false;
+    item.scrollIntoView({ block: 'center' });
+    item.focus({ preventScroll: true });
+  }
+
+  /** The newest page of a few unread conversations, once per context, so their mentions reach the home view. */
+  private peekUnread(unread: Conversation[]): void {
+    const sync = this.sync;
+    if (sync === null) return;
+    for (const row of unread.filter((item) => !this.peeked.has(item.uuid) && sync.store.timeline(item.uuid) === null).slice(0, HOME_PEEK)) {
+      this.peeked.add(row.uuid);
+      void sync
+        .peek(row.uuid)
+        .then(() => {
+          if (this.sync === sync && sync.openUuid === null) this.renderHome();
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  private onHomeKey(event: KeyboardEvent): void {
+    const current = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.hm-row') : null;
+    if (current === null || event.altKey || event.ctrlKey || event.metaKey) return;
+    const items = [...this.home.querySelectorAll<HTMLElement>('.hm-row')];
+    const index = items.indexOf(current);
+    let next: HTMLElement | undefined;
+    if (event.key === 'ArrowDown') next = items[index + 1];
+    else if (event.key === 'ArrowUp') next = items[index - 1];
+    else if (event.key === 'Home') next = items[0];
+    else if (event.key === 'End') next = items[items.length - 1];
+    else return;
+    event.preventDefault();
+    if (next === undefined) return;
+    for (const item of items) item.tabIndex = item === next ? 0 : -1;
+    next.focus();
   }
 
   /** The loaded messages plus the writes not in them yet (as typed, or the server's copy once sent). */
@@ -1151,6 +1403,23 @@ export class ChatModule {
     if (pending.state === 'sent') return null;
     if (pending.state === 'sending' || pending.state === 'waiting') {
       return h('div', { class: 'm-status', attrs: { role: 'status' } }, h('span', { class: 'spin', attrs: { 'aria-hidden': 'true' } }), pending.state === 'sending' ? t('pendingSending') : t('pendingWaiting'));
+    }
+    if (pending.state === 'queued') {
+      // Waiting for the connection (offline queue, UXA-6), or its turn behind an older message: never "Not sent".
+      const offline = pending.error !== null;
+      const actions: HTMLElement[] = [];
+      if (offline) actions.push(this.button('btn sm', t('queueSendNow'), () => this.outbox?.retry(pending.key)));
+      actions.push(
+        this.button('btn sm btn-quiet', t('queueCancel'), () => {
+          const dropped = this.outbox?.discard(pending.key);
+          const target = pending.root === null ? this.composer : this.threadComposer;
+          // The words are not lost: back in an empty message box, else announced as cancelled.
+          if (dropped !== null && dropped !== undefined && target !== null && target.field.value.trim() === '') target.setText(dropped.text);
+          else target?.focus();
+          this.deps.announce(t('queueCancelled'));
+        }),
+      );
+      return h('div', { class: `m-status queued${offline ? ' offline' : ''}`, attrs: { role: 'status' } }, chatIcon('clock', 'xs'), h('span', {}, offline ? t('pendingQueued') : t('pendingWaiting')), ...actions);
     }
     const reason =
       pending.error === 'read_only'
@@ -1272,7 +1541,14 @@ export class ChatModule {
     if (message.blocks === null) column.append(h('div', { class: 'm-body deleted' }, t('deleted')));
     else {
       const body = renderBlocks(message.blocks, { t, me: this.me?.user.uuid ?? null, open: (url) => void this.deps.host.openLink(url).catch(() => undefined) });
-      if (message.edited) body.append(h('span', { class: 'edited' }, t('edited')));
+      // Inline after the last words (UXA-33), never a line of its own; after a code block it follows on the next line.
+      if (message.edited) {
+        const last = body.lastElementChild;
+        const host = last instanceof HTMLElement && (last.tagName === 'UL' || last.tagName === 'OL') ? last.lastElementChild : last;
+        const mark = h('span', { class: 'edited' }, t('edited'));
+        if (host instanceof HTMLElement && host.tagName !== 'PRE') host.append(' ', mark);
+        else body.append(mark);
+      }
       column.append(body);
     }
     const row = this.sync?.store.conversation(this.openUuid()) ?? null;
@@ -1567,6 +1843,62 @@ export class ChatModule {
   }
 }
 
+/** Rows of the timeline beyond which the older ones skip rendering while off screen (UXA-26). */
+const LONG_LIST = 120;
+/** Home view sizes: unread rows, mentions, recent rows, unread conversations whose newest page it loads. */
+const HOME_UNREAD = 8;
+const HOME_MENTIONS = 5;
+const HOME_RECENT = 5;
+const HOME_PEEK = 3;
+
+/** One row of a keyed list: `sig` is everything it shows; the same key and sig keep the node. */
+interface Keyed {
+  key: string;
+  sig: string;
+  build(): HTMLElement;
+}
+
+const SIGNATURES = new WeakMap<Element, string>();
+const KEYS = new WeakMap<Element, string>();
+
+/**
+ * Puts `wanted` in `parent` with as few DOM changes as possible: a row whose key and signature are unchanged keeps
+ * its node (and so its hover, focus and selection), other rows are built; rows no longer wanted are removed.
+ */
+export function reconcile(parent: HTMLElement, wanted: Keyed[]): void {
+  const existing = new Map<string, Element>();
+  for (const child of parent.children) {
+    const key = KEYS.get(child);
+    if (key !== undefined && !existing.has(key)) existing.set(key, child);
+  }
+  const nodes = wanted.map((item) => {
+    const old = existing.get(item.key);
+    if (old !== undefined && SIGNATURES.get(old) === item.sig) {
+      existing.delete(item.key);
+      return old;
+    }
+    const node = item.build();
+    KEYS.set(node, item.key);
+    SIGNATURES.set(node, item.sig);
+    return node;
+  });
+  const keep = new Set<Element>(nodes);
+  for (const child of [...parent.children]) if (!keep.has(child)) child.remove();
+  let cursor = parent.firstElementChild;
+  for (const node of nodes) {
+    if (node === cursor) {
+      cursor = cursor.nextElementSibling;
+      continue;
+    }
+    parent.insertBefore(node, cursor);
+  }
+}
+
+/** A small, decorative mascot of a chat empty state (UXA-47; never inside a conversation, design §5). */
+function homeArt(pose: Pose): HTMLElement {
+  return art(pose, '', 'mascot tiny hm-art');
+}
+
 function modKey(): string {
   return /mac/i.test(globalThis.navigator?.platform ?? '') ? '⌘' : 'Ctrl';
 }
@@ -1582,10 +1914,6 @@ export function avatarHue(seed: string): string {
 function presence(status: string | null): Child {
   if (status === null || status === 'offline') return null;
   return h('span', { class: `pr ${status === 'online' ? 'active' : status === 'busy' || status === 'dnd' ? 'dnd' : 'away'}` });
-}
-
-function emptyState(icon: ChatIconName, title: string, hint: string): HTMLElement {
-  return h('div', { class: 'empty' }, h('span', { class: 'e-ico', attrs: { 'aria-hidden': 'true' } }, chatIcon(icon, 'lg')), h('b', {}, title), h('span', {}, hint));
 }
 
 /** Skeleton rows shaped like conversations. */
@@ -1611,6 +1939,13 @@ export function showMenu(x: number, y: number, entries: [string, () => void][], 
     menu.remove();
     refocus(back);
   };
+  // Light dismiss by the browser (a click outside, UXA-46): the menu goes, focus stays where the click put it.
+  menu.addEventListener('toggle', (event) => {
+    if ((event as ToggleEvent).newState === 'closed' && shown) {
+      shown = false;
+      menu.remove();
+    }
+  });
   for (const [label, run] of entries) {
     const item = h('button', { attrs: { type: 'button', role: 'menuitem', tabindex: '-1' } }, label);
     item.addEventListener('click', () => {
@@ -1640,9 +1975,25 @@ export function showMenu(x: number, y: number, entries: [string, () => void][], 
   });
   menu.style.left = `${Math.min(x, (globalThis.innerWidth || 800) - 240)}px`;
   menu.style.top = `${Math.min(y, (globalThis.innerHeight || 600) - 40 * entries.length - 16)}px`;
-  document.body.append(menu);
+  present(menu);
   menu.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
   return menu;
+}
+
+/** The Popover API where the webview has it (top layer, light dismiss; UXA-46), else a plain fixed element. */
+function present(menu: HTMLElement): void {
+  document.body.append(menu);
+  if (typeof menu.showPopover !== 'function' || !Object.hasOwn(HTMLElement.prototype, 'popover')) return;
+  menu.setAttribute('popover', 'auto');
+  try {
+    menu.showPopover();
+  } catch {
+    // Not in the document or already shown: the fixed element still works.
+  }
+}
+
+function anchorPositioning(): boolean {
+  return typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('anchor-name: --a');
 }
 
 /** Toolbar room above the row (its height minus what overlaps the row): below it, the toolbar moves inside the row. */
@@ -1673,13 +2024,26 @@ function refocus(element: HTMLElement): void {
 export function showEmojiMenu(anchor: HTMLElement, emojis: string[], mine: Set<string>, t: ChatText, pick: (emoji: string) => void, back: HTMLElement): HTMLElement {
   document.querySelector('.ctx-menu')?.remove();
   const menu = h('div', { class: 'menu ctx-menu emoji-menu', attrs: { role: 'menu', 'aria-label': t('reactions'), 'aria-orientation': 'horizontal' } });
+  // From a message's toolbar the picker takes the toolbar's place (UXA-34): one floating bar, never two stacked.
+  const toolbar = anchor.closest<HTMLElement>('.m-actions');
+  const host = toolbar?.closest<HTMLElement>('li.msg') ?? null;
+  const target = toolbar ?? anchor;
+  host?.classList.add('picking');
   let shown = true;
   const close = (focusBack: boolean) => {
     if (!shown) return;
     shown = false;
     menu.remove();
+    // A picker opened since (the old one's close can come late, from its toggle event) keeps its anchor and its swap.
+    if (document.querySelector('.emoji-menu') === null) {
+      host?.classList.remove('picking');
+      target.style.removeProperty('anchor-name');
+    }
     if (focusBack) refocus(back);
   };
+  menu.addEventListener('toggle', (event) => {
+    if ((event as ToggleEvent).newState === 'closed') close(false);
+  });
   for (const emoji of emojis) {
     const item = h('button', { attrs: { type: 'button', role: 'menuitemcheckbox', tabindex: '-1', 'aria-checked': mine.has(emoji) ? 'true' : 'false', 'aria-label': t('reactWith', { emoji }), title: t('reactWith', { emoji }) } }, h('span', { attrs: { 'aria-hidden': 'true' } }, emoji));
     item.addEventListener('click', () => {
@@ -1709,11 +2073,25 @@ export function showEmojiMenu(anchor: HTMLElement, emojis: string[], mine: Set<s
   menu.addEventListener('focusout', (event) => {
     if (!menu.contains(event.relatedTarget as Node | null)) close(false);
   });
-  const box = anchor.getBoundingClientRect();
-  const width = Math.min(40 * emojis.length + 12, 420);
-  menu.style.left = `${Math.max(8, Math.min(box.left, (globalThis.innerWidth || 800) - width - 8))}px`;
-  menu.style.top = `${box.bottom + 48 > (globalThis.innerHeight || 600) ? Math.max(8, box.top - 48) : box.bottom + 4}px`;
-  document.body.append(menu);
+  const anchored = anchorPositioning();
+  if (anchored) {
+    // CSS anchor positioning where the webview has it (Chromium, Safari 26+): the browser keeps it on screen.
+    document.querySelectorAll<HTMLElement>('[style*="anchor-name"]').forEach((other) => other.style.removeProperty('anchor-name'));
+    target.style.setProperty('anchor-name', '--ck-menu-anchor');
+    menu.classList.add('anchored', toolbar !== null ? 'over' : 'below');
+  }
+  present(menu);
+  if (!anchored) {
+    // WebKitGTK and older WKWebView: the same places, computed here from the drawn size.
+    const box = target.getBoundingClientRect();
+    const width = menu.getBoundingClientRect().width || Math.min(40 * emojis.length + 12, 420);
+    const viewW = globalThis.innerWidth || 800;
+    const viewH = globalThis.innerHeight || 600;
+    const left = toolbar !== null ? box.right - width : box.left;
+    menu.style.left = `${Math.max(8, Math.min(left, viewW - width - 8))}px`;
+    const top = toolbar !== null ? box.top : box.bottom + 48 > viewH ? box.top - 48 : box.bottom + 4;
+    menu.style.top = `${Math.max(8, Math.min(top, viewH - 52))}px`;
+  }
   menu.querySelector<HTMLElement>('[role="menuitemcheckbox"]')?.focus();
   return menu;
 }

@@ -66,14 +66,24 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.locator('#msg-list li.msg').last()).not.toContainText('**');
     await expect(page.locator('#msg-list li.msg.pending')).toHaveCount(0);
     expect((await writes()).filter((write) => write.kind === 'send')).toHaveLength(2);
-    // A failed send keeps its key: Retry is written once.
-    await control('config', { chatFailNext: { status: 503, error: 'server_error' } });
+    // A send the server could not take waits in the queue (UXA-6) and keeps its key: Try now is written once.
+    // The server keeps refusing writes for a while (the queue's own probe gets 503s too), then recovers.
+    await control('config', { chatFailNext: { status: 503, error: 'server_error', writesOnly: true, times: 1000 } });
     await page.keyboard.type('Second try');
     await page.keyboard.press('Enter');
-    await expect(page.locator('#msg-list li.msg.pending.failed')).toBeVisible();
+    await expect(page.locator('#msg-list li.msg.pending.queued')).toContainText('Waiting for connection');
     expect(await axe(page)).toEqual([]);
-    await page.locator('#msg-list li.msg.pending.failed').getByRole('button', { name: 'Retry' }).click();
-    await expect(page.locator('#msg-list li.msg.pending')).toHaveCount(0);
+    const waiting = page.locator('#msg-list li.msg.pending.queued');
+    // Waiting, not failed: no flicker to "Sending…" while the queue probes, Try now and Cancel stay.
+    await expect(waiting.getByRole('button', { name: 'Try now' })).toBeVisible();
+    await expect(waiting.getByRole('button', { name: 'Cancel' })).toBeVisible();
+    await expect(page.locator('#msg-list li.msg.pending.failed')).toHaveCount(0);
+    // The server takes writes again: Try now sends it (unless the queue's own probe got there first).
+    await control('config', { chatFailNext: null });
+    await expect(async () => {
+      if ((await waiting.count()) > 0) await waiting.getByRole('button', { name: 'Try now' }).click({ timeout: 1000 });
+      await expect(page.locator('#msg-list li.msg.pending')).toHaveCount(0, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
     expect((await writes()).filter((write) => write.kind === 'send' && !write.replayed)).toHaveLength(3);
     // ↑ from the empty box to the last message, then up to the thread root; R replies in its thread.
     await page.locator('#composer').focus();
@@ -125,4 +135,64 @@ test('a read-only conversation says why there is no message box', async ({ page 
   await expect(page.locator('#chat-foot')).toHaveText('You cannot post in this conversation.');
   await expect(page.locator('#composer')).toHaveCount(0);
   expect(await axe(page)).toEqual([]);
+});
+
+test('offline: messages wait, keep their order, survive a module switch and go out once when the connection is back', async ({ page, context }) => {
+  await openEnvelope(page);
+  await context.setOffline(true);
+  await page.locator('#composer').focus();
+  await page.keyboard.type('Written on the train');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('And a second thought');
+  await page.keyboard.press('Enter');
+  const queued = page.locator('#msg-list li.msg.pending.queued');
+  await expect(queued).toHaveCount(2);
+  await expect(queued.first()).toContainText('Waiting for connection. It sends when you are back online.');
+  await expect(page.locator('#chat-banner')).toContainText('messages will send when the connection is back');
+  expect(await axe(page)).toEqual([]);
+  // Time and back: the queue lives in the chat module.
+  await page.keyboard.press('Control+2');
+  await page.keyboard.press('Control+1');
+  await expect(queued).toHaveCount(2);
+  await context.setOffline(false);
+  await expect(page.locator('#msg-list li.msg.pending')).toHaveCount(0, { timeout: 20_000 });
+  const bodies = await page.locator('#msg-list li.msg .m-body').allTextContents();
+  expect(bodies.slice(-2)).toEqual(['Written on the train', 'And a second thought']);
+  const sends = (await writes()).filter((write) => write.kind === 'send');
+  expect(sends).toHaveLength(2);
+  expect(new Set(sends.map((write) => write.key)).size).toBe(2);
+});
+
+test('the reaction picker takes the toolbar\'s place in the top layer; the home view is keyboard reachable', async ({ page }) => {
+  await openEnvelope(page);
+  const root = page.locator('#msg-list li.msg', { has: page.locator('.thread-link') }).first();
+  await root.hover();
+  await root.locator('.m-actions [aria-haspopup="menu"]').first().click();
+  const menu = page.locator('.emoji-menu');
+  await expect(menu).toBeVisible();
+  expect(await menu.evaluate((el) => el.matches(':popover-open'))).toBe(true);
+  // One floating bar: the toolbar is hidden while the picker sits where it is laid out (same top, right edges aligned).
+  await expect(root.locator('.m-actions')).toHaveCSS('opacity', '0');
+  const offset = async () => {
+    const [bar, picker] = [await root.locator('.m-actions').boundingBox(), await menu.boundingBox()];
+    if (bar === null || picker === null) return Infinity;
+    return Math.max(Math.abs(picker.y - bar.y), Math.abs(picker.x + picker.width - (bar.x + bar.width)));
+  };
+  await expect.poll(offset).toBeLessThanOrEqual(2);
+  expect(await axe(page)).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  // Esc leaves the conversation; Tab reaches the home view's rows, ↓ moves between them, Enter opens.
+  await page.locator('#msg-scroll').focus();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#chat-home')).toBeVisible();
+  await page.locator('#chat-home-link').focus();
+  await expect(page.locator('#chat-home-link')).toHaveAttribute('aria-current', 'page');
+  const rows = page.locator('#chat-home .hm-row');
+  await rows.first().focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(rows.nth(1)).toBeFocused();
+  const name = (await rows.nth(1).locator('.hm-name').textContent()) ?? '';
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#chat-title')).toContainText(name.split(' in ').at(-1) ?? name);
 });

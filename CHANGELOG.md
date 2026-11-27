@@ -91,6 +91,26 @@ Pre-release audit BDA13 of the 0.13.0 candidate (nothing here affects 0.12.0 or 
   to revoke it on the server yet (chat has `POST …/chat/v1/logout`); it stays valid until it expires. To end it at
   once, revoke the device in Beacon (Account → Security). The app will call the route once TaskBoard offers one.
 
+### UX batch 5: chat polish (UX audit 2026-11-27)
+
+- **Offline send queue** (UXA-6, owner approval 2026-11-27): a message that cannot reach the server (no network, a
+  `5xx`) waits as "Waiting for connection" with *Try now* and *Cancel* instead of failing; it goes out when the
+  connection is back (or on a backoff probe), in the order it was written, once (same `Idempotency-Key`, one attempt in
+  flight). The banner counts the waiting messages. The queue survives switching modules; it is memory only and does
+  not survive a context switch, disconnecting chat, sign-out or quitting the app.
+- **Chat home view** (owner approval 2026-11-27) instead of "Pick a conversation": unread conversations, recent
+  mentions and recent conversations, a *Home* entry in the sidebar, keyboard first (one tab stop, arrows, Enter).
+- The timeline is rendered by key (UXA-26): unchanged rows keep their nodes, a poll no longer clears a text selection
+  (the update waits until it ends), and long histories skip rendering rows far off screen.
+- Direct messages use the person's initials and colour, the same as on their messages (UXA-12; ChatKit `peerUuid`).
+- The reaction picker takes the toolbar's place instead of stacking over it (UXA-34); chat menus open in the top layer
+  with the Popover API and use CSS anchor positioning where the webview has it, with the previous placement as the
+  fallback (UXA-46).
+- "(edited)" stays on the line of the last words (UXA-33); skeleton avatars are neutral blocks (UXA-35); the message
+  box shows a shadow under its toolbar when its text scrolls (UXA-39); small mascot art in the chat's empty states
+  (UXA-47, Chat only).
+- The chat connect card no longer says "Read-only in this version" or "no notifications yet" (UXA-5).
+
 ### UX batch 6: Time in the shell, one Settings, guided first run
 
 From the UX audit of 2026-11-27 (UXA-1, 2, 4, 24, 25, 30, 36, 37); the owner approved the changes to the bd-3a screens.

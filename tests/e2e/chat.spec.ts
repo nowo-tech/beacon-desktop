@@ -82,7 +82,11 @@ test('connect chat, read a conversation and its thread, keyboard-first, no a11y 
   // Esc marks read and leaves the conversation.
   await page.locator('#msg-scroll').focus();
   await page.keyboard.press('Escape');
-  await expect(page.locator('.empty')).toContainText('Pick a conversation');
+  // The home view replaces "Pick a conversation" (UX batch 5): unread, mentions, recent; one tab stop, ↑ ↓.
+  await expect(page.locator('#chat-home h1')).toHaveText('Home');
+  await expect(page.locator('#chat-home .hm-h')).toContainText(['Unread', 'Mentions', 'Recent']);
+  await expect(page.locator('#chat-home .hm-row.mention').first()).toContainText('Maya Okafor in envelope-v2');
+  expect(await axe(page)).toEqual([]);
   // The shortcut sheet.
   await page.keyboard.press('?');
   await expect(page.locator('#shell-keys')).toBeVisible();

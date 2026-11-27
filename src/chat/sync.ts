@@ -220,6 +220,20 @@ export class ChatSync {
     });
   }
 
+  /**
+   * Loads the newest page of a conversation that is not open, when nothing of it is loaded yet (chat home view: the
+   * mentions of unread conversations). No event: the caller redraws what it shows.
+   */
+  async peek(uuid: string): Promise<void> {
+    if (this.store.timeline(uuid) !== null) return;
+    const generation = this.generation;
+    await this.once(`open:${uuid}`, async () => {
+      const page = await this.call(() => this.api.messages(uuid, { limit: PAGE_SIZE }));
+      if (!this.current(generation) || this.store.conversation(uuid) === null) return;
+      this.store.applyMessages(uuid, page, 'newest');
+    });
+  }
+
   /** Infinite scroll up: the page before the oldest loaded message. Resolves `false` when nothing older exists. */
   async loadOlder(uuid: string): Promise<boolean> {
     const timeline = this.store.timeline(uuid);
