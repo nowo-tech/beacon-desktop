@@ -39,8 +39,8 @@
 .tasks-mod .pill.p-high { background: var(--warn-soft); color: var(--warn); }
 .tasks-mod .pill.due-today { background: var(--signal-soft); color: var(--signal); }
 .tasks-mod .pill.q { background: var(--slate-soft); color: var(--slate); }
-.tasks-mod .tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 3px; font-size: 10.5px; font-weight: 600; white-space: nowrap; background: color-mix(in srgb, var(--tc) 16%, transparent); box-shadow: inset 2px 0 0 var(--tc); color: var(--ink); }
-.tasks-mod .prio { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.tasks-mod .tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 3px; font-size: var(--fs-2xs); font-weight: 600; white-space: nowrap; background: color-mix(in srgb, var(--tc) 16%, transparent); box-shadow: inset 2px 0 0 var(--tc); color: var(--ink); }
+.tasks-mod .prio { display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-2xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
 .tasks-mod .prio.urgent { color: var(--danger); }
 .tasks-mod .prio.high { color: var(--warn); }
 .tasks-mod .prio.low { color: var(--ink-3); }
