@@ -519,11 +519,48 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
   follows the install: "Update after stop" while it waits for the timer, "Updating 45%", then "Restarting…". A manual
   "Check for updates…" that finds one opens the panel. "Later" hides pill and panel until a manual check or the next
   launch. The forced update keeps its full screen, with its way out (Remind me later), unchanged.
-- **Title bar at 900 px** (UXA-9). Below 1100 px the search collapses to its icon (same name and `Ctrl+K`) and the
-  brand to its mark before anything else; the organization keeps at least 12 characters and the running task at
-  least a few before an ellipsis.
+- **Title bar at 900 px** (UXA-9). Below 1100 px the search collapses to its icon (same name and `Ctrl+K`, the global
+  switcher of §5.2) and the brand to its mark before anything else; the organization keeps at least 12 characters and
+  the running task at least a few before an ellipsis.
 - **Tray** (UXA-41). *Quick add task…* (while tasks are connected) opens the window on Tasks with quick add focused.
   Empty submenus (Switch to, Today's meetings) are not shown.
+
+### 5.2 Keyboard: global shortcuts in every module (UX batches 2 + 3, owner approval 2026-11-27)
+
+- **App-wide keys**, handled by the shell before the module in view, the same in Chat, Tasks and Time:
+
+  | Key | Does |
+  |---|---|
+  | `Ctrl/⌘+K` | Quick switcher (also from a text field) |
+  | `Ctrl/⌘+1` `2` `3` | Chat / Tasks / Time |
+  | `F6` / `Shift+F6` | Next / previous area: title bar, rail, the module's panes |
+  | `Ctrl/⌘+,` | Settings |
+  | `Ctrl/⌘+Shift+L` | Light / dark theme (its only meaning) |
+  | `Ctrl/⌘+Shift+S` | Stop the timer, or resume the last task |
+  | `Ctrl/⌘+Shift+M` | Mini timer (where the platform has it) |
+  | `?` | The shortcut sheet |
+
+  `Ctrl/⌘+Shift+L` used to be the compact / full view in the standalone Time window; that view keeps its header button
+  and tray item, and the hosted Time module never had it (§5, UX batch 6).
+- **Quick switcher**: one list over the modules that are connected. Chat: conversations (recent first, unread in
+  bold). Tasks: the boards, then the tasks loaded (My tasks first); a board opens the board view on it, a task opens
+  its panel. Time: *Stop the timer* while one runs, *Start timer* / *Switch timer here* on pinned and recent tasks (and
+  on any task of the list once you type), *My time* and *Pinned and recent* (full layout). With no query the module in
+  view leads with up to 8 of its own, the others follow with 3 each; with a query every match is ranked together by
+  the same fuzzy score, the module in view winning ties. In Time, `/` searches the task list.
+- **The sheet** (`?`) shows *Anywhere* and the section of the module in view only (Chat, Tasks or Time).
+- **Areas** (`F6`): title bar (the search), rail (the selected module), then Chat's sidebar (the conversation that
+  takes Tab), conversation (the message box; the home view's first row) and thread; Tasks' page (the row or card that
+  takes Tab, else quick add) and task panel; Time's sidebar (the current section), list (the search field) and details.
+  From outside any area `F6` starts at the module's first pane, `Shift+F6` at its last.
+- **`Alt+↑` / `Alt+↓`**: previous / next conversation (Chat), board (Tasks, board and list views), section (Time, full
+  layout).
+- **Long lists are one Tab stop** (roving tabindex, `src/ui/roving.ts`): the chat sidebar, My tasks and the list view
+  (`↑ ↓ Home End`; in a task row `← →` reach its checkbox, status menu and play button, which are not Tab stops), the
+  Time list (UX batch 6) and the chat home view (UX batch 5). Tab follows the visual order: title bar, rail, sidebar,
+  content.
+- **Landmarks**: one `header` (the title bar), the rail and the module sidebars are `nav`, each module's content is
+  its `main` (only the shown module's is visible), detail panels are `aside`.
 
 ## 6. Monitoring screenshots and the update feed: two different S3 paths
 
