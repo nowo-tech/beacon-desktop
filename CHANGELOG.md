@@ -54,6 +54,27 @@ says so.
 
 ### Changed
 
+- **Tasks polish (UX audit 2026-11-27, batch 1)**:
+  - *Banner* (UXA-15): one message at a time, the most severe first (a load error with *Retry*, offline, a refused
+    context, then a notice), on one line with a close button. A refused write clears on the next write that goes
+    through, "Slowing down" (`429`) and a load error clear on the next answer, any notice after 8 s; offline no longer
+    adds "Something went wrong" on top.
+  - *Task panel* (UXA-16, UXA-17, UXA-40): it pushes the board (`clamp(360px, 38vw, 440px)` wide), the board scrolls
+    sideways with edge fades and keeps its scroll on refresh, the opened card stays in view. Status, priority and
+    assignee are menu buttons (you are marked "You"); the estimate is one duration field that reads like the cards
+    ("4 h") and takes `4h`, `90m`, `1h30`, `1:30` or minutes, refusing anything else in place; the due date has
+    *Today*, *Tomorrow*, *Next week* (Monday) and *Clear*. The breadcrumb reads "Board › #141" and the board name
+    shows that board, the panel kept open.
+  - *Header* (UXA-16, UXA-38): the board picker is a switcher button with a menu grouped by folder, as tall as the view
+    control; in a narrow page (the panel open, a 900 px window) the header keeps two rows: the switcher stands in for
+    the title and *Only mine* / *Open in Beacon* fold into a "More actions" menu.
+  - *List* (UXA-38): the status of each row is a quiet pill with a menu instead of a native select.
+  - *Quick add* (UXA-18): `!urgente`, `!alta`, `!normal`, `!baja`, `@hoy` and `@mañana` work in both languages
+    (as the English words), the Spanish placeholder and help show them, `~1h30` works, and any priority shows its chip.
+  - Menus: `popover="manual"` (top layer) where the webview has it, Esc and outside presses handled by the menu so Esc
+    never also closes the task panel, a refresh keeps an open menu open, `menu` / `menuitemradio` / `menuitemcheckbox`, ↑ ↓ Home End and
+    type-ahead, Esc back to the button (the panel stays), keyboard opens enter at the checked item.
+
 - Rust: `notify_friendly` takes an optional click target (`chat-open:<uuid>` only); the tray menu takes the chat
   items; `tauri-plugin-deep-link` 2.6 (the single-instance plugin forwards links to the running app), command
   `deep_link_take`.

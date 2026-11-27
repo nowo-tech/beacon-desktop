@@ -5,10 +5,10 @@
 #mod-tasks { height: 100%; }
 .tasks-mod { display: grid; grid-template-columns: minmax(0, 1fr) auto; height: 100%; min-height: 0; }
 .tasks-mod[data-state='disconnected'], .tasks-mod[data-state='forbidden'] { display: grid; place-items: center; grid-template-columns: minmax(0, 1fr); overflow-y: auto; padding: 24px 16px; background: var(--surface-2); }
-.tasks-mod .page { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); min-height: 0; min-width: 0; background: var(--surface); }
+.tasks-mod .page { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); min-height: 0; min-width: 0; background: var(--surface); container: tk-page / inline-size; }
 .tasks-mod .pg-head { display: flex; align-items: center; gap: 12px; padding: 14px 20px 10px; flex-wrap: wrap; }
-.tasks-mod .pg-head h1 { margin: 0; font: 700 1.25rem/1.2 var(--font-display); letter-spacing: -0.01em; color: var(--ink); }
-.tasks-mod .pg-head .sub { color: var(--ink-3); font-size: var(--fs-sm); }
+.tasks-mod .pg-head h1 { margin: 0; font: 700 1.25rem/1.2 var(--font-display); letter-spacing: -0.01em; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tasks-mod .pg-head .sub { color: var(--ink-3); font-size: var(--fs-sm); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tasks-mod .grow { flex: 1; }
 #mod-tasks .seg { display: inline-flex; padding: 2px; border-radius: var(--r-sm); background: var(--surface-3); gap: 2px; }
 #mod-tasks .seg button { height: 26px; padding: 0 10px; border-radius: 4px; color: var(--ink-2); font-size: var(--fs-sm); font-weight: 500; display: inline-flex; align-items: center; gap: 6px; }
@@ -16,6 +16,8 @@
 #mod-tasks .seg button[aria-selected='true'] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); font-weight: 600; }
 .tasks-mod .toolbar { display: flex; align-items: center; gap: 8px; padding: 0 20px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .tasks-mod .tb-extras { display: flex; gap: 4px; }
+.tasks-mod .narrow-only { display: none; }
+#mod-tasks .btn-ghost.more.on { color: var(--moss-strong); background: var(--moss-soft); }
 #mod-tasks .btn-ghost[aria-pressed='true'] { background: var(--moss-soft); color: var(--moss-strong); }
 .tasks-mod .qa { flex: 1 1 320px; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 6px 0 10px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); background: var(--surface); min-width: 0; transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
 .tasks-mod .qa:focus-within { border-color: var(--ink-3); box-shadow: 0 0 0 3px color-mix(in srgb, var(--moss) 16%, transparent); }
@@ -24,9 +26,14 @@
 .tasks-mod .qa input:disabled { cursor: not-allowed; }
 .tasks-mod .qa-ico { color: var(--ink-3); display: grid; }
 .tasks-mod .qa-preview { display: flex; gap: 4px; overflow: hidden; }
-.tasks-mod .tk-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 20px; background: var(--warn-soft); color: var(--warn); font-size: var(--fs-sm); border-bottom: 1px solid var(--line); }
+/* One message at a time, one line (UXA-15): the most severe, with Retry where it helps and a close button. */
+.tasks-mod .tk-banner { display: flex; align-items: center; gap: 8px; min-height: 36px; box-sizing: border-box; padding: 3px 12px 3px 20px; background: var(--warn-soft); color: var(--warn); font-size: var(--fs-sm); border-bottom: 1px solid var(--line); }
+.tasks-mod .tk-banner.danger { background: var(--danger-soft); color: var(--danger); }
 .tasks-mod .tk-banner[hidden] { display: none; }
-.tasks-mod .tk-banner span { display: inline-flex; align-items: center; gap: 6px; }
+.tasks-mod .tk-banner .tb-ico { display: grid; flex: none; }
+.tasks-mod .tk-banner .tb-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#mod-tasks .tk-banner .x-btn { width: 28px; height: 28px; color: inherit; flex: none; }
+#mod-tasks .tk-banner .x-btn:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
 .tasks-mod .tk-body { min-height: 0; display: grid; }
 .tasks-mod .skel-row { background: var(--surface-3); }
 .tasks-mod .muted { color: var(--ink-3); font-size: var(--fs-sm); margin: 0; }
@@ -45,12 +52,58 @@
 .tasks-mod .prio.high { color: var(--warn); }
 .tasks-mod .prio.low { color: var(--ink-3); }
 .tasks-mod .k-id { font: 600 11px/1 var(--font-mono); color: var(--ink-3); white-space: nowrap; }
-.tasks-mod .selectish { height: 32px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); background: var(--surface); padding: 0 8px; font: inherit; font-size: var(--fs-sm); color: var(--ink); max-width: 260px; }
-.tasks-mod .selectish:hover { border-color: var(--ink-3); }
-.tasks-mod .selectish.sm { height: 28px; font-size: var(--fs-xs); }
+
+/* menu buttons (picker.ts, UXA-17 / UXA-38): the board switcher, panel fields, list status pills, overflow menu */
+.tasks-mod .mb { display: inline-flex; min-width: 0; max-width: 100%; }
+#mod-tasks .mb-trigger { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--ink); font-size: var(--fs-sm); white-space: nowrap; }
+#mod-tasks .mb-trigger[disabled] { cursor: default; }
+#mod-tasks .mb-trigger[aria-expanded='true'] { background: var(--surface-3); }
+.tasks-mod .mb-trigger .mb-t, .tasks-mod .mb-trigger .bs-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tasks-mod .mb-chev { display: grid; color: var(--ink-3); flex: none; }
+.tasks-mod .mb-trigger[disabled] .mb-chev { visibility: hidden; }
+#mod-tasks .board-switch { height: 30px; max-width: 260px; padding: 0 8px 0 10px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface); font-weight: 600; }
+#mod-tasks .board-switch:hover { border-color: var(--ink-3); }
+#mod-tasks .pick { height: 28px; margin-left: -8px; padding: 0 8px; border: 1px solid transparent; max-width: calc(100% + 8px); }
+#mod-tasks .pick:not([disabled]):hover { border-color: var(--line-strong); background: var(--surface); }
+#mod-tasks .status-pill { height: 24px; margin: 0; padding: 0 6px 0 8px; border-radius: 12px; background: var(--surface-3); color: var(--ink-2); font-size: var(--fs-xs); font-weight: 600; max-width: 180px; }
+#mod-tasks .status-pill:not([disabled]):hover { border-color: var(--line-strong); background: var(--surface-3); color: var(--ink); }
+.tasks-mod .mb-menu { position: fixed; inset: auto; margin: 0; z-index: 60; box-sizing: border-box; min-width: 200px; max-width: min(320px, calc(100vw - 16px)); max-height: min(360px, calc(100vh - 16px)); overflow-y: auto; padding: 4px; background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--r-md); box-shadow: var(--shadow-lg); font-size: var(--fs-sm); }
+.tasks-mod .mb-menu[hidden] { display: none; }
+.tasks-mod .mb-menu:focus { outline: none; }
+#mod-tasks .mb-item { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-height: 32px; padding: 4px 10px 4px 6px; border-radius: var(--r-xs); text-align: left; color: var(--ink); font-size: var(--fs-sm); }
+#mod-tasks .mb-item:hover, #mod-tasks .mb-item:focus { background: var(--moss-soft); outline: none; }
+#mod-tasks .mb-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.tasks-mod .mi-check { display: grid; width: 16px; flex: none; color: var(--moss); visibility: hidden; }
+.tasks-mod .mb-item[aria-checked='true'] .mi-check { visibility: visible; }
+.tasks-mod .mb-item[aria-checked='true'] .mi-label { font-weight: 600; }
+.tasks-mod .mi-lead { display: inline-grid; place-items: center; flex: none; min-width: 16px; color: var(--ink-3); }
+.tasks-mod .mi-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tasks-mod .mi-hint { margin-left: auto; padding-left: 12px; color: var(--ink-3); font-size: var(--fs-xs); }
+.tasks-mod .mb-group + .mb-group, .tasks-mod .mb-item + .mb-group, .tasks-mod .mb-group + .mb-item { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+.tasks-mod .mb-group-h { padding: 6px 10px 2px; font-size: var(--fs-2xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-3); }
+@media (prefers-reduced-motion: no-preference) {
+  .tasks-mod .mb-menu:not([hidden]) { animation: pop 120ms var(--ease); }
+}
+.tasks-mod .p-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--ink-3); }
+.tasks-mod .p-dot.urgent { background: var(--danger); }
+.tasks-mod .p-dot.high { background: var(--signal-dot); }
+.tasks-mod .p-dot.normal { background: var(--slate); }
+.tasks-mod .p-dot.low { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink-3); }
 
 /* kanban */
-.tasks-mod .board-wrap { overflow: auto; min-height: 0; padding: 14px 20px 20px; }
+/* UXA-16: the task panel pushes the board, which scrolls sideways with edge fades (Modern Web Guidance
+   scrollability-affordance-hints); focused cards never stop inside a fade. */
+@property --fade-start { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --fade-end { syntax: '<length>'; inherits: false; initial-value: 0px; }
+.tasks-mod .board-wrap { overflow: auto; min-height: 0; padding: 14px 20px 20px; --fade-size: 32px; scroll-padding-inline: var(--fade-size); mask: linear-gradient(black, black) no-clip subtract, linear-gradient(to right, black, transparent) 0 0 / var(--fade-start) 100% no-repeat no-clip, linear-gradient(to right, transparent, black) 100% 0 / var(--fade-end) 100% no-repeat no-clip; }
+@supports (animation-timeline: scroll()) {
+  .tasks-mod .board-wrap { animation: tk-fade-start linear both, tk-fade-end linear both; animation-timeline: scroll(self inline); animation-range: 0 var(--fade-size), calc(100% - var(--fade-size)) 100%; }
+}
+@keyframes tk-fade-start { to { --fade-start: var(--fade-size); } }
+@keyframes tk-fade-end { from { --fade-end: var(--fade-size); } }
+.tasks-mod .board-wrap.more-start { --fade-start: var(--fade-size); }
+.tasks-mod .board-wrap.more-end { --fade-end: var(--fade-size); }
+.tasks-mod.drawer-open .board { grid-auto-columns: minmax(232px, 1fr); }
 .tasks-mod .board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(248px, 1fr); gap: 12px; height: 100%; min-height: 0; align-items: stretch; }
 .tasks-mod .col { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-lg); display: flex; flex-direction: column; min-height: 0; transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease); }
 .tasks-mod .col.drop { border-color: var(--moss); background: var(--moss-soft); }
@@ -115,10 +168,13 @@
 
 /* task panel */
 .tasks-mod .drawer-slot { display: contents; }
-.tasks-mod .drawer { width: 440px; border-left: 1px solid var(--line); background: var(--surface); display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; height: 100%; box-shadow: -12px 0 32px rgb(15 28 24 / 6%); animation: slide-in 200ms var(--ease); }
+.tasks-mod .drawer { width: clamp(360px, 38vw, 440px); border-left: 1px solid var(--line); background: var(--surface); display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; height: 100%; box-shadow: -12px 0 32px rgb(15 28 24 / 6%); animation: slide-in 200ms var(--ease); }
 .tasks-mod .drawer:focus { outline: none; }
 .tasks-mod .dr-head { display: flex; align-items: center; gap: 6px; padding: 10px 10px 10px 18px; border-bottom: 1px solid var(--line); }
 .tasks-mod .dr-head .crumbs { flex: 1; color: var(--ink-3); font-size: var(--fs-xs); display: flex; gap: 6px; align-items: center; min-width: 0; }
+#mod-tasks .crumb-board { min-width: 0; height: 24px; padding: 0 4px; margin: 0 -2px; color: var(--ink-2); font-size: var(--fs-xs); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#mod-tasks .crumb-board:hover { color: var(--ink); background: var(--hover); text-decoration: underline; text-underline-offset: 2px; }
+.tasks-mod .crumb-sep { color: var(--ink-3); }
 .tasks-mod .dr-body { overflow-y: auto; padding: 16px 18px 20px; }
 .tasks-mod .dr-title { width: 100%; box-sizing: border-box; border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; font: 700 1.125rem/1.3 var(--font-display); color: var(--ink); padding: 4px 6px; margin: 0 -6px; resize: none; field-sizing: content; }
 .tasks-mod .dr-title:hover { border-color: var(--line); }
@@ -132,11 +188,17 @@
 .tasks-mod .fields { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 2px 8px; margin: 14px 0; align-items: center; }
 .tasks-mod .fields dt { color: var(--ink-3); font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; min-height: 32px; }
 .tasks-mod .fields dd { margin: 0; min-height: 32px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--fs-sm); }
-.tasks-mod .fields .selectish { height: 28px; border-color: transparent; background-color: transparent; margin-left: -8px; }
-.tasks-mod .fields .selectish:hover, .tasks-mod .fields .selectish:focus { border-color: var(--line-strong); }
 .tasks-mod .fields input { height: 28px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface); padding: 0 8px; font: inherit; font-size: var(--fs-sm); color: var(--ink); color-scheme: light dark; }
 .tasks-mod .fields input:focus { outline: none; border-color: var(--ink-3); box-shadow: 0 0 0 3px color-mix(in srgb, var(--moss) 16%, transparent); }
-.tasks-mod .fields .num-in { width: 96px; }
+.tasks-mod .fields .num-in { width: 112px; }
+.tasks-mod .fields input[aria-invalid='true'] { border-color: var(--danger); }
+.tasks-mod .est-field { display: grid; gap: 2px; }
+.tasks-mod .hint.bad { color: var(--danger); }
+.tasks-mod .due-field { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.tasks-mod .chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+#mod-tasks .chip { height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink-2); font-size: var(--fs-xs); font-weight: 500; }
+#mod-tasks .chip:hover { border-color: var(--line-strong); color: var(--ink); background: var(--hover); }
+#mod-tasks .chip[aria-pressed='true'] { border-color: var(--moss-line); background: var(--moss-soft); color: var(--moss-strong); }
 .tasks-mod .tags-field { display: grid; gap: 2px; width: 100%; }
 .tasks-mod .tags-field .tags-in { width: 100%; box-sizing: border-box; }
 .tasks-mod .hint { font-size: var(--fs-2xs); color: var(--ink-3); }
@@ -162,6 +224,20 @@
 .tasks-mod .comment .c-h span { color: var(--ink-3); font-weight: 400; font-size: var(--fs-xs); margin-left: 6px; }
 .tasks-mod .av.s24 { --s: 24px; border-radius: 6px; }
 .tasks-mod .desc, .tasks-mod .dr-sec .m-body { font-size: var(--fs-sm); }
+
+/* UXA-16: a narrow page (the panel open, a small window) keeps the header to two rows: the board switcher stands in
+   for the title, and Only mine / Open in Beacon fold into the overflow menu. */
+@container tk-page (max-width: 720px) {
+  .tasks-mod .pg-head { flex-wrap: nowrap; }
+  .tasks-mod .pg-head .sub { display: none; }
+  .tasks-mod .pg-head:has(h1.has-switch) > .mb { order: -1; }
+  .tasks-mod .pg-head h1.has-switch { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .tasks-mod .tb-extras .wide-only { display: none; }
+  .tasks-mod .narrow-only { display: inline-flex; }
+  .tasks-mod .toolbar { flex-wrap: nowrap; }
+  .tasks-mod .qa { flex-basis: 0; }
+  .tasks-mod .qa kbd { display: none; }
+}
 
 @media (max-width: 760px) {
   .tasks-mod { grid-template-columns: minmax(0, 1fr); }
