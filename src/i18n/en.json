@@ -325,7 +325,7 @@
   "layoutToFull": "Switch to the full view",
   "layoutToCompact": "Switch to the compact view",
   "sectionsLabel": "Sections",
-  "navTasks": "Tasks",
+  "navTasks": "Track",
   "paneHint": "F6 moves between the panes.",
   "detailLabel": "Task details",
   "detailEmpty": "Select a task to see its time here.",
@@ -459,5 +459,6 @@
   "contextChangedDuringDialog": "The organization changed while the question was open, so nothing was started or stopped.",
   "timerChanged": "The timer changed on another device meanwhile, so it was not stopped here.",
   "queuedNeedsFields": "A stop saved offline still needs an activity type: Beacon keeps the timer running until you choose one.",
-  "queuedStale": "{count} stop(s) saved offline were skipped: that timer had already been stopped (here or on another device), so the newer one was left as it is."
+  "queuedStale": "{count} stop(s) saved offline were skipped: that timer had already been stopped (here or on another device), so the newer one was left as it is.",
+  "navTitle": "Time"
 }

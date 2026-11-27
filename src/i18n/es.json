@@ -325,7 +325,7 @@
   "layoutToFull": "Cambiar a la vista completa",
   "layoutToCompact": "Cambiar a la vista reducida",
   "sectionsLabel": "Secciones",
-  "navTasks": "Tareas",
+  "navTasks": "Registrar",
   "paneHint": "F6 pasa de un panel a otro.",
   "detailLabel": "Detalles de la tarea",
   "detailEmpty": "Selecciona una tarea para ver aquí su tiempo.",
@@ -459,5 +459,6 @@
   "contextChangedDuringDialog": "La organización cambió mientras la pregunta estaba abierta, así que no se ha iniciado ni parado nada.",
   "timerChanged": "El temporizador cambió entretanto en otro dispositivo, así que no se ha parado aquí.",
   "queuedNeedsFields": "Una parada guardada sin conexión aún necesita un tipo de actividad: Beacon mantiene el temporizador en marcha hasta que elijas uno.",
-  "queuedStale": "Se han omitido {count} parada(s) guardada(s) sin conexión: ese temporizador ya estaba parado (aquí o en otro dispositivo), así que el más reciente sigue igual."
+  "queuedStale": "Se han omitido {count} parada(s) guardada(s) sin conexión: ese temporizador ya estaba parado (aquí o en otro dispositivo), así que el más reciente sigue igual.",
+  "navTitle": "Tiempo"
 }
