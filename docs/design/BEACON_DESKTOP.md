@@ -4,7 +4,8 @@ Status: **draft for owner review** (2026-11-25). Docs only: nothing in this docu
 repository name, secret or release changes with it.
 
 **Implementation status:** BD-1 shipped in 0.9.0. BD-2 (chat read-only) shipped in 0.10.0
-(CHANGELOG `[0.10.0]`). Where the build differs from this text: the modules follow the
+(CHANGELOG `[0.10.0]`). BD-3a (time context, mini timer, required fields, §7.1) shipped in 0.11.0
+(CHANGELOG `[0.11.0]`). Where the build differs from this text: the modules follow the
 approved prototype (Chat `Ctrl/Cmd+1`, Time `Ctrl/Cmd+2`, Tasks off); `GET me` is asked with the last context or
 `personal` (ChatKit needs a context on every request under a context policy) and falls back to `personal` on
 `403 context_forbidden`; the realtime hub must be on the signed-in origin (Beacon's default; another host is refused and

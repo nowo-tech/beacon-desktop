@@ -5,19 +5,13 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
-### CI
+## [0.11.0] - 2026-11-27
 
-- **Release**: the S3 key prefix of every release object (files and `stable.json`) comes from the repository variable
-  `S3_CLIENTS_PREFIX`, falling back to `time-track-clients` (D-20261125-08). `channel.mjs` and `s3-put.sh` accept only
-  `time-track-clients` or `beacon-clients` and fail on anything else. Unset, nothing changes; flip the variable only
-  after the Beacon updater reads the same prefix.
+BD-3a (design `docs/design/BEACON_DESKTOP.md` §7.1): time context, mini timer and required fields. Works with
+TimeTrackBundle **2.1** (subjects and activity types) and **2.2** (context policy); an older server behaves as before
+(no fields asked, the context header ignored). Chat send (BD-3) follows in a later release.
 
-### Planned for 0.11.0 (BD-3a: time context, mini timer, required fields)
-
-Targets **0.11.0** together with BD-3 (chat send). Works with TimeTrackBundle **2.1** (subjects and activity types)
-and **2.2** (context policy); an older server behaves as before (no fields asked, the context header ignored).
-
-#### Added
+### Added
 
 - **Time API context**: every time API request carries `X-Beacon-Context` (`personal` / `org:<uuid>`), the
   organization chosen in the app, as the chat does. Needed before Beacon turns on TimeTrackBundle's context policy
@@ -48,7 +42,7 @@ and **2.2** (context policy); an older server behaves as before (no fields asked
 - English and Spanish for every new string; light and dark; axe WCAG 2.1 AA checks on every new dialog and the mini
   timer, plus a focus check of the mini timer (axe does not test focus loss).
 
-#### Security
+### Security
 
 - The mini timer window may call `mini_view` and `mini_action` only (`capabilities/mini.json`, checked by a Rust
   test); `mini_open` / `mini_update` / `mini_close` are main-window only. The main window may bring itself forward
@@ -78,6 +72,13 @@ and **2.2** (context policy); an older server behaves as before (no fields asked
     another stop. **ZCD-v3-L1**: a replayed start binds the following queued stop / switch of that timer to the
     server's timer id and recorded start, so a stop left queued by a 409 still finds that timer later (even with a
     clamped start), while an unrelated newer timer stays protected.
+
+### CI
+
+- **Release**: the S3 key prefix of every release object (files and `stable.json`) comes from the repository variable
+  `S3_CLIENTS_PREFIX`, falling back to `time-track-clients` (D-20261125-08). `channel.mjs` and `s3-put.sh` accept only
+  `time-track-clients` or `beacon-clients` and fail on anything else. Unset, nothing changes; flip the variable only
+  after the Beacon updater reads the same prefix. 0.11.0 is the first release published under `beacon-clients`.
 
 ## [0.10.0] - 2026-11-26
 
