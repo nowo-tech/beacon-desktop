@@ -47,7 +47,8 @@ mismatch is logged locally with the server name only, never a token.
   per organization (its id), *Only mine* and the column-marker setting.
 - Chat messages are **never written to disk**: they stay in memory while the app runs and are forgotten on an
   organization switch, "Disconnect chat" and sign-out. The same goes for what you type and have not sent (drafts per
-  conversation) and for messages that could not be sent yet. On disk only view settings: the organization last shown, the
+  conversation) and for messages that could not be sent yet, including those waiting offline for the connection
+  (they are lost if you quit the app before they go out). On disk only view settings: the organization last shown, the
   last conversation per organization (its id), collapsed sidebar sections, the thread panel width, density and the
   switcher style.
 - Server URL, your e-mail, the running timer, queued offline actions (with the time each happened), the tasks you pin

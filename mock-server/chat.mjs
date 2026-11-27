@@ -55,8 +55,8 @@ function seed() {
     { uuid: uuid(3), context: ORG, kind: 'channel', title: 'random', subtitle: 'Anything goes', channelKey: 'room:3', unread: 2, mutedUntil: '2099-01-01T00:00:00Z' },
     { uuid: uuid(4), context: ORG, kind: 'channel', title: 'Envelope v2', subtitle: 'Project channel', channelKey: 'project:aa000000-0000-4000-8000-000000000001', unread: 1 },
     { uuid: uuid(5), context: ORG, kind: 'channel', title: 'Website relaunch', subtitle: 'Project channel', channelKey: 'project:aa000000-0000-4000-8000-000000000002', unread: 0 },
-    { uuid: uuid(6), context: ORG, kind: 'direct', title: 'Maya Okafor', subtitle: 'Product lead', peerStatus: 'online', unread: 2 },
-    { uuid: uuid(7), context: ORG, kind: 'direct', title: 'Leo Brandt', subtitle: 'Backend engineer', peerStatus: 'away', unread: 0 },
+    { uuid: uuid(6), context: ORG, kind: 'direct', title: 'Maya Okafor', subtitle: 'Product lead', peer: PEOPLE.maya, peerStatus: 'online', unread: 2 },
+    { uuid: uuid(7), context: ORG, kind: 'direct', title: 'Leo Brandt', subtitle: 'Backend engineer', peer: PEOPLE.leo, peerStatus: 'away', unread: 0 },
     { uuid: uuid(8), context: ORG, kind: 'support', title: 'Orbita Ltd · invoice export', subtitle: 'Support', unread: 0, ticket: { statusLabel: 'Open' } },
     { uuid: uuid(9), context: ORG2, kind: 'channel', title: 'studio', subtitle: 'Harbor Studio team', channelKey: 'room:9', unread: 4 },
     { uuid: uuid(10), context: 'personal', kind: 'direct', title: 'Notes to self', subtitle: '', unread: 0 },
@@ -137,9 +137,10 @@ export function createChatMock({ send, error }) {
       kind: conversation.kind,
       title: conversation.title,
       subtitle: conversation.subtitle,
-      initials: conversation.title.slice(0, 2).toUpperCase(),
+      // ChatKit sends the peer's own initials and public id for a direct message (ChatPresenter).
+      initials: conversation.peer?.initials ?? conversation.title.slice(0, 2).toUpperCase(),
       avatarUrl: null,
-      peerUuid: null,
+      peerUuid: conversation.peer?.uuid ?? null,
       peerStatus: conversation.peerStatus ?? 'offline',
       channelKey: conversation.channelKey ?? null,
       ticket: conversation.ticket ? { number: '1042', topicLabel: 'Billing', status: 'open', statusLabel: conversation.ticket.statusLabel, readOnly: false } : null,
@@ -250,9 +251,10 @@ export function createChatMock({ send, error }) {
       const session = tokenOf(req, state);
       if (session === null) return error(res, 401, 'invalid_token', 'Missing or revoked token.', { 'WWW-Authenticate': 'Bearer' });
       if (session.family !== 'chat') return error(res, 403, 'insufficient_scope', 'A chat token is required.', { 'WWW-Authenticate': 'Bearer error="insufficient_scope"' });
-      if (state.config.chatFailNext) {
-        const { status, error: code, retryAfter } = state.config.chatFailNext;
-        state.config.chatFailNext = null;
+      // `writesOnly` fails only writes (reads keep working); `times` fails that many requests (default 1).
+      if (state.config.chatFailNext && !(state.config.chatFailNext.writesOnly && req.method === 'GET')) {
+        const { status, error: code, retryAfter, times = 1 } = state.config.chatFailNext;
+        state.config.chatFailNext = times > 1 ? { ...state.config.chatFailNext, times: times - 1 } : null;
         return error(res, status, code, code, retryAfter ? { 'Retry-After': String(retryAfter) } : {});
       }
       const context = req.headers['x-beacon-context'];

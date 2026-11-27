@@ -307,8 +307,15 @@ Client behaviour (in Rust, not the web view, so the hub URL and JWT never touch 
    `Retry-After` on `429`; try SSE again every 10 min. Budget: well inside the 600 reads/min limit.
 6. **Offline / sleep**: on wake, network change or reconnect, one catch-up (`conversations`, then `messages?after=` for
    the open conversation); no duplicate notifications for messages older than the last seen id per conversation.
-   Sends while offline are **not queued** in BD-3 (shown as failed with *Retry*; the `Idempotency-Key` makes a retry
-   safe). An offline send queue is a later item.
+   **Offline send queue** (UX batch 5, owner approval 2026-11-27): a message that cannot reach the server (no network,
+   a `5xx`) is *queued* ("Waiting for connection"), never "Not sent". It goes out when the sync sees the connection
+   again, on its own backoff probe (2 s doubling to 30 s), or on *Try now*; *Cancel* takes it back into an empty
+   message box. Messages of one conversation (timeline and threads) go out one at a time in the order they were
+   written; each keeps its `Idempotency-Key`, and only one attempt per message is ever in flight, so a reconnect never
+   sends it twice (and the server dedupes a replay whose answer was lost). The queue lives in the chat module: it
+   survives switching to Time or Tasks, but **not** a context switch, *Disconnect chat*, sign-out or quitting the app;
+   the text is never written to disk (Q-BD-15 stays A). Only refusals (`4xx`) and a `429` that outlasts the automatic
+   retries end as *Not sent*.
 
 ### 3.4 Desktop notifications, privacy and badge
 
@@ -448,6 +455,14 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
 - **UiKit**: reuse UiKit **design tokens** (colours, spacing, radius, typography, focus ring) so the app matches
   Beacon in light and dark; no UiKit runtime JS in the app (strict CSP, `script-src 'self'`). The chat list and bubbles
   follow ChatKit's dock look through the same tokens. Mascot stays out of the chat view except empty states.
+- **Chat home view** (UX batch 5, owner approval 2026-11-27; replaces "Pick a conversation"): shown while no
+  conversation is open, and from a *Home* entry at the top of the sidebar. **Unread** conversations (not muted, newest
+  first, up to 8, with their preview), **Mentions** (messages that mention the reader in the timelines loaded this
+  session, newest first, up to 5; the newest page of up to 3 unread conversations is loaded once per context so their
+  mentions show) and **Recent** conversations (opened this session, then the list order). One tab stop, `↑ ↓ Home End`
+  between rows, `Enter` opens (a mention opens its conversation with that message focused); `Esc` in a conversation
+  comes back here. "All caught up" and an empty organization show a small decorative mascot (UXA-47). Memory only, like
+  the rest of the chat.
 - **Accessibility** (WCAG 2.1 AA, as the app already does): new messages announced through a polite live region
   ("2 new messages from Ana"), never the full text by default; focus stays on the composer when a message arrives;
   every action reachable by keyboard; unread state not by colour alone; reduced motion respected; both locales (en, es)
@@ -534,8 +549,8 @@ notifications and mute part of BD-3 waits for them (ChatKit + Beacon work); see 
 
 Behaviour: feature detection (`me.scopes` has `chat:write`, `me.features.send / threadReply / reactions`, the row's
 `canSend`), one key per write kept until the write is sent or discarded, automatic retries after `429` / `409` (same
-key, at most three), *Retry* (same key) after a network error or a `5xx`, *Edit* / *Discard* after a refusal, no
-offline queue (§3.3), the sent message shown from the write's answer until the catch-up brings it (the timeline is
+key, at most three), the offline send queue after a network error or a `5xx` (§3.3, UX batch 5: *Try now* / *Cancel*,
+same key, order kept), *Edit* / *Discard* after a refusal, the sent message shown from the write's answer until the catch-up brings it (the timeline is
 never patched directly, so `after=` never skips a message). Drafts and unsent messages are memory only (Q-BD-15).
 
 | File | New / changed | Role |
@@ -603,7 +618,7 @@ Q-BD-20 onwards (tasks module) are in [BEACON_DESKTOP_TASKS.md §10](BEACON_DESK
 | **Q-BD-12** **[Beacon]** | Does the hub accept the subscriber JWT in the `Authorization` header from a native client (no cookie, no query string)? | A: header · B: `authorization` query parameter (Mercure supports it, leaks into logs) | **A**; B only if the hub cannot, and then with log redaction |
 | **Q-BD-13** **[Beacon]** | Realtime payloads on private topics | A: keep viewer-neutral presented messages; the desktop treats them as hints · B: ChatKit option for ids-only events (no bodies, no rendered references) | **B** (opt-in per profile, desktop requires nothing from the payload either way); confirms R2 by construction |
 | **Q-BD-14** **[Beacon]** | Web Push and desktop notifications for the same person | A: both · B: desktop owns notifications while its realtime subscription is active; Web Push skipped · C: user chooses per device | **B** with C as a setting later |
-| **Q-BD-15** | Store chat messages on disk for offline reading? | A: memory only · B: encrypted cache (key in keychain), cleared on sign-out | **A** for BD-2/BD-3; reconsider with the offline queue |
+| **Q-BD-15** | Store chat messages on disk for offline reading? | A: memory only · B: encrypted cache (key in keychain), cleared on sign-out | **A** for BD-2/BD-3; kept **A** with the offline queue (UX batch 5: queued text is memory only, gone on quit) |
 | **Q-BD-16** **[Beacon]** | Message rendering format for the client API | A: server Markdown → sanitized HTML (client injects HTML) · B: structured tokens (text, mention, reference, link, code) rendered by the client as text nodes | **B**: keeps the app's text-only DOM and makes the "not visible" reference placeholder explicit |
 | **Q-BD-17** | Display name | A: "Beacon Desktop" · B: "Beacon" | **A** (avoids confusion with the web app and the PWA) |
 | **Q-BD-18** | The parked extension's shared code (`src/api/` is shared with it) | A: freeze the shared module, fork freely · B: keep compatibility | **A** while parked |

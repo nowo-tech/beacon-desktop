@@ -550,3 +550,65 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .notif-ask h3 { margin: 0 0 2px; font-size: var(--fs-md); color: var(--ink); }
 .notif-ask p { margin: 0 0 8px; color: var(--ink-2); font-size: var(--fs-sm); }
 .notif-ask .row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ---------- UX batch 5: chat polish (UXA-6, 12, 26, 33, 34, 35, 39, 46, 47 and the home view) ---------- */
+/* Skeleton avatars are neutral blocks, never a coloured avatar (UXA-35; `.av` would paint them moss). */
+.skel.av { background: var(--surface-3); color: transparent; }
+/* "(edited)" stays on the line of the last words (UXA-33). */
+.m-body .edited { white-space: nowrap; margin-left: 2px; }
+/* Long histories: rows far above the newest skip rendering off screen (UXA-26), with a remembered size. */
+.msg-list.long > li.msg:nth-last-child(n + 40) { content-visibility: auto; contain-intrinsic-size: auto none auto 56px; }
+/* Waiting for the connection (offline queue, UXA-6): dimmed like a message on its way, with a calm status line. */
+.msg.pending.queued .m-body { opacity: 0.62; }
+.m-status.queued .i { color: var(--ink-3); }
+.m-status.queued.offline { color: var(--ink-2); }
+#mod-chat .m-status.queued .btn-quiet { border-color: transparent; background: transparent; color: var(--ink-2); }
+#mod-chat .m-status.queued .btn-quiet:hover { background: var(--hover); }
+/* The reaction picker takes the toolbar's place (UXA-34): one floating bar. */
+.msg.picking > .m-actions { opacity: 0 !important; pointer-events: none !important; }
+/* Menus in the top layer (Popover API, UXA-46): placed by their own rules, not the user agent's centring. */
+.ctx-menu[popover] { inset: auto; margin: 0; overflow: visible; color: var(--ink); }
+@supports (anchor-name: --a) {
+  .ctx-menu.anchored { position-anchor: --ck-menu-anchor; position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline; }
+  .ctx-menu.anchored.below { top: anchor(bottom); left: anchor(left); margin-top: 4px; }
+  .ctx-menu.anchored.over { top: anchor(top); right: anchor(right); }
+}
+/* The composer's field scrolled: a soft shadow under the toolbar (UXA-39). */
+.composer .c-field { transition: box-shadow var(--dur) var(--ease); }
+.composer.scrolled .c-field { box-shadow: inset 0 10px 8px -8px color-mix(in srgb, var(--ink) 24%, transparent); }
+
+/* The chat home view: unread, mentions, recent (owner approval 2026-11-27, replaces "Pick a conversation"). */
+.msgs[hidden], .ch-home[hidden] { display: none; }
+.ch-home { overflow-y: auto; min-height: 0; padding: 20px 24px 28px; display: flex; flex-direction: column; gap: 22px; overscroll-behavior: contain; }
+.hm-head h1 { margin: 0; font: 700 var(--fs-lg)/1.25 var(--font-display); color: var(--ink); }
+.hm-sub { margin: 2px 0 0; color: var(--ink-3); font-size: var(--fs-sm); }
+.hm-sec { display: grid; gap: 4px; max-width: 760px; }
+.hm-h { display: flex; align-items: center; gap: 6px; margin: 0 0 2px; padding: 0 10px; font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-2); }
+.hm-h .i { color: var(--ink-3); }
+.hm-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+#mod-chat .hm-row { display: flex; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; min-height: 44px; padding: 6px 10px; border-radius: var(--r-md); text-align: left; color: var(--ink); }
+#mod-chat .hm-row:hover { background: var(--hover); }
+#mod-chat .hm-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.hm-row .c-ico { width: 22px; display: grid; place-items: center; flex: none; color: var(--ink-3); }
+.hm-row > .av { flex: none; margin-top: 1px; }
+.hm-main { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.hm-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.hm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
+.hm-row.unread .hm-name { font-weight: 700; }
+.hm-time { flex: none; color: var(--ink-3); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; }
+.hm-text { color: var(--ink-2); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#mod-chat .hm-row.mention { align-items: flex-start; }
+#mod-chat .hm-row.mention.unread { background: var(--mention-bg); box-shadow: inset 3px 0 0 var(--mention-line); }
+#mod-chat .hm-row.mention.unread:hover { background: color-mix(in srgb, var(--mention-bg) 70%, var(--hover)); }
+.hm-calm { display: flex; align-items: center; gap: 12px; padding: 6px 10px; color: var(--ink-2); font-size: var(--fs-sm); }
+.hm-calm > span { display: grid; gap: 2px; }
+.hm-calm b { color: var(--ink); font-size: var(--fs-md); }
+.hm-none, .hm-more { margin: 0; padding: 4px 10px; color: var(--ink-3); font-size: var(--fs-xs); }
+.ch-home .skel-row { background: var(--surface-3); }
+.ch-home .mascot.tiny.hm-art { height: 3rem; margin: 0; flex: none; }
+.hm-empty .mascot.tiny.hm-art { height: 4rem; margin-bottom: 4px; }
+/* The sidebar's way back home (same row as a conversation). */
+.side .side-home { justify-content: flex-start; display: flex; align-items: center; gap: 8px; margin: 0 10px 6px; height: var(--row-h); padding: 0 8px; color: var(--chrome-ink-2); font-size: var(--fs-md); text-align: left; transition: background 120ms var(--ease); }
+.shell[data-density='compact'] .side .side-home { --row-h: 24px; font-size: var(--fs-sm); }
+.side .side-home:hover { background: var(--chrome-hover); color: var(--chrome-ink); }
+.side .side-home[aria-current='page'] { background: var(--chrome-active); color: #fff; }

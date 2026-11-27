@@ -252,7 +252,19 @@ describe('shell and chat module', () => {
     // Esc: mark read and leave.
     ui.key({ key: 'Escape' });
     await until(() => ui.shell.chat.openUuid() === null, 'leaving');
-    expect(document.querySelector('.empty')?.textContent).toContain('Pick a conversation');
+    // The home view replaces "Pick a conversation": unread, mentions and recent, one tab stop, ↑ ↓ between rows.
+    expect(ui.$('#chat-home').hidden).toBe(false);
+    expect(ui.$('#msg-scroll').hidden).toBe(true);
+    expect(ui.$('#chat-home h1').textContent).toBe('Home');
+    expect([...document.querySelectorAll('#chat-home h2')].map((node) => node.textContent)).toEqual(expect.arrayContaining(['Unread', 'Mentions', 'Recent']));
+    expect(ui.$('#chat-home-link').getAttribute('aria-current')).toBe('page');
+    const homeRows = [...document.querySelectorAll<HTMLElement>('#chat-home .hm-row')];
+    expect(homeRows.length).toBeGreaterThan(1);
+    expect(homeRows.filter((row) => row.tabIndex === 0)).toHaveLength(1);
+    homeRows[0].focus();
+    homeRows[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    expect(document.activeElement).toBe(homeRows[1]);
+    expect(homeRows[1].tabIndex).toBe(0);
     // Reopened from memory at once: the whole history is loaded, so the start of the conversation shows.
     ui.$<HTMLButtonElement>(`[data-conv="${ENVELOPE}"]`).click();
     expect(document.querySelector('#msg-list li.msg')).not.toBeNull();
