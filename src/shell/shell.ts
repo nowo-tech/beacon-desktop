@@ -1466,7 +1466,7 @@ export class Shell {
   /** Disconnect chat / tasks, after a confirmation (UXA-8); time stays signed in. */
   async disconnectModule(module: 'chat' | 'tasks'): Promise<void> {
     const st = this.st;
-    const ok = await this.askConfirm(st(module === 'chat' ? 'confirmChatTitle' : 'confirmTasksTitle'), st(module === 'chat' ? 'confirmChatText' : 'confirmTasksText'), st('confirmDisconnect'));
+    const ok = await this.askDestructive(st(module === 'chat' ? 'confirmChatTitle' : 'confirmTasksTitle'), st(module === 'chat' ? 'confirmChatText' : 'confirmTasksText'), st('confirmDisconnect'));
     if (!ok) return;
     if (module === 'chat') await this.chat.disconnect();
     else await this.tasks?.disconnect();
@@ -1476,7 +1476,9 @@ export class Shell {
   }
 
   /** A destructive question: Cancel is the default (focused first, Esc), the action is named and styled as danger. */
-  private askConfirm(title: string, text: string, action: string): Promise<boolean> {
+  private askDestructive(title: string, text: string, action: string): Promise<boolean> {
+    // One question at a time, as in askConfirm: a second one while the first is asked is a "no".
+    if (this.confirm.open) return Promise.resolve(false);
     return new Promise((resolve) => {
       const cancel = h('button', { class: 'btn', id: 'confirm-cancel', attrs: { type: 'button', autofocus: true } }, this.st('cancel'));
       const go = h('button', { class: 'btn primary danger-fill', id: 'confirm-ok', attrs: { type: 'button' } }, action);
