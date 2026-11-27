@@ -10,11 +10,32 @@
  *   The first list after a start or a context switch only primes (nothing older than what was seen notifies), and a
  *   message id notifies once (no duplicates after a reconnect). Several at once are one notification; at most one per
  *   {@link MIN_GAP_MS}.
- * - A click opens the app on that conversation (`chat-open:<uuid>`, an id, never content).
+ * - A click opens the app on that conversation in the organization it was notified for (`chat-open:<context>:<uuid>`,
+ *   ids and a context key, never content; audit BDA13-L3), through the normal switch (a running timer is asked about).
  *
  * Only the setting is stored (on / off, asked, paused until); never message data.
  */
-import type { Conversation } from './types';
+import { type Conversation, isUuid } from './types';
+
+const CLICK_PREFIX = 'chat-open:';
+/** The context keys a click target may carry (as `deeplink::is_context` in Rust): `personal` or `org:<uuid>`. */
+const isClickContext = (value: string): boolean => value === 'personal' || (value.startsWith('org:') && isUuid(value.slice(4)));
+
+/** The notification's click target: the conversation and the context it was notified in (BDA13-L3). */
+export function chatClickTarget(context: string | null, uuid: string): string {
+  return context !== null && isClickContext(context) ? `${CLICK_PREFIX}${context}:${uuid}` : `${CLICK_PREFIX}${uuid}`;
+}
+
+/** A click target back as `{context, id}`, or `null` for anything else (Rust checks it too, notify.rs). */
+export function parseChatClick(target: string): { context: string | null; id: string } | null {
+  if (!target.startsWith(CLICK_PREFIX)) return null;
+  const rest = target.slice(CLICK_PREFIX.length);
+  const id = rest.slice(-36);
+  if (!isUuid(id)) return null;
+  if (rest.length === 36) return { context: null, id: id.toLowerCase() };
+  const context = rest.slice(0, -37);
+  return rest.at(-37) === ':' && isClickContext(context) ? { context, id: id.toLowerCase() } : null;
+}
 
 export const NOTIFY_KEY = 'beacon-desktop-chat-notify';
 export const MIN_GAP_MS = 10_000;

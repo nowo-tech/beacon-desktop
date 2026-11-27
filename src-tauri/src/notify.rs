@@ -86,15 +86,18 @@ fn shows_window(id: &str) -> bool {
     SHOWS_WINDOW.contains(&id) || meeting_action(id) == Some("track") || chat_click(id)
 }
 
-/// A chat notification's click target: `chat-open:` and a conversation UUID (an id, never content).
+/// A chat notification's click target: `chat-open:`, optionally the context it was notified in (`personal` or
+/// `org:<uuid>`, audit BDA13-L3) and `:`, then a conversation UUID. Ids and a context key, never content.
 pub fn chat_click(id: &str) -> bool {
-    id.strip_prefix("chat-open:").is_some_and(|uuid| {
-        uuid.len() == 36
-            && uuid.char_indices().all(|(at, c)| match at {
-                8 | 13 | 18 | 23 => c == '-',
-                _ => c.is_ascii_hexdigit(),
-            })
-    })
+    let Some(rest) = id.strip_prefix("chat-open:") else {
+        return false;
+    };
+    match rest.rsplit_once(':') {
+        None => crate::deeplink::is_uuid(rest),
+        Some((context, uuid)) => {
+            crate::deeplink::is_context(context) && crate::deeplink::is_uuid(uuid)
+        }
+    }
 }
 
 /// The note's click target when it is a valid one ([`chat_click`]).
@@ -418,11 +421,24 @@ mod tests {
         let uuid = "chat-open:0c000000-0000-4000-8000-000000000001";
         assert_eq!(checked_click(&note(Some(uuid))).as_deref(), Some(uuid));
         assert!(shows_window(uuid));
+        // With the context it was notified in (BDA13-L3).
+        for good in [
+            "chat-open:personal:0c000000-0000-4000-8000-000000000001",
+            "chat-open:org:6a0e1f8e-1b2c-4d3e-8f90-a1b2c3d4e5f6:0c000000-0000-4000-8000-000000000001",
+        ] {
+            assert_eq!(checked_click(&note(Some(good))).as_deref(), Some(good));
+            assert!(shows_window(good));
+        }
         for bad in [
             "chat-open:",
             "chat-open:../x",
             "chat-open:0c000000-0000-4000-8000-00000000000g",
             "chat-open:0c000000x0000-4000-8000-000000000001",
+            "chat-open::0c000000-0000-4000-8000-000000000001",
+            "chat-open:evil:0c000000-0000-4000-8000-000000000001",
+            "chat-open:org:x:0c000000-0000-4000-8000-000000000001",
+            "chat-open:org:6a0e1f8e-1b2c-4d3e-8f90-a1b2c3d4e5f6",
+            "chat-open:personal:0c000000-0000-4000-8000-000000000001:x",
             "schedule-stop",
             "https://evil.example",
         ] {

@@ -9,9 +9,9 @@
  * switcher as rail tiles or a dropdown, and a timer never keeps running in another organization (Q4).
  */
 import type { DesktopApp } from '../ui/app';
-import { h } from '../ui/dom';
+import { type Child, h } from '../ui/dom';
 import type { DeepLink, Platform } from '../platform';
-import { ChatNotifier, PAUSE_HOUR_MS, tomorrowMorning } from '../chat/notifications';
+import { ChatNotifier, chatClickTarget, PAUSE_HOUR_MS, parseChatClick, tomorrowMorning } from '../chat/notifications';
 import type { Locale } from '../lib/i18n';
 import type { ThemePreference } from '../lib/theme';
 import { chatText, type ChatText } from '../chat/i18n';
@@ -107,7 +107,7 @@ export class Shell {
   tasksHidden = false;
   /** Chat notifications (BD-3b): opt-in, level None, pause. */
   readonly notifier: ChatNotifier;
-  /** A link or a notification to open once the chat (or the tasks) are ready. */
+  /** A notification click to open once the chat (or the tasks) are ready (links wait in the host, BDA13-L1). */
   private pendingTarget: DeepLink | null = null;
   /** The modules started after the sign-in (links wait for it). */
   private ready = false;
@@ -221,7 +221,9 @@ export class Shell {
             timeApi: () => this.app?.timeApi() ?? null,
             server: () => this.app?.state.session?.server ?? null,
             openVerification: (url) => void this.app?.openVerification(url),
-            openLink: (url) => void this.platform.openExternal(url).catch(() => undefined),
+            // Server links and links in task text (BDA13-I2): http(s) and mailto, the chat's checked opener; a link that
+            // cannot be opened says so instead of doing nothing.
+            openLink: (url) => void this.openContentLink(url),
             copy: (text) => this.copy(text),
             announce: (text) => this.announce(text),
             context: () => this.context,
@@ -255,9 +257,11 @@ export class Shell {
     platform.miniWindow?.onAction((action) => void this.onMiniAction(action));
     platform.onTray((action) => void this.onTrayAction(action));
     platform.onNotificationAction((id) => {
-      if (id.startsWith('chat-open:')) void this.openTarget({ kind: 'chat', id: id.slice(10), context: null });
+      const target = parseChatClick(id);
+      if (target !== null) void this.openTarget({ kind: 'chat', ...target }, 'notification');
     });
-    platform.onDeepLink((link) => void this.openTarget(link));
+    // A ping (BDA13-L1): the link is taken from the host, once.
+    platform.onDeepLink(() => void this.takeLink());
     this.mount.replaceChildren(this.root);
     this.root.addEventListener('chat-switcher', () => this.openSwitcher());
     document.addEventListener('keydown', (event) => this.onKey(event));
@@ -355,6 +359,8 @@ export class Shell {
       this.tasks?.signedOut();
       this.tasksHidden = false;
       this.ready = false;
+      // Nothing from before the sign-out opens after the next sign-in (BDA13-L1; the host forgets its link too).
+      this.pendingTarget = null;
       this.notifier.reset();
       this.contexts = [];
       this.context = null;
@@ -392,7 +398,7 @@ export class Shell {
     const target = this.notifier.observe(rows, { open, reading });
     if (target === null) return;
     const t = this.t;
-    void this.platform.notifyFriendly({ title: t('notifyTitle'), body: t('notifyBody'), pose: null, click: `chat-open:${target}` }).catch(() => false);
+    void this.platform.notifyFriendly({ title: t('notifyTitle'), body: t('notifyBody'), pose: null, click: chatClickTarget(this.chat.context, target) }).catch(() => false);
   }
 
   /** The opt-in card on the first Chat visit (design §3.4: a calm card, not an OS prompt at install). */
@@ -460,17 +466,44 @@ export class Shell {
     else if (action === 'resume-chat') this.pauseNotifications(null);
   }
 
+  /** Takes the host's link (BDA13-L1): before the modules are ready it stays there, and `enter()` takes it. */
+  private async takeLink(): Promise<void> {
+    if (!this.ready) return;
+    const link = await this.platform.takeDeepLink().catch(() => null);
+    if (link !== null) await this.openTarget(link, 'link');
+  }
+
+  /** A link from task text or a server page: the chat's opener (http(s), mailto); a failure is said (BDA13-I2). */
+  private async openContentLink(url: string): Promise<void> {
+    const opener = this.platform.chat;
+    try {
+      if (opener === undefined) await this.platform.openExternal(url);
+      else await opener.openLink(url);
+    } catch {
+      // Visible in the Tasks banner when the link was in a task (and announced), else announced.
+      if (this.tasks !== null && this.module === 'tasks') this.tasks.notify(this.t('linkOpenFailed'));
+      else this.announce(this.t('linkOpenFailed'));
+    }
+  }
+
   /**
    * Opens a conversation or a task from a `beacon-desktop://` link or a notification click: only navigation. A context
    * in the link is switched to through the normal flow (a running timer is asked about); an id the person may not see
-   * is simply not found (the API answers 404).
+   * is simply not found (the API answers 404). A link never switches the organization silently (BDA13-I1): without a
+   * running timer (whose stop question already asks) the person confirms the switch first. A notification click goes
+   * back to the organization it was notified in (BDA13-L3), through the same switch.
    */
-  async openTarget(link: DeepLink): Promise<void> {
+  async openTarget(link: DeepLink, source: 'link' | 'notification' = 'link'): Promise<void> {
     if (!this.ready) {
       this.pendingTarget = link;
       return;
     }
     if (link.context !== null && link.context !== this.context && this.contexts.some((item) => item.key === link.context)) {
+      const timerRuns = (this.app?.state.activeTimer ?? null) !== null;
+      if (source === 'link' && !timerRuns && !(await this.askLinkSwitch(link))) {
+        this.announce(this.t('linkSwitchDeclined', { org: this.currentContext()?.context.label ?? '' }));
+        return;
+      }
       await this.switchContext(link.context);
       if (this.context !== link.context) return;
     }
@@ -503,9 +536,11 @@ export class Shell {
     this.renderChrome();
     // A `beacon-desktop://` link the app was started with.
     this.ready = true;
-    const link = (await this.platform.takeDeepLink().catch(() => null)) ?? this.pendingTarget;
+    const pending = this.pendingTarget;
     this.pendingTarget = null;
-    if (link !== null) await this.openTarget(link);
+    const link = await this.platform.takeDeepLink().catch(() => null);
+    if (link !== null) await this.openTarget(link, 'link');
+    else if (pending !== null) await this.openTarget(pending, 'notification');
   }
 
   /** Set by main.ts when the session came from a sign-in in this run (not a launch with a stored session). */
@@ -805,23 +840,33 @@ export class Shell {
     this.renderChrome();
   }
 
+  /** A link wants another organization (BDA13-I1): the same confirm dialog as the timer's switch question. */
+  private askLinkSwitch(link: DeepLink): Promise<boolean> {
+    const t = this.t;
+    const org = this.currentContext()?.context.label ?? '';
+    const target = this.contexts.find((item) => item.key === link.context)?.label ?? link.context ?? '';
+    const what = t(link.kind === 'chat' ? 'linkSwitchWhatChat' : 'linkSwitchWhatTask');
+    return this.askConfirm(t('linkSwitchTitle', { target }), t('linkSwitchText', { what, target, org }), [t('linkSwitch')], 'confirm-link-switch');
+  }
+
   private askStopAndSwitch(key: string): Promise<boolean> {
     const t = this.t;
     const timer = this.app?.state.activeTimer;
     const org = this.currentContext()?.context.label ?? '';
     const target = this.contexts.find((item) => item.key === key)?.label ?? key;
+    const text = t('stopAndSwitchText', { task: timer?.taskTitle ?? '', time: timer ? elapsed(timer.startedAt, this.now()) : '', org, target });
+    return this.askConfirm(t('stopAndSwitchTitle', { org }), text, [chatIcon('stop', 'sm'), t('stopAndSwitch')], 'confirm-stop-switch');
+  }
+
+  /** The confirm dialog (Cancel focused first): resolves `true` only for the primary button. */
+  private askConfirm(title: string, text: string, label: Child[], goId: string): Promise<boolean> {
+    const t = this.t;
+    // One question at a time: a second one (another link while the first is asked) is a "no".
+    if (this.confirm.open) return Promise.resolve(false);
     return new Promise((resolve) => {
       const cancel = h('button', { class: 'btn', id: 'confirm-cancel', attrs: { type: 'button', autofocus: true } }, t('cancel'));
-      const go = h('button', { class: 'btn primary', id: 'confirm-stop-switch', attrs: { type: 'button' } }, chatIcon('stop', 'sm'), t('stopAndSwitch'));
-      this.confirm.replaceChildren(
-        h(
-          'div',
-          { class: 'dlg' },
-          h('div', { class: 'dlg-h' }, h('h1', { id: 'shell-confirm-title' }, t('stopAndSwitchTitle', { org }))),
-          h('div', { class: 'dlg-b' }, h('p', {}, t('stopAndSwitchText', { task: timer?.taskTitle ?? '', time: timer ? elapsed(timer.startedAt, this.now()) : '', org, target }))),
-          h('div', { class: 'dlg-f' }, cancel, go),
-        ),
-      );
+      const go = h('button', { class: 'btn primary', id: goId, attrs: { type: 'button' } }, ...label);
+      this.confirm.replaceChildren(h('div', { class: 'dlg' }, h('div', { class: 'dlg-h' }, h('h1', { id: 'shell-confirm-title' }, title)), h('div', { class: 'dlg-b' }, h('p', {}, text)), h('div', { class: 'dlg-f' }, cancel, go)));
       let answer = false;
       const done = () => {
         this.confirm.removeEventListener('close', done);

@@ -3,7 +3,7 @@
 // then the shell against the in-process mock Beacon (opt-in card, a notification for a new message elsewhere, none for
 // the conversation being read, pause from the tray, a click and a link opening the conversation or a task).
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatNotifier, loadNotifyPrefs, MIN_GAP_MS, NOTIFY_KEY, tomorrowMorning } from '../../src/chat/notifications';
+import { ChatNotifier, chatClickTarget, loadNotifyPrefs, MIN_GAP_MS, NOTIFY_KEY, parseChatClick, tomorrowMorning } from '../../src/chat/notifications';
 import type { Conversation } from '../../src/chat/types';
 import { browserPlatform } from '../../src/platform';
 import { Shell } from '../../src/shell/shell';
@@ -61,6 +61,21 @@ describe('chat notifier', () => {
     notifier.reset();
     expect(notifier.observe([row(1, { unread: 1, lastMessageId: 20 })], state)).toBeNull();
     expect(notifier.observe([row(3, { unread: 1, lastMessageId: null })], state)).toBeNull();
+  });
+
+  it('click targets carry the context they were notified in, and nothing else parses (BDA13-L3)', () => {
+    const uuid = '0c000000-0000-4000-8000-000000000006';
+    const org = 'org:6a0e1f8e-1b2c-4d3e-8f90-a1b2c3d4e5f6';
+    expect(chatClickTarget(org, uuid)).toBe(`chat-open:${org}:${uuid}`);
+    expect(chatClickTarget('personal', uuid)).toBe(`chat-open:personal:${uuid}`);
+    expect(chatClickTarget(null, uuid)).toBe(`chat-open:${uuid}`);
+    expect(chatClickTarget('org:not-a-uuid', uuid)).toBe(`chat-open:${uuid}`);
+    expect(parseChatClick(`chat-open:${org}:${uuid}`)).toEqual({ context: org, id: uuid });
+    expect(parseChatClick(`chat-open:personal:${uuid.toUpperCase()}`)).toEqual({ context: 'personal', id: uuid });
+    expect(parseChatClick(`chat-open:${uuid}`)).toEqual({ context: null, id: uuid });
+    for (const bad of ['chat-open:', `chat-open::${uuid}`, `chat-open:evil:${uuid}`, `chat-open:org:x:${uuid}`, `chat-open:${org}`, `chat-open:personal${uuid}`, `schedule-stop`, `chat-open:${uuid}x`]) {
+      expect(parseChatClick(bad), bad).toBeNull();
+    }
   });
 
   it('keeps only the setting, and survives broken storage', () => {
@@ -152,7 +167,7 @@ describe('chat notifications, tray and links in the shell', () => {
     await env.control('chat/post', { conversation: MAYA, author: 'maya', text: 'Secret plans' });
     ui.platform.hooks.chatHint({ kind: 'message', conversationUuid: MAYA, messageId: 9999 });
     await until(() => ui.platform.hooks.friendly.length === 1, 'the notification');
-    expect(ui.platform.hooks.friendly[0]).toEqual({ title: 'Beacon Desktop', body: 'New message in Beacon', pose: null, click: `chat-open:${MAYA}` });
+    expect(ui.platform.hooks.friendly[0]).toEqual({ title: 'Beacon Desktop', body: 'New message in Beacon', pose: null, click: `chat-open:${ORG}:${MAYA}` });
     expect(JSON.stringify(ui.platform.hooks.friendly)).not.toContain('Secret');
     expect(JSON.stringify(ui.platform.hooks.friendly)).not.toContain('Maya');
     // The tray: Open chat (with the unread count) and Pause.
@@ -171,7 +186,7 @@ describe('chat notifications, tray and links in the shell', () => {
     expect(ui.shell.notifier.paused()).toBe(false);
     // A click on the notification opens the conversation.
     ui.shell.show('time');
-    ui.platform.hooks.notificationAction(`chat-open:${MAYA}`);
+    ui.platform.hooks.notificationAction(`chat-open:${ORG}:${MAYA}`);
     await until(() => ui.shell.module === 'chat' && ui.shell.chat.openUuid() === MAYA, 'the conversation');
     ui.shell.show('time');
     ui.platform.hooks.trayAction('open-chat');
@@ -199,18 +214,93 @@ describe('chat notifications, tray and links in the shell', () => {
     expect(ui.$('#shell-settings').textContent).toContain('blocked for Beacon Desktop');
   });
 
-  it('links: a conversation in another organization (switching), an unknown one, a task without tasks, one at launch', async () => {
+  it('links: a conversation in another organization (asked first), an unknown one, a task without tasks, one at launch', async () => {
     const ui = await connected((platform) => (platform.hooks.pendingDeepLink = { kind: 'chat', id: ENVELOPE, context: null }));
     // The link the app was started with opened once the chat was ready (Personal has no envelope-v2: not found).
     expect(ui.platform.hooks.pendingDeepLink).toBeNull();
+    const live = () => document.querySelector('#shell-live')?.textContent ?? '';
+    // Another organization: never switched silently (BDA13-I1). Cancel stays and opens nothing.
     ui.platform.hooks.deepLink({ kind: 'chat', id: '0c000000-0000-4000-8000-000000000010', context: 'personal' });
+    await until(() => ui.$<HTMLDialogElement>('#shell-confirm').open, 'the link question');
+    expect(ui.$('#shell-confirm .dlg-b').textContent).toBe('A link asks to open a conversation in Personal. You are in Lumen Works now.');
+    // Another link while asked: not a second question over the first one.
+    ui.platform.hooks.deepLink({ kind: 'task', id: 't-141', context: 'personal' });
+    await until(() => live() === 'Stayed in Lumen Works. The link was not opened.', 'the second link declined');
+    expect(ui.$('#shell-confirm .dlg-b').textContent).toContain('a conversation');
+    ui.$('#shell-live').textContent = '';
+    ui.$<HTMLButtonElement>('#confirm-cancel').click();
+    await until(() => live() === 'Stayed in Lumen Works. The link was not opened.', 'declined');
+    expect(ui.shell.context).toBe(ORG);
+    expect(ui.shell.chat.openUuid()).not.toBe('0c000000-0000-4000-8000-000000000010');
+    // Taken once: nothing is left in the host (BDA13-L1).
+    expect(ui.platform.hooks.pendingDeepLink).toBeNull();
+    ui.platform.hooks.deepLink({ kind: 'chat', id: '0c000000-0000-4000-8000-000000000010', context: 'personal' });
+    await until(() => ui.$<HTMLDialogElement>('#shell-confirm').open, 'the link question again');
+    ui.$<HTMLButtonElement>('#confirm-link-switch').click();
     await until(() => ui.shell.context === 'personal' && ui.shell.chat.openUuid() === '0c000000-0000-4000-8000-000000000010', 'the personal conversation');
     ui.platform.hooks.deepLink({ kind: 'chat', id: ENVELOPE, context: ORG });
+    await until(() => ui.$<HTMLDialogElement>('#shell-confirm').open, 'the question for the organization');
+    ui.$<HTMLButtonElement>('#confirm-link-switch').click();
     await until(() => ui.shell.context === ORG && ui.shell.chat.openUuid() === ENVELOPE, 'the organization conversation');
+    // An organization the person does not have: no question, no switch, not found here.
     ui.platform.hooks.deepLink({ kind: 'chat', id: '0c000000-0000-4000-8000-0000000000ff', context: 'org:00000000-0000-4000-8000-000000000000' });
-    await until(() => document.querySelector('#shell-live')?.textContent === 'That conversation is not available here.', 'not found');
+    await until(() => live() === 'That conversation is not available here.', 'not found');
+    expect(ui.$<HTMLDialogElement>('#shell-confirm').open).toBe(false);
     ui.platform.hooks.deepLink({ kind: 'task', id: 't-141', context: null });
     await until(() => ui.shell.module === 'tasks', 'the tasks module');
-    await until(() => document.querySelector('#shell-live')?.textContent === 'Connect tasks to open that task.', 'tasks off');
+    await until(() => live() === 'Connect tasks to open that task.', 'tasks off');
+  });
+
+  it('a link handled while running never opens again after sign-out and sign-in (BDA13-L1)', async () => {
+    const ui = await connected();
+    ui.platform.hooks.deepLink({ kind: 'chat', id: MAYA, context: null });
+    await until(() => ui.shell.module === 'chat' && ui.shell.chat.openUuid() === MAYA, 'the conversation');
+    expect(ui.platform.hooks.pendingDeepLink).toBeNull();
+    ui.shell.show('time');
+    await ui.app.logout();
+    await until(() => ui.shell.root.dataset.bare === 'true', 'signed out');
+    // A link that came in but was never taken is forgotten at sign-out too.
+    ui.platform.hooks.pendingDeepLink = { kind: 'chat', id: ENVELOPE, context: ORG };
+    await ui.platform.secretDelete();
+    expect(ui.platform.hooks.pendingDeepLink).toBeNull();
+    const done = ui.app.connect(env.url);
+    await until(() => ui.$('#user-code') !== null, 'the device code');
+    await env.control('device/approve', { userCode: ui.$('#user-code').textContent });
+    await done;
+    await until(() => ui.shell.root.dataset.bare === 'false', 'signed in again');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(ui.shell.module).toBe('time');
+    expect(ui.$<HTMLDialogElement>('#shell-confirm').open).toBe(false);
+    expect(document.querySelector('#shell-live')?.textContent ?? '').not.toContain('not available');
+  });
+
+  it('a notification click goes back to the organization it was notified in; a running timer is asked about (BDA13-L3)', async () => {
+    const ui = await connected();
+    // Notified in Lumen Works, clicked after switching to Personal: back there, no link question.
+    ui.$<HTMLButtonElement>('.ctx-tile[data-context="personal"]').click();
+    await until(() => ui.shell.context === 'personal', 'personal');
+    ui.platform.hooks.notificationAction(`chat-open:${ORG}:${MAYA}`);
+    await until(() => ui.shell.context === ORG && ui.shell.chat.openUuid() === MAYA, 'the conversation in its organization');
+    expect(ui.$<HTMLDialogElement>('#shell-confirm').open).toBe(false);
+    // With a timer running in Lumen Works, a click for Personal asks the stop question first (Q4); Cancel stays.
+    ui.shell.show('time');
+    await until(() => !ui.app.busy, 'the time module');
+    (ui.shell.timeRoot.querySelector('[data-task="T-104"] .row-action') as HTMLButtonElement).click();
+    await until(() => ui.app.state.activeTimer !== null, 'the timer');
+    ui.platform.hooks.notificationAction('chat-open:personal:0c000000-0000-4000-8000-000000000010');
+    await until(() => ui.$<HTMLDialogElement>('#shell-confirm').open, 'the stop question');
+    expect(ui.$('#shell-confirm-title').textContent).toBe('Stop the timer in Lumen Works and switch?');
+    ui.$<HTMLButtonElement>('#confirm-cancel').click();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(ui.shell.context).toBe(ORG);
+    expect(ui.app.state.activeTimer).not.toBeNull();
+    // A link with a running timer: the stop question is the only one (no second link question).
+    ui.platform.hooks.deepLink({ kind: 'chat', id: '0c000000-0000-4000-8000-000000000010', context: 'personal' });
+    await until(() => ui.$<HTMLDialogElement>('#shell-confirm').open, 'the stop question for the link');
+    expect(document.querySelector('#confirm-stop-switch')).not.toBeNull();
+    expect(document.querySelector('#confirm-link-switch')).toBeNull();
+    ui.$<HTMLButtonElement>('#confirm-stop-switch').click();
+    await until(() => ui.shell.context === 'personal' && ui.shell.chat.openUuid() === '0c000000-0000-4000-8000-000000000010', 'switched and opened');
+    expect(ui.app.state.activeTimer).toBeNull();
   });
 });

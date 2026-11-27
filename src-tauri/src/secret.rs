@@ -1525,9 +1525,12 @@ pub async fn secret_delete(
     window: tauri::Window,
     session: tauri::State<'_, Arc<Session>>,
     realtime: tauri::State<'_, Arc<crate::realtime::Realtime>>,
+    links: tauri::State<'_, crate::deeplink::Pending>,
 ) -> Result<(), String> {
     crate::only_from(&window, "main")?;
     realtime.stop();
+    // A `beacon-desktop://` link not taken yet never opens after the next sign-in (audit BDA13-L1).
+    links.clear();
     let session = Arc::clone(&session);
     blocking(move || session.sign_out()).await
 }

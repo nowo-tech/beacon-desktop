@@ -57,7 +57,7 @@ for (const scheme of ['light', 'dark'] as const) {
     // A message elsewhere: one notification, level None.
     await control('chat/post', { conversation: MAYA, author: 'maya', text: 'Pairing at 11:30?' });
     await page.evaluate((maya) => (window as unknown as { __timeTrack: { hooks: { chatHint(hint: unknown): void } } }).__timeTrack.hooks.chatHint({ kind: 'message', conversationUuid: maya, messageId: 99999 }), MAYA);
-    await expect.poll(() => page.evaluate(() => (window as unknown as { __timeTrack: { hooks: Hooks } }).__timeTrack.hooks.friendly)).toEqual([{ title: 'Beacon Desktop', body: 'New message in Beacon', pose: null, click: `chat-open:${MAYA}` }]);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __timeTrack: { hooks: Hooks } }).__timeTrack.hooks.friendly)).toEqual([{ title: 'Beacon Desktop', body: 'New message in Beacon', pose: null, click: `chat-open:${ORG}:${MAYA}` }]);
     await page.locator('#rail-settings').click();
     await expect(page.locator('#notify-level')).toBeVisible();
     await page.locator('#notify-pause-hour').scrollIntoViewIfNeeded();

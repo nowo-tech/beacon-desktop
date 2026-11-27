@@ -171,7 +171,8 @@ export function tauriPlatform(): Platform {
     onNotificationAction: (handler) => void listen<string>('notification-action', (event) => handler(event.payload)),
     // `beacon-desktop://` links, parsed in Rust (src-tauri/src/deeplink.rs): ids and a context key only.
     takeDeepLink: () => invoke<DeepLink | null>('deep_link_take'),
-    onDeepLink: (handler) => void listen<DeepLink>('deep-link', (event) => handler(event.payload)),
+    // A ping only (BDA13-L1): the link is taken with `deep_link_take`, never read from the event.
+    onDeepLink: (handler) => void listen('deep-link', () => handler()),
     // Meeting detection: what holds the microphone, from the heartbeat (src-tauri/src/meeting, app ids only).
     onMic: (handler) => void listen<unknown>('mic', (event) => handler(event.payload)),
     promptWindow: promptHost,

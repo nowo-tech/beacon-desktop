@@ -119,7 +119,7 @@ export interface FriendlyNotification {
   action?: NotificationAction | null;
   /** Up to two buttons ("Working without a timer?"); the host drops unknown ids. */
   actions?: NotificationAction[];
-  /** What a click on the notification itself opens (`chat-open:<uuid>`, BD-3b); the host drops anything else. */
+  /** What a click on the notification itself opens (`chat-open:<context>:<uuid>`, BD-3b, BDA13-L3); the host drops anything else. */
   click?: string | null;
 }
 
@@ -354,10 +354,13 @@ export interface Platform {
   onSessionEvent(handler: (event: SessionEvent) => void): void;
   /** A tray menu item was chosen (see `TrayMenu`). */
   onTray(handler: (action: string) => void): void;
-  /** The `beacon-desktop://` link the app was opened with before the UI listened (taken once). */
+  /**
+   * The latest `beacon-desktop://` link, taken once (audit BDA13-L1: the only way the UI gets a link, at start-up and on
+   * each `onDeepLink` ping, so a link is opened exactly once whether or not the UI was listening when it came).
+   */
   takeDeepLink(): Promise<DeepLink | null>;
-  /** A `beacon-desktop://` link opened while the app runs (the window is already shown). */
-  onDeepLink(handler: (link: DeepLink) => void): void;
+  /** A `beacon-desktop://` link arrived (no payload: the UI takes it with `takeDeepLink`). */
+  onDeepLink(handler: () => void): void;
 }
 
 /** Test / development hooks of the browser fallback (set from Playwright through `window.__timeTrack`). */
@@ -484,7 +487,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
   const micHandlers: ((signal: unknown) => void)[] = [];
   const hintHandlers: ((hint: unknown) => void)[] = [];
   const modeHandlers: ((mode: ChatRealtimeMode) => void)[] = [];
-  const linkHandlers: ((link: DeepLink) => void)[] = [];
+  const linkHandlers: (() => void)[] = [];
   const hooks: BrowserHooks = {
     chatToken: null,
     chatConnectBegins: 0,
@@ -553,9 +556,10 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     sessionEvent: (event) => sessionHandlers.forEach((handler) => handler(event)),
     trayAction: (action) => trayHandlers.forEach((handler) => handler(action)),
     pendingDeepLink: null,
+    // As src-tauri/src/deeplink.rs (BDA13-I5): the link is always kept (latest wins), then the UI is pinged.
     deepLink: (link) => {
-      if (linkHandlers.length === 0) hooks.pendingDeepLink = link;
-      linkHandlers.forEach((handler) => handler(link));
+      hooks.pendingDeepLink = link;
+      linkHandlers.forEach((handler) => handler());
     },
     wake: (reason = 'tick') => wakeHandlers.forEach((handler) => handler(reason)),
     notificationAction: (id) => actionHandlers.forEach((handler) => handler(id)),
@@ -653,6 +657,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
       hooks.chatToken = null;
       hooks.chatRealtime = null;
       hooks.tasksToken = null;
+      // Sign-out forgets a link not taken yet (BDA13-L1), as Rust does.
+      hooks.pendingDeepLink = null;
     },
     idleSeconds: async () => hooks.idleSeconds,
     openExternal: async (url) => {
