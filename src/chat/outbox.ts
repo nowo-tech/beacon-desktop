@@ -193,7 +193,8 @@ export class ChatOutbox {
   /** *Cancel* / *Discard* (or *Edit*, which puts the text back in the composer): removes a message that was not sent. */
   discard(key: string): Pending | null {
     const pending = this.items.find((item) => item.key === key);
-    if (pending === undefined || pending.state === 'sent' || pending.state === 'sending') return null;
+    // Never while an attempt is in flight (it may be written): the message then settles as sent or comes back.
+    if (pending === undefined || pending.state === 'sent' || pending.state === 'sending' || this.inflight.has(key)) return null;
     this.drop(pending);
     // The next message of the conversation may go now.
     this.pump(pending.conversation, this.online);
@@ -257,8 +258,11 @@ export class ChatOutbox {
   private async attempt(pending: Pending): Promise<void> {
     if (this.inflight.has(pending.key)) return;
     this.inflight.add(pending.key);
-    pending.state = 'sending';
-    this.events.changed(pending.conversation, pending.root);
+    // A probe of a message waiting for the connection stays "Waiting for connection" (no flicker to "Sending…").
+    if (!(pending.state === 'queued' && pending.error !== null)) {
+      pending.state = 'sending';
+      this.events.changed(pending.conversation, pending.root);
+    }
     const generation = this.sync.currentGeneration;
     try {
       const written = await this.sync.write((api) => (pending.root === null ? api.send(pending.conversation, pending.text, pending.key) : api.reply(pending.conversation, pending.root, pending.text, pending.key)));

@@ -375,17 +375,24 @@ describe('outbox', () => {
     expect(ctx.events.queued).toHaveBeenCalledOnce();
     expect(ctx.outbox.queuedCount()).toBe(1);
     expect(ctx.outbox.discard('unknown')).toBeNull();
-    // The sync says offline: nothing is attempted until the connection is back (or the probe).
+    // The sync says offline: nothing is attempted until the connection is back (or the probe, or Try now).
     ctx.outbox.setOnline(false);
+    ctx.failures.push(offline);
+    ctx.outbox.retry(pending.key);
+    // A probe in flight keeps "Waiting for connection" and cannot be cancelled (it may be written).
+    expect(pending.state).toBe('queued');
+    expect(ctx.outbox.discard(pending.key)).toBeNull();
+    await settle();
+    expect(pending).toMatchObject({ state: 'queued', error: 'network_error' });
     ctx.outbox.setOnline(true);
     await settle();
     await settle();
-    expect(ctx.calls.map((call) => call.key)).toEqual([pending.key, pending.key]);
+    expect(ctx.calls.map((call) => call.key)).toEqual([pending.key, pending.key, pending.key]);
     expect(ctx.outbox.pending(ENVELOPE, null)).toEqual([]);
     expect(ctx.events.queued).toHaveBeenCalledOnce();
     // Retrying something that is not queued or failed does nothing.
     ctx.outbox.retry(pending.key);
-    expect(ctx.calls).toHaveLength(2);
+    expect(ctx.calls).toHaveLength(3);
   });
 
   it('keeps the order: a message never overtakes an older one, offline or not, timeline and thread alike', async () => {

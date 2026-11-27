@@ -73,9 +73,17 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.keyboard.press('Enter');
     await expect(page.locator('#msg-list li.msg.pending.queued')).toContainText('Waiting for connection');
     expect(await axe(page)).toEqual([]);
+    const waiting = page.locator('#msg-list li.msg.pending.queued');
+    // Waiting, not failed: no flicker to "Sending…" while the queue probes, Try now and Cancel stay.
+    await expect(waiting.getByRole('button', { name: 'Try now' })).toBeVisible();
+    await expect(waiting.getByRole('button', { name: 'Cancel' })).toBeVisible();
+    await expect(page.locator('#msg-list li.msg.pending.failed')).toHaveCount(0);
+    // The server takes writes again: Try now sends it (unless the queue's own probe got there first).
     await control('config', { chatFailNext: null });
-    await page.locator('#msg-list li.msg.pending.queued').getByRole('button', { name: 'Try now' }).click();
-    await expect(page.locator('#msg-list li.msg.pending')).toHaveCount(0);
+    await expect(async () => {
+      if ((await waiting.count()) > 0) await waiting.getByRole('button', { name: 'Try now' }).click({ timeout: 1000 });
+      await expect(page.locator('#msg-list li.msg.pending')).toHaveCount(0, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
     expect((await writes()).filter((write) => write.kind === 'send' && !write.replayed)).toHaveLength(3);
     // ↑ from the empty box to the last message, then up to the thread root; R replies in its thread.
     await page.locator('#composer').focus();
