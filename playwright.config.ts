@@ -22,7 +22,7 @@ export default defineConfig({
       reuseExistingServer: !process.env.CI,
     },
     {
-      command: './node_modules/.bin/vite build && ./node_modules/.bin/vite preview --port 1420 --strictPort --host 127.0.0.1',
+      command: 'BEACON_SERVER_FIELD=1 ./node_modules/.bin/vite build && ./node_modules/.bin/vite preview --port 1420 --strictPort --host 127.0.0.1',
       url: 'http://127.0.0.1:1420',
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,

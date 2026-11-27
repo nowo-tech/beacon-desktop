@@ -460,5 +460,8 @@
   "timerChanged": "El temporizador cambió entretanto en otro dispositivo, así que no se ha parado aquí.",
   "queuedNeedsFields": "Una parada guardada sin conexión aún necesita un tipo de actividad: Beacon mantiene el temporizador en marcha hasta que elijas uno.",
   "queuedStale": "Se han omitido {count} parada(s) guardada(s) sin conexión: ese temporizador ya estaba parado (aquí o en otro dispositivo), así que el más reciente sigue igual.",
-  "navTitle": "Tiempo"
+  "navTitle": "Tiempo",
+  "loginFixedHelp": "Beacon Desktop inicia sesión en Beacon, en {host}. Allí apruebas un código corto una vez; aquí no se escribe ninguna contraseña.",
+  "connectFixed": "Iniciar sesión con Beacon",
+  "serverFixedSignedOut": "Beacon Desktop ahora usa siempre {host}, así que se ha cerrado tu sesión de {old} en este equipo. Vuelve a iniciar sesión para seguir."
 }

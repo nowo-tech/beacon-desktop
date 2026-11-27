@@ -159,6 +159,12 @@ export interface AppDeps {
   now?: () => Date;
   locale?: Locale;
   beaconUrl?: string;
+  /**
+   * The one Beacon server of this build (owner decision 2026-11-27, release builds: https://beacon.nowo.tech): the
+   * sign-in has no address field, and a session stored for another server is signed out. Absent: the address field
+   * (development and the mock server only).
+   */
+  fixedServer?: string;
   /** Device-flow sleep (tests shorten it). */
   sleep?: (ms: number) => Promise<void>;
   searchDelayMs?: number;
@@ -235,6 +241,15 @@ const SAVED_VARIANTS: MessageKey[] = ['savedA', 'savedB', 'savedC'];
 const THEME_LABELS: Record<ThemePreference, MessageKey> = { system: 'themeSystem', light: 'themeLight', dark: 'themeDark' };
 
 /** `m:ss` for the device-code countdown. */
+/** Same scheme, host and port (an address that does not parse is never the same). */
+export function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
 function countdown(seconds: number): string {
   const s = Math.max(0, Math.ceil(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -498,7 +513,7 @@ export class DesktopApp {
     this.timeFormat = new Intl.DateTimeFormat(formatLocale, { hour: 'numeric', minute: '2-digit' });
     this.dateFormat = new Intl.DateTimeFormat(formatLocale, { dateStyle: 'medium', timeStyle: 'short' });
     this.state = loadLocal(this.storage);
-    this.serverDraft = this.state.lastServer ?? deps.beaconUrl ?? '';
+    this.serverDraft = deps.fixedServer ?? this.state.lastServer ?? deps.beaconUrl ?? '';
     this.queue = new OfflineQueue(this.storage);
     this.meetingStore = new MeetingStore(this.storage);
     document.documentElement.lang = this.locale;
@@ -571,6 +586,17 @@ export class DesktopApp {
     await this.applyShortcut(this.state.settings.resumeShortcut, false, 'resume');
     await this.loadBrowserChoice();
     this.token = await this.platform.secretGet();
+    // A session of another server than this build's one (should not exist in production): signed out, and told why.
+    const moved = this.state.session !== null && this.deps.fixedServer !== undefined && !sameOrigin(this.state.session.server, this.deps.fixedServer) ? this.state.session.server : null;
+    if (moved !== null) {
+      await this.forgetToken();
+      await this.prepareMeetingAccount();
+      this.clearAccountData();
+      this.show('login');
+      this.setNotice(this.t('serverFixedSignedOut', { host: hostOf(this.deps.fixedServer), old: hostOf(moved) }));
+      await this.updateTray();
+      return;
+    }
     if (this.state.session === null || this.token === null) {
       // A token without a saved session (local data cleared) cannot be used or replaced: sign in again.
       if (this.token !== null) await this.forgetToken();
@@ -915,6 +941,8 @@ export class DesktopApp {
    * opens the verification page and polls until approved. Expired / denied codes stay on the device screen.
    */
   async connect(input: string = this.serverDraft): Promise<void> {
+    // A fixed server: whatever the caller passed, only this build's one (the address is never asked for).
+    if (this.deps.fixedServer !== undefined) input = this.deps.fixedServer;
     this.serverDraft = input;
     const prepared = prepareServerUrl(input);
     if (!prepared.ok) {
@@ -3993,6 +4021,28 @@ export class DesktopApp {
 
   private renderLogin(): HTMLElement {
     const t = this.t;
+    const fixed = this.deps.fixedServer;
+    if (fixed !== undefined) {
+      // Release builds (owner decision 2026-11-27): no address to type; one button starts the approval in Beacon.
+      return h(
+        'form',
+        {
+          id: 'login-form',
+          attrs: { novalidate: true },
+          on: {
+            submit: (event) => {
+              event.preventDefault();
+              void this.connect();
+            },
+          },
+        },
+        moment('firstRun', 'mascot', t),
+        h('h2', {}, t('loginTitle')),
+        h('p', { class: 'help', id: 'server-fixed' }, t('loginFixedHelp', { host: hostOf(fixed) })),
+        h('button', { class: 'primary', id: 'connect', attrs: { type: 'submit', disabled: this.busy } }, this.busy ? t('connecting') : t('connectFixed')),
+        h('button', { class: 'link', id: 'open-privacy', attrs: { type: 'button' }, on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
+      );
+    }
     const problem = this.serverProblem;
     const server = h('input', {
       id: 'server',

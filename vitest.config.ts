@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  define: { __BEACON_URL__: JSON.stringify(''), __VERSION__: JSON.stringify('0.1.0'), __CHANNEL__: JSON.stringify('direct'), __STORE_URL__: JSON.stringify('') },
+  define: { __BEACON_URL__: JSON.stringify(''), __VERSION__: JSON.stringify('0.1.0'), __CHANNEL__: JSON.stringify('direct'), __STORE_URL__: JSON.stringify(''), __SERVER_FIELD__: JSON.stringify(true) },
   test: {
     include: ['tests/unit/**/*.test.ts'],
     environment: 'node',

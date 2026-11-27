@@ -349,3 +349,66 @@ describe('guided first run (UXA-4)', () => {
     expect(ui.shell.module).toBe('tasks');
   });
 });
+
+describe('one Beacon server (owner decision 2026-11-27)', () => {
+  function plainApp(fixedServer: string | undefined, platform = browserPlatform('0.1.0', nodeFetch), locale: 'en' | 'es' = 'en') {
+    document.body.replaceChildren();
+    const root = document.createElement('div');
+    document.body.append(root);
+    const app = new DesktopApp(root, platform, { storage: localStorage, locale, sleep: () => new Promise((resolve) => setTimeout(resolve, 5)), searchDelayMs: 1, ...(fixedServer !== undefined ? { fixedServer } : {}) });
+    return { app, platform, $: <T extends Element = HTMLElement>(selector: string) => document.querySelector(selector) as T };
+  }
+
+  it('release builds: no address field; the sign-in goes to the build server whatever is passed', async () => {
+    const ui = plainApp(env.url);
+    await ui.app.init();
+    expect(ui.$('#server')).toBeNull();
+    expect(ui.$('#where')).toBeNull();
+    expect(ui.$('#server-fixed').textContent).toContain(new URL(env.url).host);
+    expect(ui.$('#connect').textContent).toBe('Sign in with Beacon');
+    const done = ui.app.connect('https://beacon.example.com');
+    await until(() => ui.$('#user-code') !== null, 'the device code');
+    expect(ui.platform.hooks.signInConfirmations).toEqual([env.url]);
+    await env.control('device/approve', { userCode: ui.$('#user-code').textContent });
+    await done;
+    expect(ui.app.state.session?.server).toBe(env.url);
+  });
+
+  it('release builds: a session stored for another server is signed out with a clear message', async () => {
+    const first = plainApp(undefined);
+    await first.app.init();
+    const done = first.app.connect(env.url);
+    await until(() => first.$('#user-code') !== null, 'the device code');
+    await env.control('device/approve', { userCode: first.$('#user-code').textContent });
+    await done;
+    first.app.destroy();
+    const again = plainApp('https://beacon.nowo.tech', first.platform, 'es');
+    await again.app.init();
+    expect(again.app.state.session).toBeNull();
+    expect(again.app.view).toBe('login');
+    expect(again.$('#notice').textContent).toContain('ahora usa siempre beacon.nowo.tech');
+    expect(again.$('#notice').textContent).toContain(new URL(env.url).host);
+    expect(again.$('#server')).toBeNull();
+  });
+
+  it('release builds: a session of the build server keeps working', async () => {
+    const first = plainApp(env.url);
+    await first.app.init();
+    const done = first.app.connect();
+    await until(() => first.$('#user-code') !== null, 'the device code');
+    await env.control('device/approve', { userCode: first.$('#user-code').textContent });
+    await done;
+    first.app.destroy();
+    const again = plainApp(env.url, first.platform);
+    await again.app.init();
+    expect(again.app.state.session?.server).toBe(env.url);
+    expect(again.app.view).toBe('main');
+  });
+
+  it('development and mock builds keep the address field', async () => {
+    const ui = plainApp(undefined);
+    await ui.app.init();
+    expect(ui.$('#server')).not.toBeNull();
+    expect(ui.$('#server-fixed')).toBeNull();
+  });
+});

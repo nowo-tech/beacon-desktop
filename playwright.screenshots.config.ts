@@ -25,14 +25,14 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      command: './node_modules/.bin/vite build && ./node_modules/.bin/vite preview --port 1420 --strictPort --host 127.0.0.1',
+      command: 'BEACON_SERVER_FIELD=1 ./node_modules/.bin/vite build && ./node_modules/.bin/vite preview --port 1420 --strictPort --host 127.0.0.1',
       url: 'http://127.0.0.1:1420',
       reuseExistingServer: false,
       timeout: 120_000,
     },
     {
       command:
-        './node_modules/.bin/vite build --outDir out/screenshots-store --emptyOutDir && ./node_modules/.bin/vite preview --outDir out/screenshots-store --port 1421 --strictPort --host 127.0.0.1',
+        'BEACON_SERVER_FIELD=1 ./node_modules/.bin/vite build --outDir out/screenshots-store --emptyOutDir && ./node_modules/.bin/vite preview --outDir out/screenshots-store --port 1421 --strictPort --host 127.0.0.1',
       url: 'http://127.0.0.1:1421',
       env: { TIMETRACK_CHANNEL: 'store' },
       reuseExistingServer: false,

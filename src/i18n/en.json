@@ -460,5 +460,8 @@
   "timerChanged": "The timer changed on another device meanwhile, so it was not stopped here.",
   "queuedNeedsFields": "A stop saved offline still needs an activity type: Beacon keeps the timer running until you choose one.",
   "queuedStale": "{count} stop(s) saved offline were skipped: that timer had already been stopped (here or on another device), so the newer one was left as it is.",
-  "navTitle": "Time"
+  "navTitle": "Time",
+  "loginFixedHelp": "Beacon Desktop signs in to Beacon at {host}. You approve a short code there once; no password is typed here.",
+  "connectFixed": "Sign in with Beacon",
+  "serverFixedSignedOut": "Beacon Desktop now always uses {host}, so you were signed out of {old} on this computer. Sign in again to continue."
 }

@@ -14,6 +14,6 @@ export default defineConfig({
   use: { baseURL: `http://127.0.0.1:${UI_PORT}`, viewport: { width: 1280, height: 800 }, locale: 'en-US', timezoneId: 'Europe/Madrid' },
   webServer: [
     { command: 'node mock-server/server.mjs', url: `http://127.0.0.1:${MOCK_PORT}/__mock/state`, env: { PORT: MOCK_PORT }, reuseExistingServer: process.env.CHAT_REUSE === '1' },
-    { command: `./node_modules/.bin/vite build --outDir out/chat-ui --emptyOutDir && ./node_modules/.bin/vite preview --outDir out/chat-ui --port ${UI_PORT} --strictPort --host 127.0.0.1`, url: `http://127.0.0.1:${UI_PORT}`, reuseExistingServer: process.env.CHAT_REUSE === '1', timeout: 120_000 },
+    { command: `BEACON_SERVER_FIELD=1 ./node_modules/.bin/vite build --outDir out/chat-ui --emptyOutDir && ./node_modules/.bin/vite preview --outDir out/chat-ui --port ${UI_PORT} --strictPort --host 127.0.0.1`, url: `http://127.0.0.1:${UI_PORT}`, reuseExistingServer: process.env.CHAT_REUSE === '1', timeout: 120_000 },
   ],
 });

@@ -41,6 +41,8 @@ if (root !== null && new URLSearchParams(location.search).get('window') === 'pro
     contextLabel: () => shell.contextLabel(),
     contextLabelOf: (context) => shell.contextLabelOf(context),
     beaconUrl: __BEACON_URL__,
+    // Release builds: always https://beacon.nowo.tech, no address field (owner decision 2026-11-27).
+    ...(__SERVER_FIELD__ ? {} : { fixedServer: __BEACON_URL__ }),
     channel: __CHANNEL__,
     ...(__STORE_URL__ !== '' ? { storeUrl: __STORE_URL__ } : {}),
   });

@@ -92,6 +92,13 @@ From the UX audit of 2026-11-27 (UXA-1, 2, 4, 24, 25, 30, 36, 37); the owner app
 - **First window** (UXA-30): about 1200 × 780, centred and clamped to the work area (`tauri.conf.json`, and the full
   preset when nothing is remembered); the size the window was left at still wins at the next launch. The minimum
   stays 380 × 560.
+- **One Beacon server** (owner decision 2026-11-27): release builds always use https://beacon.nowo.tech. The sign-in
+  and the first run have no address field (*Sign in with Beacon* starts the approval straight away), Settings →
+  Account shows the server read-only, Rust refuses to bind any other origin, and the native *Sign in to <host>?*
+  question is no longer asked for it on any sign-in or reconnect (the host is fixed and pinned). An install bound to
+  another host is signed out at the next start with a message. Development keeps an override: the address field in
+  Vite's dev server and in builds with `BEACON_SERVER_FIELD=1` (the Playwright configs, for the mock server), accepted
+  only by debug Rust builds, which still ask *Sign in to <host>?* for a host other than beacon.nowo.tech.
 - **Type and spacing** (UXA-36, UXA-37): no text under 11 px (rail labels, badges, tags, priority, avatars use
   `--fs-2xs`); spacing tokens `--sp-1…6` (4–32 px) for the new screens.
 

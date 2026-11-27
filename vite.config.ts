@@ -10,14 +10,23 @@ if (storeUrl !== '' && !/^https:\/\/apps\.microsoft\.com\/detail\/[A-Za-z0-9]+$/
   throw new Error(`TIMETRACK_STORE_URL must be https://apps.microsoft.com/detail/<product id>, not ${storeUrl}`);
 }
 
-export default defineConfig({
-  clearScreen: false,
-  define: {
-    __BEACON_URL__: JSON.stringify((process.env.BEACON_URL ?? '').replace(/\/+$/, '')),
-    __VERSION__: JSON.stringify(version),
-    __CHANNEL__: JSON.stringify(channel),
-    __STORE_URL__: JSON.stringify(storeUrl),
-  },
-  server: { port: 1420, strictPort: true, host: '127.0.0.1' },
-  build: { target: 'es2022', sourcemap: false },
+// Owner decision 2026-11-27: Beacon Desktop always uses https://beacon.nowo.tech (release builds have no address
+// field and Rust refuses any other server). `BEACON_SERVER_FIELD=1` (development, e2e against mock-server/) brings
+// the field back; `BEACON_URL` only prefills it there. See README "Development server".
+// `vite` (dev server, `tauri dev`) has it too: those run debug Rust builds, which accept another server.
+export default defineConfig(({ command }) => {
+  const serverField = process.env.BEACON_SERVER_FIELD === '1' || command === 'serve';
+  const beaconUrl = serverField ? (process.env.BEACON_URL ?? '').replace(/\/+$/, '') : 'https://beacon.nowo.tech';
+  return {
+    clearScreen: false,
+    define: {
+      __BEACON_URL__: JSON.stringify(beaconUrl),
+      __SERVER_FIELD__: JSON.stringify(serverField),
+      __VERSION__: JSON.stringify(version),
+      __CHANNEL__: JSON.stringify(channel),
+      __STORE_URL__: JSON.stringify(storeUrl),
+    },
+    server: { port: 1420, strictPort: true, host: '127.0.0.1' },
+    build: { target: 'es2022', sourcemap: false },
+  };
 });
