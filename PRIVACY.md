@@ -43,7 +43,8 @@ mismatch is logged locally with the server name only, never a token.
 - Chat notifications: only the setting (on / off, asked, paused until). A notification never carries a sender, a
   conversation name or message text; the operating system shows "New message in Beacon" only.
 - Tasks are **never written to disk** either: boards, tasks and what you type in a task stay in memory and are
-  forgotten on an organization switch, "Disconnect tasks" and sign-out. On disk only: the tasks view, the last board
+  forgotten on an organization switch, "Disconnect tasks" and sign-out (answers that arrive after a switch are
+  dropped). On disk only: the tasks view, the last board
   per organization (its id), *Only mine* and the column-marker setting.
 - Chat messages are **never written to disk**: they stay in memory while the app runs and are forgotten on an
   organization switch, "Disconnect chat" and sign-out. The same goes for what you type and have not sent (drafts per

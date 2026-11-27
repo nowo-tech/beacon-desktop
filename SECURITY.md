@@ -118,12 +118,20 @@ Only the latest release receives fixes. The server can force an update with `min
   under, attached only to `<server base path>/api/task-board/v1/…` (anchored; look-alikes get no token). Writes:
   `PATCH` only on `…/tasks/{id}` and `…/tasks/{id}/checklist-items/{id}`, `PUT` / `DELETE` only on
   `…/tasks/{id}/members/{user}`, `POST` as any route; `If-Match` is an allowed request header and `ETag` a returned
-  one. Sign-out deletes the tasks entry first; "Disconnect tasks" deletes it alone.
+  one. Sign-out deletes the tasks entry first; "Disconnect tasks" deletes it alone. Neither revokes it on the server
+  (see *Known limitations*). Answers to requests sent before an organization switch or a reconnect are dropped, and
+  their `401` / `403` act on nothing (audit BDA13-M1).
 - **Links** (`beacon-desktop://`, src-tauri/src/deeplink.rs). Untrusted input that only navigates: parsed in Rust
   into `{kind: chat|task, id, context}` (UUID / TaskBoard id, `personal` or `org:<uuid>`; anything else, extra
-  parameters, dot segments, credentials, ports or over 512 bytes is dropped), the main window shown, the UI told. The
-  UI never writes or sends anything for a link; a context switch goes through the usual confirmation.
-- **Notifications** carry no message data (level None); a click target is `chat-open:<uuid>` only, checked in Rust.
+  parameters, dot segments, credentials, ports or over 512 bytes is dropped) and kept (the latest wins); the UI gets a
+  ping without payload and takes the link once with `deep_link_take`, at start-up and on each ping, so a link opens
+  exactly once; sign-out forgets a link not taken yet (audit BDA13-L1). Links raise and focus the main window at most
+  once a second (BDA13-I1). The UI never writes or sends anything for a link, and never switches the organization for
+  one without asking (with a running timer, the "Stop the timer and switch?" question is the one asked).
+- **Notifications** carry no message data (level None); a click target is `chat-open:[<context>:]<uuid>` only (the
+  context `personal` or `org:<uuid>`), checked in Rust; a click switches back to that context through the usual flow.
+- **Links in task text** (descriptions, comments) open through `open_chat_link`, like chat messages (`http(s)`,
+  `mailto` with the listed fields only); a refused link says so.
 - **Revocation.** "Disconnect chat" and sign-out call `POST …/api/chat/v1/logout` with the chat token first (best
   effort, 3 s), then delete it from the keychain.
 - **Realtime** (`src-tauri/src/realtime.rs`): the ticket (`GET …/api/chat/v1/realtime`) and the SSE stream are made in
@@ -137,6 +145,14 @@ Only the latest release receives fixes. The server can force an update with `min
   known one.
 
 ## Known limitations
+
+- **Tasks token not revoked on the server (BDA13-L2, Low).** Sign-out and "Disconnect tasks" delete the tasks token
+  from the keychain, but TaskBoard (3.4) has no logout route, and TimeTrack's `POST /api/time-track/logout` revokes only
+  the time token it is called with. A copy of the tasks token taken before sign-out (local malware reading the
+  keychain, a backup) keeps working against `/api/task-board/v1` until it expires. Revoke the device in Beacon
+  (Account → Security) to end it at once. Follow-up: a TaskBoard `POST /api/task-board/v1/logout` (idempotent `204`,
+  revoking the presented token and calling `TaskApiIdempotencyStoreInterface::forget()`), called best effort by the app
+  as chat does.
 
 - **macOS single-instance socket in `/tmp` (upstream, Low).** The one-copy guard (`tauri-plugin-single-instance`
   2.5.x) uses the fixed path `/tmp/tech_nowo_timetrack_si.sock` on macOS, and the plugin does not let the app choose

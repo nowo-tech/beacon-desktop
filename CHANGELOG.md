@@ -43,29 +43,56 @@ says so.
   on the first Chat visit, or Settings → Chat). A notification only says "New message in Beacon": no sender, no
   conversation, no text, whatever the message. A new message in a conversation you are not reading notifies once (not
   your own, not a muted conversation, nothing older than what was already seen; several at once are one notification,
-  at most one per 10 s); a click opens the app on that conversation. *Pause* for 1 hour or until tomorrow 08:00
+  at most one per 10 s); a click opens the app on that conversation, in the organization it was notified for. *Pause* for 1 hour or until tomorrow 08:00
   (Settings or the tray); the system's Do Not Disturb applies too. Sender and text previews wait for ChatKit's
   `notifications/preview` and the organization's maximum level (Q-BD-9).
 - **Tray**: *Open chat* (with the unread count) and *Pause / Resume chat notifications*.
 - **Links** `beacon-desktop://chat/<conversation>` and `beacon-desktop://tasks/<task>` (optionally
-  `?context=personal|org:<uuid>`) open the app on that conversation or task: navigation only. A context in the link is
-  switched to through the usual flow (a running timer is asked about first); something the person may not see is just
-  "not available here". Registered by the installers (and at run time for the AppImage).
+  `?context=personal|org:<uuid>`) open the app on that conversation or task: navigation only. A link never switches the
+  organization silently: the app asks first (with a running timer, the usual "Stop the timer and switch?" question is
+  the one asked); something the person may not see is just "not available here". Each link opens once, and links bring
+  the window forward at most once a second. Registered by the installers (and at run time for the AppImage).
 
 ### Changed
 
-- Rust: `notify_friendly` takes an optional click target (`chat-open:<uuid>` only); the tray menu takes the chat
-  items; `tauri-plugin-deep-link` 2.6 (the single-instance plugin forwards links to the running app), command
-  `deep_link_take`.
+- Rust: `notify_friendly` takes an optional click target (`chat-open:[<context>:]<uuid>` only, the context `personal`
+  or `org:<uuid>`); the tray menu takes the chat items; `tauri-plugin-deep-link` 2.6 (the single-instance plugin
+  forwards links to the running app), command `deep_link_take`; the `deep-link` event carries no payload.
+- The main window sets `dragDropEnabled: false`, so the webview (WebView2 on Windows) leaves HTML5 drag and drop to
+  the page and kanban cards can be dragged; the app has no file drop.
 - Rust (`beacon_fetch`): `PATCH` reaches only `…/task-board/v1/tasks/{id}` and `…/checklist-items/{id}`, `PUT` /
   `DELETE` only `…/tasks/{id}/members/{user}` (and the chat reaction route of 0.12.0); `If-Match` may be sent and the
   `ETag` header is read back. Everything else stays deny by default.
 
 ### Fixed
 
+Pre-release audit BDA13 of the 0.13.0 candidate (nothing here affects 0.12.0 or earlier):
+
+- **BDA13-M1**: an answer to a Tasks request sent before an organization switch (or a reconnect) is dropped: an open
+  task, its comments, a polling cursor or a *Load more* page of the previous organization no longer shows up in the
+  new one, and its `401` / `403 module_forbidden` / `403 context_forbidden` no longer disconnects tasks, hides the
+  module or refuses the new organization.
+- **BDA13-L1**: a `beacon-desktop://` link opens exactly once. It no longer opens again at the next sign-in or reload,
+  and sign-out forgets a link not opened yet.
+- **BDA13-L3**: a notification click opens the conversation in the organization it was notified for, switching back
+  through the usual flow (a running timer is asked about), instead of "not available here" after a switch.
+- **BDA13-L4**: quick edits of one task (two fields, two ticks of one checklist item) go out one after the other, each
+  with the revision the previous one returned, so your own first edit is no longer "Changed by someone else". A
+  refused move puts the card back at once, even when the reload after it fails (offline).
+- **BDA13-I1**: a link never switches the organization without asking, and a burst of links brings the window
+  forward at most once a second.
+- **BDA13-I2**: `http://` and `mailto:` links in task text and comments open (through the chat's checked opener, as
+  in chat messages); a link that cannot be opened shows "That link could not be opened." instead of doing nothing.
+- **BDA13-I3**: kanban drag and drop works in the Windows webview (`dragDropEnabled: false`, see *Changed*).
 - Time: when the task list scrolls with nothing focusable in it (only "Nothing matches…" in a short window, or with a
   toast's room below), it becomes a labelled, focusable region so the keyboard can scroll it (axe
   `scrollable-region-focusable`); otherwise there is no extra tab stop.
+
+### Known limitations
+
+- **BDA13-L2**: sign-out and *Disconnect tasks* delete the tasks token from this computer, but TaskBoard has no route
+  to revoke it on the server yet (chat has `POST …/chat/v1/logout`); it stays valid until it expires. To end it at
+  once, revoke the device in Beacon (Account → Security). The app will call the route once TaskBoard offers one.
 
 ## [0.12.0] - 2026-11-27
 
