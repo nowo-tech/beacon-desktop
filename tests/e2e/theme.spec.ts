@@ -120,7 +120,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await context.setOffline(true);
     await tt(page).refresh();
     const offline = page.locator('#offline');
-    await expect(offline).toContainText('action(s)');
+    await expect(offline).toContainText('will be sent when the connection returns');
     await expect(page.locator('#offline-card')).toHaveCount(0);
     await axe(page, 'offline');
     await context.setOffline(false);

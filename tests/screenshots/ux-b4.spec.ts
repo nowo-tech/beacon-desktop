@@ -148,7 +148,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await context.setOffline(true);
     await page.locator('#tasks li').first().hover();
     await page.locator('#tasks li .row-action').first().click();
-    await expect(page.locator('#offline')).toContainText('action(s)');
+    await expect(page.locator('#offline')).toContainText('1 action will be sent');
     await expect(page.locator('#offline-card')).toHaveCount(0);
     await axe(page);
     await shot(page, '09-time-offline', scheme);
