@@ -463,5 +463,9 @@
   "navTitle": "Time",
   "loginFixedHelp": "Beacon Desktop signs in to Beacon at {host}. You approve a short code there once; no password is typed here.",
   "connectFixed": "Sign in with Beacon",
-  "serverFixedSignedOut": "Beacon Desktop now always uses {host}, so you were signed out of {old} on this computer. Sign in again to continue."
+  "serverFixedSignedOut": "Beacon Desktop now always uses {host}, so you were signed out of {old} on this computer. Sign in again to continue.",
+  "pausedFor": "Paused for a moment. Back in {time}.",
+  "welcomeStrip": "You're in, {name}. Pick a task and press Start.",
+  "welcomeStripOrg": "You're in, {name} · {org}. Pick a task and press Start.",
+  "trayUpdateAvailable": "Install update {version}…"
 }

@@ -147,6 +147,8 @@ const en = {
   keyCardNav: 'Move between cards',
   keyStartTimer: 'Start or stop the timer on a task',
   keyCloseDetail: 'Close the task',
+  // UX batch 4: status strip (UXA-7).
+  pausedFor: 'Paused for a moment. Back in {time}.',
 };
 
 export type TasksKey = keyof typeof en;
@@ -298,6 +300,8 @@ const es: Record<TasksKey, string> = {
   keyCardNav: 'Moverse entre tarjetas',
   keyStartTimer: 'Poner o parar el temporizador en una tarea',
   keyCloseDetail: 'Cerrar la tarea',
+  // UX batch 4: franja de estado (UXA-7).
+  pausedFor: 'En pausa un momento. Volvemos en {time}.',
 };
 
 const CATALOGS: Record<Locale, Record<TasksKey, string>> = { en, es };

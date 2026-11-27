@@ -331,6 +331,14 @@ const en = {
   homeUnreadMention: 'unread',
   homeNoMentions: 'When someone mentions you, it shows up here.',
   homeRecent: 'Recent',
+  // UX batch 4: status strip (UXA-7, UXA-13), undo toasts (UXA-8), one unread count (UXA-11).
+  pausedFor: 'Paused for a moment. Back in {time}.',
+  pauseLoading: 'Taking a short pause. Loading again in {time}.',
+  pauseLoadingReady: 'Ready to load again.',
+  dismissNotice: 'Dismiss',
+  messageDiscarded: 'Message discarded',
+  newBelowOne: '1 new message below',
+  newBelowMany: '{count} new messages below',
 } as const;
 
 export type ChatKey = keyof typeof en;
@@ -666,6 +674,14 @@ const es: Record<ChatKey, string> = {
   homeUnreadMention: 'sin leer',
   homeNoMentions: 'Cuando alguien te mencione, aparecerá aquí.',
   homeRecent: 'Recientes',
+  // UX batch 4: franja de estado (UXA-7, UXA-13), avisos con Deshacer (UXA-8), un solo recuento sin leer (UXA-11).
+  pausedFor: 'En pausa un momento. Volvemos en {time}.',
+  pauseLoading: 'Una pausa breve. Volvemos a cargar en {time}.',
+  pauseLoadingReady: 'Listo para cargar de nuevo.',
+  dismissNotice: 'Cerrar aviso',
+  messageDiscarded: 'Mensaje descartado',
+  newBelowOne: '1 mensaje nuevo abajo',
+  newBelowMany: '{count} mensajes nuevos abajo',
 };
 
 const CATALOGS: Record<Locale, Record<ChatKey, string>> = { en, es };

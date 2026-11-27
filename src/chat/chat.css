@@ -4,7 +4,7 @@
  * on a 4 / 8 px grid, radii 4 / 6 / 8 / 12, motion 120–180 ms and off with reduced motion. Light and dark sets; the
  * system decides unless Settings → Theme forces one (data-theme on <html>, as styles.css).
  */
-:where(.titlebar, .rail, #mod-chat, #mod-tasks, #mod-time, #mod-setup, .sh-dialog, .ctx-menu, .mini-timer) {
+:where(.titlebar, .rail, #mod-chat, #mod-tasks, #mod-time, #mod-setup, .sh-dialog, .ctx-menu, .mini-timer, #undo-toasts) {
   --ink: #0f1c18; --ink-2: #3f514a; --ink-3: #5f6e68;
   --surface: #ffffff; --surface-2: #f6f8f7; --surface-3: #edf2ef; --hover: #f1f5f3;
   --line: #e2e8e4; --line-strong: #cbd5cf;
@@ -30,7 +30,7 @@
   font-family: var(--font-ui);
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) :where(.titlebar, .rail, #mod-chat, #mod-tasks, #mod-time, #mod-setup, .sh-dialog, .ctx-menu, .mini-timer) {
+  :root:not([data-theme='light']) :where(.titlebar, .rail, #mod-chat, #mod-tasks, #mod-time, #mod-setup, .sh-dialog, .ctx-menu, .mini-timer, #undo-toasts) {
     --ink: #e5eee9; --ink-2: #b4c4bc; --ink-3: #93a49c;
     --surface: #121a17; --surface-2: #161f1b; --surface-3: #1c2722; --hover: #18221e;
     --line: #233029; --line-strong: #34453d;
@@ -46,7 +46,7 @@
     --shadow-lg: 0 2px 8px rgb(0 0 0 / 50%), 0 24px 60px rgb(0 0 0 / 60%);
   }
 }
-:root[data-theme='dark'] :where(.titlebar, .rail, #mod-chat, #mod-tasks, #mod-time, #mod-setup, .sh-dialog, .ctx-menu, .mini-timer) {
+:root[data-theme='dark'] :where(.titlebar, .rail, #mod-chat, #mod-tasks, #mod-time, #mod-setup, .sh-dialog, .ctx-menu, .mini-timer, #undo-toasts) {
   --ink: #e5eee9; --ink-2: #b4c4bc; --ink-3: #93a49c;
   --surface: #121a17; --surface-2: #161f1b; --surface-3: #1c2722; --hover: #18221e;
   --line: #233029; --line-strong: #34453d;
@@ -228,9 +228,6 @@ svg.i.lg { width: 20px; height: 20px; }
 .ch-tools .members { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); padding: 0 8px; }
 :where(#mod-chat, #mod-tasks) .btn-ghost { height: 30px; min-width: 30px; padding: 0 8px; color: var(--ink-2); display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: var(--fs-sm); font-weight: 500; }
 :where(#mod-chat, #mod-tasks) .btn-ghost:hover { background: var(--hover); color: var(--ink); }
-.ch-banner { flex: none; display: flex; align-items: center; gap: 12px; padding: 6px 20px; font-size: var(--fs-xs); color: var(--warn); background: var(--warn-soft); border-bottom: 1px solid var(--line); animation: fade 160ms var(--ease); }
-.ch-banner[hidden] { display: none; }
-.cb-text { flex: 1; }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 .msgs-wrap { position: relative; flex: 1 1 auto; min-height: 0; display: grid; }
 .msgs { overflow-y: auto; min-height: 0; padding: 8px 0 12px; overflow-anchor: none; overscroll-behavior: contain; }

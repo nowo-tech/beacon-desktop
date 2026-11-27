@@ -69,6 +69,8 @@ export class ChatSync {
   visible = false;
   live = false;
   private pausedUntil = 0;
+  /** A `429` was the last answer: the next answer says "ok" again (UX batch 4: a stale pause no longer stays). */
+  private limited = false;
   private failures = 0;
   private stamps: number[] = [];
   private pollTimer: unknown = null;
@@ -114,6 +116,11 @@ export class ChatSync {
     this.threadRoot = null;
   }
 
+  /** When a `Retry-After` pause ends (the clock's milliseconds; in the past when none runs). */
+  get resumeAt(): number {
+    return this.pausedUntil;
+  }
+
   setLive(live: boolean): void {
     if (this.live === live) return;
     this.live = live;
@@ -137,8 +144,9 @@ export class ChatSync {
     this.stamps.push(now);
     try {
       const result = await work();
-      if (this.failures > 0) this.events.status('ok');
+      if (this.failures > 0 || this.limited) this.events.status('ok');
       this.failures = 0;
+      this.limited = false;
       return result;
     } catch (error) {
       if (error instanceof ApiError) {
@@ -147,6 +155,7 @@ export class ChatSync {
           this.events.unauthorized();
         } else if (error.status === 429) {
           this.pausedUntil = this.clock.now() + (error.retryAfter ?? 60) * 1000;
+          this.limited = true;
           this.events.status('limited');
         } else if (error.isNetwork || error.status >= 500) {
           this.failures += 1;

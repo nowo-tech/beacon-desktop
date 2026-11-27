@@ -101,6 +101,10 @@ export class ChatOutbox {
   private online = true;
   private probeTimer: unknown = null;
   private probes = 0;
+  /** Bumped by {@link clear}: an *Undo* from before a context switch or a disconnect restores nothing. */
+  private era = 0;
+  /** Messages sent per conversation (an undone discard never overtakes one sent after it). */
+  private readonly sends = new Map<string, number>();
 
   constructor(
     private readonly sync: ChatSync,
@@ -134,6 +138,43 @@ export class ChatOutbox {
     this.reacting.clear();
     this.inflight.clear();
     this.announced.clear();
+    this.sends.clear();
+    this.era += 1;
+  }
+
+  /**
+   * What an *Undo* of {@link discard} needs (UX batch 4, UXA-8): where the message stood, the outbox's era and how many
+   * messages of its conversation had gone out.
+   */
+  undoPoint(pending: Pending): { index: number; era: number; sends: number } {
+    return { index: this.items.indexOf(pending), era: this.era, sends: this.sends.get(pending.conversation) ?? 0 };
+  }
+
+  /**
+   * *Undo* of a discard (UX batch 4, UXA-8): the message comes back where it stood, with its `Idempotency-Key`. A failed
+   * message comes back failed (nothing is sent). A queued one takes its turn again, unless a newer message of its
+   * conversation went out (or is going out) meanwhile: then it comes back as not sent, with *Retry*, so it never overtakes silently.
+   * Nothing happens after a context switch, "Disconnect chat" or sign-out ({@link clear}), or when the key is back already.
+   */
+  restore(pending: Pending, point: { index: number; era: number; sends: number }): boolean {
+    if (point.era !== this.era || this.items.some((item) => item.key === pending.key)) return false;
+    if (pending.state !== 'failed') {
+      // A newer message of the conversation went out, or is going out now: this one would overtake it.
+      const overtaken =
+        (this.sends.get(pending.conversation) ?? 0) !== point.sends ||
+        this.items.some((item) => item.conversation === pending.conversation && (item.state === 'sending' || item.state === 'waiting' || this.inflight.has(item.key)));
+      pending.state = overtaken ? 'failed' : 'queued';
+      pending.canRetry = overtaken ? true : pending.canRetry;
+      if (overtaken) pending.error ??= 'network_error';
+      else if (!this.online) pending.error = 'network_error';
+    }
+    this.items.splice(Math.max(0, Math.min(point.index, this.items.length)), 0, pending);
+    this.events.changed(pending.conversation, pending.root);
+    if (pending.state === 'queued') {
+      this.pump(pending.conversation, this.online);
+      if (!this.online) this.scheduleProbe();
+    }
+    return true;
   }
 
   /**
@@ -269,6 +310,7 @@ export class ChatOutbox {
       this.inflight.delete(pending.key);
       if (!this.sync.isCurrent(generation) || !this.items.includes(pending)) return;
       pending.state = 'sent';
+      this.sends.set(pending.conversation, (this.sends.get(pending.conversation) ?? 0) + 1);
       pending.error = null;
       pending.sent = written.message;
       this.announced.delete(pending.key);

@@ -114,6 +114,7 @@ import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
 import { art, emptyArt, ERROR_POSES, moment, poseArt, variant, type Moment } from './mascot';
 import { toastAction, toastActions } from './toast';
+import { formatCountdown, pickMessage, StatusStrip, type StripMessage } from './statusStrip';
 import { PromptMount, type PromptAnswer, type PromptBlock, type PromptButton, type PromptPicker, type PromptTaskOption, type PromptText, type PromptView } from './prompt';
 
 export type View = 'loading' | 'login' | 'device' | 'main' | 'settings' | 'privacy' | 'update-required';
@@ -359,6 +360,11 @@ export class DesktopApp {
   noticeMoment: Moment | null = null;
   /** "You're in" card after a sign-in, until dismissed or a timer starts. */
   welcome = false;
+  /**
+   * A `429` while signed in (UX batch 4, UXA-7): a calm countdown in the status strip instead of an error card, and the
+   * action tried again once it ends.
+   */
+  rateLimit: { until: number; retry: (() => Promise<void>) | null } | null = null;
   /** Entry (task + start) whose long-running nudge was answered "Keep going". */
   longRunningOk: string | null = null;
   /** Stops of this session (picks the success copy variant). */
@@ -391,6 +397,8 @@ export class DesktopApp {
   private deviceStarted = 0;
   private deviceAnnounced = false;
   private retryAction: (() => Promise<void>) | null = null;
+  /** The status strip (UX batch 4, UXA-7): offline, a `429` pause and the sign-in welcome, one at a time, no shift. */
+  private readonly strip: StatusStrip;
   private ticker: ReturnType<typeof setInterval> | null = null;
   private deviceTicker: ReturnType<typeof setInterval> | null = null;
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -537,7 +545,16 @@ export class DesktopApp {
     this.windowMemory = loadWindowMemory(this.storage);
     this.layout = layoutFor(this.viewportWidth());
     this.sidebar = h('nav', { class: 'sidebar pane', id: 'sidebar', attrs: { hidden: true, tabindex: '-1' } });
-    this.center = h('div', { class: 'main-pane pane', id: 'main-pane', attrs: { tabindex: '-1' } }, this.status, this.alert, this.body);
+    this.strip = new StatusStrip({
+      id: 'time-strip',
+      dismissLabel: this.t('dismiss'),
+      announce: (text) => this.announce(text),
+      onDismiss: (message) => {
+        if (message.key === 'welcome') this.dismissWelcome();
+      },
+      focusAway: () => this.main?.search.focus(),
+    });
+    this.center = h('div', { class: 'main-pane pane', id: 'main-pane', attrs: { tabindex: '-1' } }, this.strip.root, this.status, this.alert, this.body);
     this.detail = h('aside', { class: 'detail pane', id: 'detail', attrs: { hidden: true, tabindex: '-1', 'aria-labelledby': 'detail-title' } });
     this.menuRegion = h('div', { class: 'link-menu-region', id: 'link-menu-region' });
     this.root.replaceChildren(this.header, h('div', { class: 'frame', id: 'frame' }, this.sidebar, this.center, this.detail), this.liveRegion, this.toastRegion, this.menuRegion);
@@ -2608,7 +2625,8 @@ export class DesktopApp {
       layout: signedIn && this.host === null ? { id: `layout-${otherMode(this.layout)}`, label: t(this.layout === 'full' ? 'layoutCompact' : 'layoutFull') } : null,
       openBeacon: dashboardUrl(server) !== null ? t('openBeacon') : null,
       myTime: myTimeUrl(server) !== null ? t('myTime') : null,
-      checkUpdates: signedIn && this.channel === 'direct' ? t('trayCheckUpdates') : null,
+      // An update to install is named here too (UX batch 4, UXA-22): the same item opens the title bar's update panel.
+      checkUpdates: signedIn && this.channel === 'direct' ? (this.update !== null && this.update.installable && this.updateMessage === null ? t('trayUpdateAvailable', { version: this.update.version }) : t('trayCheckUpdates')) : null,
       pauseFriendly: !signedIn || (!this.state.settings.funMessages && !this.state.settings.wellbeingReminders)
         ? null
         : pausedAt(this.state.messages, this.now())
@@ -3031,6 +3049,7 @@ export class DesktopApp {
       if (manual) this.reportCheck(unavailable ?? this.t('updateUpToDate', { version: this.version }));
       if (this.view === 'update-required') this.view = 'main';
       this.render();
+      void this.updateTray();
       return;
     }
     const installable = result.installable !== false && isVersion(result.version);
@@ -3058,6 +3077,7 @@ export class DesktopApp {
       if (this.view === 'update-required') this.view = 'main';
       this.render();
     }
+    void this.updateTray();
   }
 
   /** The higher of the updater's minimum and GET me's (`null` when neither is set). */
@@ -3609,9 +3629,13 @@ export class DesktopApp {
   ): Promise<void> {
     this.busy = true;
     this.error = null;
+    // Something else is being done: the action that met a `429` is not repeated on its own afterwards (UXA-7).
+    if (this.rateLimit !== null) this.rateLimit.retry = null;
     this.render();
     try {
       await action();
+      // Beacon answered: a pause from an earlier `429` is over (UXA-7, as Chat and Tasks).
+      this.rateLimit = null;
     } catch (error) {
       if (error instanceof ApiError && error.isUnauthorized && this.state.session !== null) {
         await this.signedOut(this.t('sessionExpired'));
@@ -3629,6 +3653,13 @@ export class DesktopApp {
   }
 
   private fail(error: unknown, stage: ErrorStage, task?: string, server?: string, retry?: () => Promise<void>): void {
+    if (error instanceof ApiError && error.status === 429 && stage === 'action' && this.state.session !== null) {
+      // A background pause, not a failure (UXA-7): "Paused for a moment. Back in 0:25." in the strip, then once more.
+      this.error = null;
+      this.rateLimit = { until: Date.now() + Math.max(1, error.retryAfter ?? 30) * 1000, retry: retry ?? null };
+      this.render();
+      return;
+    }
     this.error = describeError(error, {
       stage,
       task,
@@ -3968,9 +3999,44 @@ export class DesktopApp {
     patch(this.status, [
       this.notice !== null &&
         h('p', { class: this.noticeMoment !== null ? 'notice with-art' : 'notice', id: 'notice' }, this.noticeMoment !== null && moment(this.noticeMoment, 'mascot tiny', t), h('span', {}, this.notice)),
-      this.offline && signedIn && h('p', { class: 'notice warn', id: 'offline' }, t('offline', { count: this.queue.size })),
     ]);
     patch(this.alert, [this.error !== null ? this.renderError(this.error) : null]);
+    this.renderStrip(signedIn);
+  }
+
+  /**
+   * The status strip (UX batch 4, UXA-7): offline (with the actions waiting), a `429` pause counting down, and, hosted in
+   * the shell, "You're in" after a sign-in (UXA-23: the organization, not the server address). Its height is kept on the
+   * main screen whether it says something or not, so the list never moves.
+   */
+  private renderStrip(signedIn: boolean): void {
+    const t = this.t;
+    this.strip.root.hidden = !(signedIn && this.view === 'main');
+    const rate = this.rateLimit;
+    const name = this.state.session?.displayName ?? this.state.session?.identifier ?? '';
+    const org = this.deps.contextLabel?.() ?? null;
+    const message: StripMessage | null = !signedIn
+      ? null
+      : pickMessage([
+          this.offline && { key: 'offline', text: t('offline', { count: this.queue.size }), tone: 'warn', textId: 'offline' },
+          rate !== null && {
+            key: 'rate',
+            text: (left: number) => t('pausedFor', { time: formatCountdown(left) }),
+            tone: 'info',
+            until: rate.until,
+            onElapsed: () => this.rateLimitEnded(rate),
+          },
+          this.welcome && this.host !== null && this.error === null && { key: 'welcome', text: org !== null ? t('welcomeStripOrg', { name, org }) : t('welcomeStrip', { name }), tone: 'info' },
+        ]);
+    this.strip.show(message);
+  }
+
+  /** The `429` pause ended: the action that met it is tried again (once), unless something else happened meanwhile. */
+  private rateLimitEnded(rate: { until: number; retry: (() => Promise<void>) | null }): void {
+    if (this.rateLimit !== rate) return;
+    this.rateLimit = null;
+    this.render();
+    if (rate.retry !== null && this.state.session !== null && !this.busy) void rate.retry();
   }
 
   private renderError(error: ErrorView): HTMLElement {
@@ -4375,7 +4441,8 @@ export class DesktopApp {
       this.pinExpired && this.renderPinExpired(),
       this.deps.updateInShell !== true && this.renderUpdateCard(),
       ...this.renderMeetingBanners(),
-      this.welcome && this.error === null && this.renderWelcome(),
+      // Hosted in the shell, "You're in" is a line in the status strip (UXA-23).
+      this.welcome && this.error === null && this.host === null && this.renderWelcome(),
       this.longRunning() && this.renderLongRunning(),
       this.updateMessage !== null &&
         h(
@@ -4385,13 +4452,7 @@ export class DesktopApp {
           h('button', { class: 'secondary small', id: 'download-beacon', on: { click: () => this.openApps() } }, t('downloadFromBeacon')),
         ),
       this.clampNotes.length > 0 && this.renderClamps(),
-      this.offline &&
-        h(
-          'section',
-          { class: 'card still-there offline-card', id: 'offline-card', attrs: { role: 'region', 'aria-labelledby': 'offline-title' } },
-          moment('offline', 'mascot tiny', t),
-          h('div', { class: 'still-there-body' }, h('h2', { id: 'offline-title' }, t('offlineTitle')), h('p', { class: 'muted' }, t('offlineStartNote'))),
-        ),
+      // Offline is the status strip's line now (UXA-7): no second "Working offline" card above the list.
     ]);
   }
 

@@ -30,6 +30,7 @@ import type { MiniAction, MiniView } from '../ui/miniWindow';
 import { shellText, type ShellText } from './i18n';
 import { type AnyTab, isTimeTab, SettingsDialog, type SettingsSource } from './settings';
 import { type SetupState, type SetupStep, SetupView } from './setup';
+import { ToastRegion } from '../ui/toastRegion';
 
 export type ModuleId = 'chat' | 'tasks' | 'time';
 export type Density = 'comfortable' | 'compact';
@@ -142,6 +143,8 @@ export class Shell {
   private readonly tasksPanel: HTMLElement;
   private readonly tt: TasksText;
   private readonly live: HTMLElement;
+  /** The one toast region with *Undo* (UX batch 4, UXA-8). */
+  readonly toasts: ToastRegion;
   private readonly switcher: HTMLDialogElement;
   private readonly settings: HTMLDialogElement;
   /** The one Settings (UX batch 6). */
@@ -175,6 +178,14 @@ export class Shell {
     this.titleMain = h('div', { class: 'tb-main' });
     this.titlebar = h('header', { class: 'titlebar', id: 'titlebar' }, this.titleMain);
     this.rail = h('nav', { class: 'rail', id: 'rail', attrs: { 'aria-label': this.t('modules') } });
+    this.toasts = new ToastRegion({
+      label: this.st('toasts'),
+      undoLabel: this.st('toastUndo'),
+      dismissLabel: this.st('toastClose'),
+      undoHint: this.st('toastUndoHint', { shortcut: `${modKey()}+Z` }),
+      shortcut: `${modKey()}+Z`,
+      announce: (text) => this.announce(text),
+    });
     const host = platform.chat;
     if (host === undefined) throw new Error('This host has no chat support.');
     this.chat = new ChatModule({
@@ -230,6 +241,7 @@ export class Shell {
       onConnectRender: () => this.followSetup(),
       sidebarTimer: () => this.sidebarTimer(),
       preferredContext: () => this.prefs.context,
+      toasts: this.toasts,
       storage: deps.storage,
     });
     this.tt = tasksText(deps.locale);
@@ -271,6 +283,7 @@ export class Shell {
             },
             runningTaskId: () => this.app?.state.activeTimer?.taskId ?? null,
             markers: () => this.prefs.markers,
+            toasts: this.toasts,
             storage: deps.storage,
           });
     this.tasksPanel = h('section', { class: 'module', id: 'mod-tasks', attrs: { role: 'tabpanel', 'aria-labelledby': 'tab-tasks', hidden: true } }, this.tasks?.root ?? null);
@@ -286,6 +299,7 @@ export class Shell {
       tasks: this.tasks,
       tasksHidden: () => this.tasksHidden,
       skipped: () => this.prefs.skipped,
+      signedIn: () => ({ name: this.app?.state.session?.displayName ?? this.app?.state.session?.identifier ?? '', org: this.currentContext()?.context.label ?? null }),
       skip: (step) => {
         if (!this.prefs.skipped.includes(step)) this.prefs.skipped = [...this.prefs.skipped, step];
         if (step === 'chat') this.chat.cancelConnect();
@@ -306,7 +320,7 @@ export class Shell {
     this.confirm = h('dialog', { class: 'sh-dialog', id: 'shell-confirm', attrs: { 'aria-labelledby': 'shell-confirm-title' } });
     this.allocation = new AllocationDialog(this.t, (text) => this.announce(text), () => this.now());
     this.updatePop = this.buildUpdatePop();
-    this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.tasksPanel, this.timePanel, this.setup.root), this.live, this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog, this.updatePop);
+    this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.tasksPanel, this.timePanel, this.setup.root), this.live, this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog, this.updatePop, this.toasts.root);
     platform.miniWindow?.onAction((action) => void this.onMiniAction(action));
     platform.onTray((action) => void this.onTrayAction(action));
     platform.onNotificationAction((id) => {

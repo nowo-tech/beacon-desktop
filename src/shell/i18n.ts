@@ -62,6 +62,12 @@ const en = {
   setupCancel: 'Cancel',
   setupFinished: 'Setup finished. Opening chat.',
   setupTasksOff: 'Tasks are turned off in Beacon for now.',
+  // UX batch 4: toast region with Undo (UXA-8), the first run's time step (UXA-23).
+  toasts: 'Notifications',
+  toastUndo: 'Undo',
+  toastUndoHint: 'Undo with {shortcut}.',
+  toastClose: 'Close',
+  setupTimeSigned: 'Signed in as {name} · {org}. Your timer is in the title bar.',
 };
 
 export type ShellKey = keyof typeof en;
@@ -125,6 +131,12 @@ const es: Record<ShellKey, string> = {
   setupCancel: 'Cancelar',
   setupFinished: 'Configuración terminada. Abriendo el chat.',
   setupTasksOff: 'Las tareas están desactivadas en Beacon por ahora.',
+  // UX batch 4: avisos con Deshacer (UXA-8), el paso de tiempo de la primera configuración (UXA-23).
+  toasts: 'Notificaciones',
+  toastUndo: 'Deshacer',
+  toastUndoHint: 'Deshaz con {shortcut}.',
+  toastClose: 'Cerrar',
+  setupTimeSigned: 'Has entrado como {name} · {org}. Tu temporizador está en la barra de título.',
 };
 
 const CATALOGS: Record<Locale, Record<ShellKey, string>> = { en, es };

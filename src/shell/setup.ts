@@ -26,6 +26,8 @@ export interface SetupDeps {
   tasksHidden(): boolean;
   /** Steps skipped (kept with the shell's preferences). */
   skipped(): readonly SetupStep[];
+  /** Who is signed in and in which organization (UXA-23: the time step names them, not the server address). */
+  signedIn?(): { name: string; org: string | null };
   skip(step: SetupStep): void;
   copy(text: string): void;
   openVerification(url: string): void;
@@ -131,7 +133,9 @@ export class SetupView {
           ...extra,
         ),
       );
-    const items = [row(1, 'time', t('connTime'), t('setupTimeText'), 'done')];
+    const who = this.deps.signedIn?.();
+    const timeText = who !== undefined && who.name !== '' && who.org !== null ? t('setupTimeSigned', { name: who.name, org: who.org }) : t('setupTimeText');
+    const items = [row(1, 'time', t('connTime'), timeText, 'done')];
     steps.forEach((step, index) => {
       const state = step === active ? 'active' : this.stateOf(step);
       items.push(row(index + 2, step, t(step === 'chat' ? 'connChat' : 'connTasks'), t(step === 'chat' ? 'setupChatText' : 'setupTasksText'), state, state === 'active' ? this.actions(step) : []));
