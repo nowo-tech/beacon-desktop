@@ -17,8 +17,9 @@ import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
 import type { TasksHost } from '../platform';
 import { type Child, h, patch } from '../ui/dom';
 import { isModuleForbidden, TasksApi, TasksApiError, type TaskFields } from './api';
-import { apiToDateInput, dateInputToApi, dueInfo, duration, groupMine, localDate, parseQuickAdd, priorityLabel, taskRef } from './format';
+import { apiToDateInput, dateInputToApi, dayAfter, daysToNextWeek, dueInfo, duration, groupMine, localDate, parseDuration, parseQuickAdd, priorityLabel, taskRef } from './format';
 import type { TasksText } from './i18n';
+import { closeMenus, menuButton, type MenuItem, reopenMenus } from './picker';
 import { type Board, type Column, isId, PRIORITIES, type Priority, type TaskCard, type TaskDetail, type TasksMe, type Comment } from './types';
 
 export type TasksView = 'mine' | 'board' | 'list';
@@ -71,6 +72,11 @@ interface ViewPrefs {
   onlyMine: boolean;
 }
 
+type NoticeKind = 'write' | 'rate' | 'info';
+
+/** How long a notice stays (UXA-15: 8 s, or until the next success). */
+export const NOTICE_MS = 8000;
+
 const PREFS_KEY = 'beacon-desktop-tasks-view';
 export const POLL_SHOWN_MS = 20_000;
 export const POLL_MINE_MS = 60_000;
@@ -120,6 +126,10 @@ export class TasksModule {
   comments: Comment[] | null = null;
   error: string | null = null;
   notice: string | null = null;
+  /** What the notice is about (UXA-15): a refused write clears on the next successful write, a 429 on any answer. */
+  noticeKind: NoticeKind | null = null;
+  /** The banner message the person dismissed (it stays hidden until the message changes). */
+  private dismissed: string | null = null;
   offline = false;
   contextRefused = false;
   private shown = false;
@@ -141,6 +151,8 @@ export class TasksModule {
   private readonly quickPreview: HTMLElement;
   private readonly quickHelp: HTMLElement;
   private readonly toolbar: HTMLElement;
+  /** The board's edge fades where scroll-driven animations are missing (see `edgeHints`). */
+  private edgeObserver: IntersectionObserver | null = null;
   /** A card picked up with the keyboard or the mouse. */
   private dragging: string | null = null;
   /** Writes per task, one after the other (audit BDA13-L4): each reads the revision the previous one returned. */
@@ -320,6 +332,7 @@ export class TasksModule {
   async switchContext(): Promise<void> {
     if (this.api === null) return;
     this.api.setContext(this.deps.context() ?? 'personal');
+    closeMenus();
     this.clearData();
     this.render();
     await this.reload();
@@ -327,6 +340,7 @@ export class TasksModule {
 
   setShown(shown: boolean): void {
     const was = this.shown;
+    if (!shown) closeMenus();
     this.shown = shown;
     if (shown && !was && this.connected && !this.forbidden) void this.poll();
     else this.schedulePoll();
@@ -351,9 +365,13 @@ export class TasksModule {
     if (api === null) throw new ApiError(401, 'invalid_token', 'Tasks are not connected.');
     try {
       const result = await work(api);
-      if (this.fresh(generation, api) && (this.offline || this.failures > 0)) {
+      if (this.fresh(generation, api) && (this.offline || this.failures > 0 || this.noticeKind === 'rate' || this.error !== null)) {
         this.offline = false;
         this.failures = 0;
+        // An answer: an earlier load error is stale too (the next render redraws what it could not load).
+        this.error = null;
+        // Beacon answers again: the "slowing down" notice is stale.
+        if (this.noticeKind === 'rate') this.clearNotice();
         this.renderBanner();
       }
       return result;
@@ -366,7 +384,7 @@ export class TasksModule {
           this.render();
         } else if (error.status === 429) {
           this.pausedUntil = this.clock.now() + (error.retryAfter ?? 30) * 1000;
-          this.showNotice(this.t('rateLimited'));
+          this.showNotice(this.t('rateLimited'), 'rate');
         } else if (error.isNetwork || error.status >= 500) {
           this.failures += 1;
           this.offline = error.isNetwork;
@@ -400,7 +418,8 @@ export class TasksModule {
       }
       this.error = null;
     } catch (error) {
-      if (!(error instanceof ApiError && (error.status === 401 || error.status === 403 || error.status === 429)) && generation === this.generation) this.error = this.t('errorGeneric');
+      // Offline already says why (UXA-15: one message, not "offline" plus "something went wrong").
+      if (!(error instanceof ApiError && (error.status === 401 || error.status === 403 || error.status === 429 || error.isNetwork)) && generation === this.generation) this.error = this.t('errorGeneric');
     }
     this.render();
     this.schedulePoll();
@@ -511,19 +530,34 @@ export class TasksModule {
 
   /** A short notice in the banner, announced (the shell's "link could not be opened", BDA13-I2). */
   notify(text: string): void {
-    this.showNotice(text);
+    this.showNotice(text, 'info');
   }
 
-  private showNotice(text: string): void {
+  private showNotice(text: string, kind: NoticeKind = 'write'): void {
     this.notice = text;
+    this.noticeKind = kind;
     this.deps.announce(text);
     this.renderBanner();
     if (this.noticeTimer !== null) this.clock.clearTimeout(this.noticeTimer);
     this.noticeTimer = this.clock.setTimeout(() => {
       this.noticeTimer = null;
-      this.notice = null;
+      this.clearNotice();
       this.renderBanner();
-    }, 6000);
+    }, NOTICE_MS);
+  }
+
+  private clearNotice(): void {
+    if (this.noticeTimer !== null) this.clock.clearTimeout(this.noticeTimer);
+    this.noticeTimer = null;
+    this.notice = null;
+    this.noticeKind = null;
+  }
+
+  /** A write went through: a notice about an earlier refused write is stale (UXA-15). */
+  private wrote(): void {
+    if (this.notice === null) return;
+    this.clearNotice();
+    this.renderBanner();
   }
 
   private savePrefs(): void {
@@ -560,6 +594,32 @@ export class TasksModule {
       .then(() => this.render());
   }
 
+  /**
+   * The panel's breadcrumb (UXA-40): shows the task's board (the board view from My tasks) with the panel kept open;
+   * on the board already shown it only moves focus to the task's card.
+   */
+  showBoard(boardId: string, taskId: string): void {
+    const context = this.deps.context() ?? 'personal';
+    const focusCard = () => this.body.querySelector<HTMLElement>(`[data-task="${taskId}"]`)?.focus({ preventScroll: false });
+    if (this.prefs.view !== 'mine' && this.currentBoard()?.id === boardId) {
+      focusCard();
+      return;
+    }
+    this.prefs.board[context] = boardId;
+    if (this.prefs.view === 'mine') this.prefs.view = 'board';
+    this.savePrefs();
+    this.columns.clear();
+    this.listTasks = [];
+    this.render();
+    void this.loadView()
+      .catch(() => undefined)
+      .then(() => {
+        this.render();
+        this.schedulePoll();
+        focusCard();
+      });
+  }
+
   toggleOnlyMine(): void {
     this.prefs.onlyMine = !this.prefs.onlyMine;
     this.savePrefs();
@@ -580,6 +640,8 @@ export class TasksModule {
     this.comments = null;
     this.renderDrawer();
     this.drawerSlot.querySelector<HTMLElement>('.drawer')?.focus();
+    // UXA-16: the panel pushes the board; keep the opened card's column in view.
+    this.body.querySelector<HTMLElement>(`[data-task="${id}"]`)?.closest<HTMLElement>('.col')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     const generation = this.generation;
     const api = this.api;
     await this.refreshDetail(id);
@@ -611,7 +673,7 @@ export class TasksModule {
     } catch (error) {
       if (error instanceof ApiError && error.status === 404 && this.fresh(generation, api) && this.detail?.id === id) {
         this.detail = null;
-        this.showNotice(this.t('notFound'));
+        this.showNotice(this.t('notFound'), 'info');
       }
     }
   }
@@ -718,6 +780,7 @@ export class TasksModule {
         const detail = await this.call((client) => client.move(id, { columnId }, revision));
         if (!this.fresh(generation, api)) return;
         this.written.set(id, detail);
+        this.wrote();
         this.replaceCard(detail);
         this.deps.announce(this.t('moved', { task: taskRef(card), column: column?.name ?? detail.column?.name ?? '' }));
         if (this.prefs.view !== 'board') await this.loadView().catch(() => undefined);
@@ -792,6 +855,7 @@ export class TasksModule {
         const saved = await work(this.latestDetail(detail), pinned);
         if (!this.fresh(generation, api)) return;
         this.written.set(saved.id, saved);
+        this.wrote();
         this.replaceCard(saved);
         this.render();
         after?.();
@@ -848,6 +912,7 @@ export class TasksModule {
       const saved = await this.call((client) => client.addChecklistItem(detail.id, checklist, title.trim()));
       if (!this.fresh(generation, api)) return false;
       this.replaceCard(saved);
+      this.wrote();
       this.render();
       return true;
     } catch (error) {
@@ -882,6 +947,7 @@ export class TasksModule {
       );
       // Created in the organization it was typed in; nothing more here after a switch (no timer in another one).
       if (!this.fresh(generation, api)) return true;
+      this.wrote();
       this.deps.announce(this.t('added', { task: taskRef(created), board: board.title }));
       if (startTimer) void this.startTimer(created);
       await this.loadView().catch(() => undefined);
@@ -930,6 +996,7 @@ export class TasksModule {
     this.renderBanner();
     this.renderBody();
     this.renderDrawer();
+    reopenMenus();
   }
 
   private renderConnect(): HTMLElement {
@@ -962,25 +1029,22 @@ export class TasksModule {
     const name = this.deps.contextLabel();
     const title = view === 'mine' ? t('viewMine') : (board?.title ?? t('viewBoard'));
     const sub = view === 'mine' ? t('mineSub', { name }) : board?.counts !== null && board?.counts !== undefined ? t(board.counts.capped ? 'boardSubCapped' : 'boardSub', { name, count: board.counts.open }) : name;
-    const nodes: Child[] = [h('h1', { id: 'tasks-title' }, title), h('span', { class: 'sub' }, sub), h('span', { class: 'grow' })];
-    if (view !== 'mine' && this.boards.length > 1) {
-      const select = h('select', { class: 'selectish', id: 'tasks-board', key: 'tasks-board', attrs: { 'aria-label': t('boardPicker') } });
-      const groups = new Map<string, Board[]>();
-      for (const item of this.boards) {
-        const label = item.group?.label ?? '';
-        groups.set(label, [...(groups.get(label) ?? []), item]);
-      }
-      for (const [label, items] of groups) {
-        const options = items.map((item) => {
-          const option = h('option', { attrs: { value: item.id } }, item.title);
-          option.selected = item.id === board?.id;
-          return option;
-        });
-        if (label === '') select.append(...options);
-        else select.append(h('optgroup', { attrs: { label } }, ...options));
-      }
-      select.addEventListener('change', () => this.pickBoard(select.value));
-      nodes.push(select);
+    const switcher = view !== 'mine' && this.boards.length > 1 && board !== null;
+    const nodes: Child[] = [h('h1', { id: 'tasks-title', class: switcher ? 'has-switch' : '' }, title), h('span', { class: 'sub' }, sub), h('span', { class: 'grow' })];
+    if (switcher) {
+      // UXA-38: a board switcher button with a menu (grouped by folder or space), as tall as the view control.
+      nodes.push(
+        menuButton({
+          id: 'tasks-board',
+          key: 'tasks-board',
+          className: 'board-switch',
+          label: t('boardPicker'),
+          content: [h('span', { class: 'bs-t' }, board.title)],
+          value: board.id,
+          items: this.boards.map((item): MenuItem => ({ kind: 'radio', value: item.id, label: item.title, group: item.group?.label })),
+          onPick: (id) => this.pickBoard(id),
+        }),
+      );
     }
     const tabs = h('div', { class: 'seg', attrs: { role: 'tablist', 'aria-label': t('views') } });
     const specs: [TasksView, string][] = [
@@ -1013,38 +1077,113 @@ export class TasksModule {
       patch(this.extras, []);
       return;
     }
-    const mine = h('button', { class: 'btn-ghost', key: 'only-mine', attrs: { type: 'button', 'aria-pressed': this.prefs.onlyMine ? 'true' : 'false' } }, chatIcon('users', 'sm'), this.t('onlyMine'));
+    const t = this.t;
+    const mine = h('button', { class: 'btn-ghost wide-only', key: 'only-mine', attrs: { type: 'button', 'aria-pressed': this.prefs.onlyMine ? 'true' : 'false' } }, chatIcon('users', 'sm'), t('onlyMine'));
     mine.addEventListener('click', () => this.toggleOnlyMine());
     const open = this.currentBoard();
     const nodes: Child[] = [mine];
     const server = this.deps.server();
-    if (open !== null && server !== null) {
-      const link = h('button', { class: 'btn-ghost', key: 'board-beacon', attrs: { type: 'button', 'aria-label': this.t('openInBeacon'), title: this.t('openInBeacon') } }, chatIcon('external', 'sm'));
-      link.addEventListener('click', () => this.deps.openLink(`${server}/dashboard/tasks/boards/${open.id}`));
+    const boardUrl = open !== null && server !== null ? `${server}/dashboard/tasks/boards/${open.id}` : null;
+    if (boardUrl !== null) {
+      const link = h('button', { class: 'btn-ghost wide-only', key: 'board-beacon', attrs: { type: 'button', 'aria-label': t('openInBeacon'), title: t('openInBeacon') } }, chatIcon('external', 'sm'));
+      link.addEventListener('click', () => this.deps.openLink(boardUrl));
       nodes.push(link);
     }
+    // UXA-16: in a narrow page (the task panel open, a small window) both fold into one overflow menu.
+    const items: MenuItem[] = [{ kind: 'check', value: 'only-mine', label: t('onlyMine'), checked: this.prefs.onlyMine, lead: chatIcon('users', 'sm') }];
+    if (boardUrl !== null) items.push({ kind: 'command', value: 'open', label: t('openInBeacon'), lead: chatIcon('external', 'sm') });
+    nodes.push(
+      h(
+        'span',
+        { class: 'narrow-only' },
+        menuButton({
+          id: 'tasks-more',
+          key: 'tasks-more',
+          className: `btn-ghost more${this.prefs.onlyMine ? ' on' : ''}`,
+          label: t('moreActions'),
+          title: t('moreActions'),
+          content: [chatIcon('more', 'sm')],
+          bare: true,
+          align: 'end',
+          items,
+          onPick: (value) => {
+            if (value === 'only-mine') this.toggleOnlyMine();
+            else if (boardUrl !== null) this.deps.openLink(boardUrl);
+          },
+        }),
+      ),
+    );
     patch(this.extras, nodes);
+  }
+
+  /** The one message the banner shows (UXA-15): the most severe first, each on its own. */
+  private bannerMessage(): { text: string; tone: 'danger' | 'warn'; retry: boolean } | null {
+    const t = this.t;
+    if (this.error !== null) return { text: this.error, tone: 'danger', retry: true };
+    if (this.offline) return { text: t('offline'), tone: 'warn', retry: false };
+    if (this.contextRefused) return { text: t('contextRefused', { name: this.deps.contextLabel() }), tone: 'warn', retry: false };
+    if (this.notice !== null) return { text: this.notice, tone: 'warn', retry: false };
+    return null;
   }
 
   private renderBanner(): void {
     const t = this.t;
-    const nodes: Child[] = [];
-    if (this.offline) nodes.push(h('span', {}, t('offline')));
-    if (this.notice !== null) nodes.push(h('span', {}, chatIcon('alert', 'sm'), this.notice));
-    if (this.contextRefused) nodes.push(h('span', {}, t('contextRefused', { name: this.deps.contextLabel() })));
-    if (this.error !== null) {
-      nodes.push(h('span', {}, this.error), this.button('btn sm', t('retry'), () => void this.reload(), 'tasks-retry'));
+    const message = this.bannerMessage();
+    if (message === null || message.text !== this.dismissed) this.dismissed = null;
+    if (message === null || this.dismissed !== null) {
+      // Keep focus on the page when the banner it was in goes.
+      const had = this.banner.contains(document.activeElement);
+      this.banner.replaceChildren();
+      this.banner.hidden = true;
+      if (had) this.focusAfterBanner();
+      return;
     }
-    this.banner.replaceChildren(...(nodes.filter(Boolean) as Node[]));
-    this.banner.hidden = nodes.length === 0;
+    const nodes: Child[] = [h('span', { class: 'tb-ico', attrs: { 'aria-hidden': 'true' } }, chatIcon('alert', 'sm')), h('span', { class: 'tb-msg', attrs: { title: message.text } }, message.text)];
+    if (message.retry) nodes.push(this.button('btn sm', t('retry'), () => void this.reload(), 'tasks-retry'));
+    const dismiss = h('button', { class: 'x-btn sm', id: 'tasks-banner-dismiss', key: 'tasks-banner-dismiss', attrs: { type: 'button', 'aria-label': t('dismiss'), title: t('dismiss') } }, chatIcon('x', 'sm'));
+    dismiss.addEventListener('click', () => this.dismissBanner());
+    nodes.push(dismiss);
+    this.banner.className = `tk-banner ${message.tone}`;
+    patch(this.banner, nodes);
+    this.banner.hidden = false;
+  }
+
+  /** The banner's close button: a notice goes for good, any other message until it changes. */
+  dismissBanner(): void {
+    const message = this.bannerMessage();
+    if (message === null) return;
+    if (message.text === this.notice) this.clearNotice();
+    else this.dismissed = message.text;
+    this.renderBanner();
+  }
+
+  private focusAfterBanner(): void {
+    const target = this.body.querySelector<HTMLElement>('[data-task][tabindex="0"], button[data-task]') ?? (this.quickInput.disabled ? null : this.quickInput);
+    target?.focus({ preventScroll: true });
   }
 
   renderBody(): void {
     const view = this.prefs.view;
+    // A re-render (poll, move) keeps where the board and its columns were scrolled to.
+    const oldWrap = this.body.querySelector<HTMLElement>('.board-wrap');
+    const scrollLeft = oldWrap?.scrollLeft ?? 0;
+    const columnScroll = new Map([...this.body.querySelectorAll<HTMLElement>('.col[data-col]')].map((column) => [column.dataset.col as string, column.querySelector<HTMLElement>('.col-list')?.scrollTop ?? 0]));
+    this.edgeObserver?.disconnect();
+    this.edgeObserver = null;
     if (view === 'mine') patch(this.body, [this.renderMine()]);
     else if (this.boardsLoaded && this.boards.length === 0) patch(this.body, [emptyState(this.t('noBoards', { name: this.deps.contextLabel() }), this.t('noBoardsHint'))]);
     else if (view === 'board') patch(this.body, [this.renderBoard()]);
     else patch(this.body, [this.renderList()]);
+    reopenMenus();
+    const wrap = this.body.querySelector<HTMLElement>('.board-wrap');
+    if (wrap === null) return;
+    if (scrollLeft > 0) wrap.scrollLeft = scrollLeft;
+    for (const column of wrap.querySelectorAll<HTMLElement>('.col[data-col]')) {
+      const top = columnScroll.get(column.dataset.col as string) ?? 0;
+      const list = column.querySelector<HTMLElement>('.col-list');
+      if (top > 0 && list !== null) list.scrollTop = top;
+    }
+    this.edgeObserver = edgeHints(wrap);
   }
 
   // -- My tasks
@@ -1268,12 +1407,8 @@ export class TasksModule {
       body.append(h('tr', { class: 'tbl-group' }, h('td', { attrs: { colspan: '8' } }, this.marker(column), ` ${column.name} · ${items.length}`)));
       for (const task of items) {
         const due = dueInfo(task, this.today(), t, this.deps.locale);
-        const status = h('select', { class: 'selectish sm', key: `status-${task.id}`, attrs: { 'aria-label': t('statusOf', { task: taskRef(task) }), disabled: !this.writable() || !board.canMove || undefined } }, ...board.columns.map((option) => {
-          const element = h('option', { attrs: { value: option.id } }, option.name);
-          element.selected = option.id === column.id;
-          return element;
-        }));
-        status.addEventListener('change', () => void this.move(task.id, status.value));
+        // UXA-38: a quiet status pill that opens a menu (was a native select on every row).
+        const status = this.statusPicker(`status-${task.id}`, 'pick status-pill', t('statusOf', { task: taskRef(task) }), board.columns, column, !this.writable() || !board.canMove, (id) => void this.move(task.id, id));
         const open = h('button', { class: 't-title', key: `open-${task.id}`, attrs: { type: 'button', 'data-task': task.id } }, task.title);
         open.addEventListener('click', () => void this.openTask(task.id));
         const assignee = task.assignees[0];
@@ -1296,6 +1431,21 @@ export class TasksModule {
     table.append(body);
     wrap.append(table);
     return wrap;
+  }
+
+  /** A status menu button: the column's marker and name, the board's columns as choices. */
+  private statusPicker(id: string, className: string, label: string, columns: Column[], current: Column | null, disabled: boolean, onPick: (columnId: string) => void): HTMLElement {
+    return menuButton({
+      id,
+      key: id,
+      className,
+      label,
+      content: [current !== null ? this.marker(current) : null, h('span', { class: 'mb-t' }, current?.name ?? '—')],
+      value: current?.id,
+      disabled,
+      items: columns.map((column): MenuItem => ({ kind: 'radio', value: column.id, label: column.name, lead: this.marker(column) })),
+      onPick,
+    });
   }
 
   // -- Detail
@@ -1324,7 +1474,16 @@ export class TasksModule {
     });
     const close = h('button', { class: 'x-btn', id: 'task-close', attrs: { type: 'button', 'aria-label': t('closeDetail'), title: `${t('closeDetail')} (Esc)` } }, chatIcon('x'));
     close.addEventListener('click', () => this.closeTask());
-    const head = h('div', { class: 'dr-head' }, h('div', { class: 'crumbs' }, chatIcon('tasks', 'sm'), h('span', {}, board?.title ?? ''), chatIcon('chev-l', 'xs'), h('span', { class: 'k-id' }, taskRef(task))));
+    // UXA-40: "Board › #141", the board a button that shows it.
+    const crumbs = h('div', { class: 'crumbs' }, chatIcon('tasks', 'sm'));
+    if (board !== null) {
+      const boardId = board.id;
+      const toBoard = h('button', { class: 'crumb-board', id: 'task-board-link', attrs: { type: 'button', title: t('openBoard', { board: board.title }), 'aria-label': t('openBoard', { board: board.title }) } }, board.title);
+      toBoard.addEventListener('click', () => this.showBoard(boardId, task.id));
+      crumbs.append(toBoard, h('span', { class: 'crumb-sep', attrs: { 'aria-hidden': 'true' } }, '›'));
+    }
+    crumbs.append(h('span', { class: 'k-id' }, taskRef(task)));
+    const head = h('div', { class: 'dr-head' }, crumbs);
     if (task.webUrl !== null) {
       const url = task.webUrl;
       const open = h('button', { class: 'btn-ghost', id: 'task-open-beacon', attrs: { type: 'button', 'aria-label': t('openInBeacon'), title: t('openInBeacon') } }, chatIcon('external', 'sm'));
@@ -1367,40 +1526,91 @@ export class TasksModule {
         timerButton,
       ),
     );
-    // Fields.
+    // Fields (UXA-17): menu buttons for status, priority and assignee; the due date with shortcuts; one duration field.
     const fields = h('dl', { class: 'fields' });
-    const status = h('select', { class: 'selectish', key: 'task-status', attrs: { 'aria-label': t('fieldStatus'), disabled: !(this.writable() && task.permissions.canMove) || undefined } }, ...(board?.columns ?? []).map((column) => {
-      const option = h('option', { attrs: { value: column.id } }, column.name);
-      option.selected = column.id === task.column?.id;
-      return option;
-    }));
-    if (board === null || board.columns.length === 0) status.append(h('option', {}, task.column?.name ?? '—'));
-    status.addEventListener('change', () => void this.move(task.id, status.value).then(() => this.refreshDetail(task.id)).then(() => this.renderDrawer()));
-    const priority = h('select', { class: 'selectish', key: 'task-priority', attrs: { 'aria-label': t('fieldPriority'), disabled: !editable || undefined } }, ...PRIORITIES.map((value) => {
-      const option = h('option', { attrs: { value } }, priorityLabel(value, t));
-      option.selected = value === task.priority;
-      return option;
-    }));
-    priority.addEventListener('change', () => void this.save({ priority: priority.value as Priority }));
+    const status = this.statusPicker('task-status', 'pick', t('fieldStatus'), board?.columns ?? [], board?.columns.find((column) => column.id === task.column?.id) ?? (task.column !== null ? { ...task.column, color: null } : null), !(this.writable() && task.permissions.canMove) || board === null || board.columns.length === 0, (id) => void this.move(task.id, id).then(() => this.refreshDetail(task.id)).then(() => this.renderDrawer()));
+    const priority = menuButton({
+      id: 'task-priority',
+      key: 'task-priority',
+      className: 'pick',
+      label: t('fieldPriority'),
+      content: [priorityDot(task.priority), h('span', { class: 'mb-t' }, priorityLabel(task.priority, t))],
+      value: task.priority,
+      disabled: !editable,
+      items: PRIORITIES.map((value): MenuItem => ({ kind: 'radio', value, label: priorityLabel(value, t), lead: priorityDot(value) })),
+      onPick: (value) => void this.save({ priority: value as Priority }),
+    });
     const people = board?.people ?? [];
-    const assignee = h('select', { class: 'selectish', key: 'task-assignee', attrs: { 'aria-label': t('fieldAssignee'), disabled: !(this.writable() && task.permissions.canAssign) || undefined } }, h('option', { attrs: { value: '' } }, t('unassigned')));
     const known = new Map([...people, ...task.assignees].map((person) => [person.id, person]));
-    for (const person of known.values()) {
-      const option = h('option', { attrs: { value: person.id } }, person.id === this.me?.user?.id ? `${person.name} ✓` : person.name);
-      option.selected = task.assignees[0]?.id === person.id;
-      assignee.append(option);
-    }
-    assignee.addEventListener('change', () => void this.assign(assignee.value));
+    const chosen = task.assignees[0];
+    const meId = this.me?.user?.id;
+    const assignee = menuButton({
+      id: 'task-assignee',
+      key: 'task-assignee',
+      className: 'pick',
+      label: t('fieldAssignee'),
+      content: chosen !== undefined ? [avatar(chosen), h('span', { class: 'mb-t' }, chosen.name)] : [h('span', { class: 'mb-t muted' }, t('unassigned'))],
+      value: chosen?.id ?? '',
+      disabled: !(this.writable() && task.permissions.canAssign),
+      items: [{ kind: 'radio', value: '', label: t('unassigned') } as MenuItem, ...[...known.values()].map((person): MenuItem => ({ kind: 'radio', value: person.id, label: person.name, lead: avatar(person), hint: person.id === meId ? t('you') : undefined }))],
+      onPick: (value) => void this.assign(value),
+    });
     const dueInput = h('input', { class: 'date-in', key: 'task-due', attrs: { type: 'date', 'aria-label': t('fieldDue'), readonly: !editable || undefined } });
     dueInput.value = apiToDateInput(task);
     dueInput.addEventListener('change', () => void this.save(dueInput.value === '' ? { dueAt: null } : { dueAt: dateInputToApi(dueInput.value), allDay: true }));
-    const estimate = h('input', { class: 'num-in', key: 'task-estimate', attrs: { type: 'number', min: '0', step: '15', inputmode: 'numeric', 'aria-label': t('fieldEstimate'), readonly: !editable || undefined } });
-    estimate.value = typed.get('task-estimate') ?? (task.estimateMinutes === null ? '' : String(task.estimateMinutes));
+    const dueField = h('span', { class: 'due-field' }, dueInput);
+    if (editable) {
+      const today = this.today();
+      const setDue = (dueAt: string | null) => {
+        if (dueAt === null ? task.dueAt === null : task.allDay && task.dueAt === dueAt) return;
+        void this.save(dueAt === null ? { dueAt: null } : { dueAt, allDay: true });
+      };
+      const chip = (key: string, label: string, dueAt: string | null) => {
+        const pressed = dueAt !== null && task.allDay && task.dueAt === dueAt;
+        const title = dueAt === null ? undefined : new Intl.DateTimeFormat(this.deps.locale, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(dueAt));
+        const button = h('button', { class: 'chip', key: `due-${key}`, attrs: { type: 'button', 'aria-pressed': dueAt === null ? undefined : pressed ? 'true' : 'false', title } }, label);
+        button.addEventListener('click', () => setDue(dueAt));
+        return button;
+      };
+      const chips = h('span', { class: 'chips', attrs: { role: 'group', 'aria-label': t('dueShortcuts') } }, chip('today', t('dueToday'), dayAfter(today, 0)), chip('tomorrow', t('dueTomorrow'), dayAfter(today, 1)), chip('next-week', t('dueNextWeek'), dayAfter(today, daysToNextWeek(today))));
+      if (task.dueAt !== null) chips.append(chip('clear', t('dueClear'), null));
+      dueField.append(chips);
+    }
+    const estimate = h('input', { class: 'num-in', key: 'task-estimate', attrs: { type: 'text', inputmode: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: t('estimatePlaceholder'), 'aria-label': t('fieldEstimate'), 'aria-describedby': 'task-estimate-hint', readonly: !editable || undefined } });
+    const shownEstimate = task.estimateMinutes === null ? '' : duration(task.estimateMinutes);
+    estimate.value = typed.get('task-estimate') ?? shownEstimate;
     this.dirty(estimate);
-    estimate.addEventListener('change', () => {
+    const estimateHint = h('span', { class: 'hint', id: 'task-estimate-hint' }, t('estimateHint'));
+    const commitEstimate = () => {
+      if (estimate.dataset.dirty !== 'true') return;
+      const text = estimate.value.trim();
+      const minutes = text === '' ? null : parseDuration(text);
+      if (text !== '' && minutes === null) {
+        estimate.setAttribute('aria-invalid', 'true');
+        estimateHint.textContent = t('estimateInvalid');
+        estimateHint.classList.add('bad');
+        return;
+      }
       estimate.dataset.dirty = 'false';
-      const value = estimate.value.trim() === '' ? null : Math.max(0, Math.round(Number(estimate.value)));
-      if (value === null || Number.isFinite(value)) void this.save({ estimateMinutes: value });
+      estimate.removeAttribute('aria-invalid');
+      estimateHint.textContent = t('estimateHint');
+      estimateHint.classList.remove('bad');
+      estimate.value = minutes === null ? '' : duration(minutes);
+      if (minutes !== task.estimateMinutes) void this.save({ estimateMinutes: minutes });
+    };
+    estimate.addEventListener('change', commitEstimate);
+    estimate.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.isComposing) {
+        event.preventDefault();
+        commitEstimate();
+      } else if (event.key === 'Escape' && estimate.dataset.dirty === 'true') {
+        event.stopPropagation();
+        estimate.value = shownEstimate;
+        estimate.dataset.dirty = 'false';
+        estimate.removeAttribute('aria-invalid');
+        estimateHint.textContent = t('estimateHint');
+        estimateHint.classList.remove('bad');
+      }
     });
     const tags = h('input', { class: 'tags-in', key: 'task-tags', attrs: { type: 'text', 'aria-label': t('fieldTags'), 'aria-describedby': 'task-tags-hint', readonly: !editable || undefined } });
     tags.value = typed.get('task-tags') ?? task.tags.join(', ');
@@ -1418,8 +1628,8 @@ export class TasksModule {
       ...row('tasks', t('fieldStatus'), status, 'dt-status'),
       ...row('alert', t('fieldPriority'), priority, 'dt-priority'),
       ...row('users', t('fieldAssignee'), assignee, 'dt-assignee'),
-      ...row('clock', t('fieldDue'), dueInput, 'dt-due'),
-      ...row('clock', t('fieldEstimate'), estimate, 'dt-estimate'),
+      ...row('clock', t('fieldDue'), dueField, 'dt-due'),
+      ...row('clock', t('fieldEstimate'), h('span', { class: 'est-field' }, estimate, estimateHint), 'dt-estimate'),
       ...row('hash', t('fieldTags'), h('span', { class: 'tags-field' }, tags, h('span', { class: 'hint', id: 'task-tags-hint' }, t('tagsHint'))), 'dt-tags'),
     );
     body.append(fields);
@@ -1507,6 +1717,7 @@ export class TasksModule {
     body.append(comments);
     panel.append(head, body);
     patch(this.drawerSlot, [panel], '#task-detail');
+    reopenMenus();
   }
 
   /** A field the person is editing is marked, so a refresh keeps the text. */
@@ -1531,7 +1742,8 @@ export class TasksModule {
     const parsed = parseQuickAdd(this.quickInput.value, this.today());
     const t = this.t;
     const nodes: Child[] = [];
-    if (parsed.priority !== null && parsed.priority !== 'normal') nodes.push(h('span', { class: `pill p-${parsed.priority}` }, priorityLabel(parsed.priority, t)));
+    // UXA-18: any priority token shows its chip (Normal and Low too), whatever the words' language.
+    if (parsed.priority !== null) nodes.push(h('span', { class: `pill p-${parsed.priority}` }, priorityDot(parsed.priority), priorityLabel(parsed.priority, t)));
     for (const tag of parsed.tags) nodes.push(tagEl(tag));
     if (parsed.dueAt !== null) {
       const due = dueInfo({ dueAt: parsed.dueAt, allDay: true }, this.today(), t, this.deps.locale);
@@ -1572,6 +1784,15 @@ function priorityEl(priority: Priority, t: TasksText): HTMLElement | null {
   return h('span', { class: `prio ${priority}` }, priorityLabel(priority, t));
 }
 
+/** The priority's colour mark in menus and the panel. */
+function priorityDot(priority: Priority): HTMLElement {
+  return h('span', { class: `p-dot ${priority}`, attrs: { 'aria-hidden': 'true' } });
+}
+
+function avatar(person: { id: string; initials: string }): HTMLElement {
+  return h('span', { class: `av s20 ${hue(person.id)}`, attrs: { 'aria-hidden': 'true' } }, person.initials);
+}
+
 const TAG_COLORS = ['#1f6f54', '#2e5f8a', '#6a4c93', '#a2553a', '#8a6a1f', '#7a3e5c', '#3d6b6b'];
 
 function tagEl(tag: string): HTMLElement {
@@ -1584,6 +1805,32 @@ function hue(seed: string): string {
   let hash = 0;
   for (const char of seed) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   return `hue-${hash % 9}`;
+}
+
+/**
+ * The board's scroll fades (UXA-16, Modern Web Guidance `scrollability-affordance-hints`): CSS draws them with a
+ * scroll-driven animation; webviews without `animation-timeline` get `more-start` / `more-end` from an
+ * IntersectionObserver on the first and last column instead.
+ */
+export function edgeHints(scroller: HTMLElement): IntersectionObserver | null {
+  if (typeof IntersectionObserver !== 'function' || (typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('animation-timeline', 'scroll()'))) return null;
+  const columns = scroller.querySelectorAll<HTMLElement>('.board > .col');
+  const first = columns[0];
+  const last = columns[columns.length - 1];
+  if (first === undefined || last === undefined) return null;
+  // rootMargin: a sub-pixel width can leave an edge column a fraction short of fully visible.
+  const observer = new IntersectionObserver(
+    (entries) => {
+      for (const { target, intersectionRatio } of entries) {
+        if (target === first) scroller.classList.toggle('more-start', intersectionRatio < 1);
+        if (target === last) scroller.classList.toggle('more-end', intersectionRatio < 1);
+      }
+    },
+    { root: scroller, threshold: 1, rootMargin: '1px' },
+  );
+  observer.observe(first);
+  if (last !== first) observer.observe(last);
+  return observer;
 }
 
 function emptyState(title: string, hint: string): HTMLElement {

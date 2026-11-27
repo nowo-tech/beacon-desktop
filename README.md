@@ -130,7 +130,8 @@ Your Beacon tasks next to chat and the timer: **Chat**, **Tasks** and **Time** o
    **Board** and **List** show one board of the organization; *Only mine* narrows it.
 3. Move a card by dragging it, with `Alt+←/→`, or with its status. Open a task (`Enter`) to change its fields, tick its
    checklist, read its description and comments, or start the timer on it (`S` on a card). `N` adds a task
-   (`!high #tag @tomorrow ~2h`).
+   (`!high #tag @tomorrow ~2h`; the Spanish words `!alta`, `!urgente`, `!baja`, `@hoy`, `@mañana` work too). The
+   estimate takes `4h`, `90m` or `1h30`; the due date has Today / Tomorrow / Next week shortcuts.
 
 **Notifications and links.** Chat notifications are off until you turn them on (Chat asks once; Settings → Chat).
 They only say "New message in Beacon", never who wrote or what; a click opens the conversation. Pause them for an hour
