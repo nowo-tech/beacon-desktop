@@ -9,7 +9,7 @@ export const BEACON = 'https://beacon.example.test';
 export const MOCK = 'http://127.0.0.1:8787';
 export const OUT = 'docs/images';
 export const UPDATE = {
-  version: '0.5.0',
+  version: '0.13.0',
   notes: 'Added\n- A calmer update card\n- Check for updates in the tray',
   pub_date: '2026-11-04T10:00:00Z',
   url: 'u',
@@ -19,6 +19,8 @@ export const UPDATE = {
 /** Demo data of the mock → what the screenshots show. */
 const REPLACE: [string, string][] = [
   ['Ada Lovelace', 'Sample User'],
+  ['"name":"Ada"', '"name":"Sample"'],
+  ['"initials":"AL"', '"initials":"SU"'],
   ['ada@example.com', 'user@example.test'],
   ['Customer call: Acme quarterly review', 'Customer call: quarterly review'],
   [MOCK, BEACON],

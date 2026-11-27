@@ -16,7 +16,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await shot(page, `desktop-update-card-${scheme}`);
     await app(page).holdProgress();
     await page.locator('#update-now').click();
-    await expect(page.locator('#update-progress-label')).toContainText('Downloading version 0.5.0…');
+    await expect(page.locator('#update-progress-label')).toContainText('Downloading version 0.13.0…');
     await expect.poll(() => page.locator('#update-progress').evaluate((el) => (el as HTMLProgressElement).value), { timeout: 15_000 }).toBe(50);
     await shot(page, `desktop-update-progress-${scheme}`);
   });
