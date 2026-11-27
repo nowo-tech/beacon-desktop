@@ -83,6 +83,7 @@
 .conn-state .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); }
 .conn-state.on { color: var(--moss); }
 .conn-state.on .conn-dot { background: var(--presence-on); }
+.conn-state .conn-dot.warn { background: var(--signal-dot, var(--warn)); }
 .account-actions { justify-content: space-between; }
 .sh-dialog .btn.danger-fill { background: var(--danger); border-color: var(--danger); color: var(--surface); }
 .sh-dialog .btn.danger-fill:hover { background: var(--danger); border-color: var(--danger); filter: brightness(0.94); }
@@ -115,3 +116,9 @@
   .shell .module.setup { padding: var(--sp-4) var(--sp-3); }
   .setup-card { padding: var(--sp-5) var(--sp-4); }
 }
+
+/* UX batch 3: the task list scrolled under the search field gets a soft edge (as the composer's, UXA-39), so its first
+   row never looks tucked under the field (400 px window). */
+#main .search { position: relative; z-index: 1; transition: box-shadow var(--dur, 120ms) ease; }
+#main.list-scrolled .search { box-shadow: 0 6px 10px -4px rgb(0 0 0 / 0.3); }
+@media (prefers-reduced-motion: reduce) { #main .search { transition: none; } }

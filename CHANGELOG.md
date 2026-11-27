@@ -185,6 +185,48 @@ From the UX audit of 2026-11-27 (UXA-1, 2, 4, 24, 25, 30, 36, 37); the owner app
 - **Security**: the main window's capability adds `core:window:allow-start-dragging`, `allow-minimize`,
   `allow-toggle-maximize` and `allow-close` (main window only; see `SECURITY.md`).
 
+### UX batches 2 + 3: copy and i18n, keyboard and accessibility (UX audit 2026-11-27)
+
+- **Global shortcuts in every module** (UXA-3, owner approval 2026-11-27; design `BEACON_DESKTOP.md` §5.2). The
+  app-wide keys work the same in Chat, Tasks and Time: `Ctrl/⌘+K`, `Ctrl/⌘+1…3`, `F6` / `Shift+F6`, `Ctrl/⌘+,`,
+  `Ctrl/⌘+Shift+L`, `Ctrl/⌘+Shift+S`, `Ctrl/⌘+Shift+M` and `?`.
+  - **`Ctrl/⌘+K` is one quick switcher** over the three modules: conversations; boards and the tasks loaded in Tasks;
+    Time's *Stop the timer*, *Start timer* / *Switch timer here* on pinned, recent and found tasks, and the *My time* /
+    *Pinned and recent* views. With no query the module in view leads; a query ranks every match together. The title
+    bar's search is there as soon as you are signed in, chat or not. In Time, `/` searches the task list (its field
+    now says so).
+  - **`?`** shows *Anywhere* and the keys of the module in view, and only those (Time has its own section now).
+  - **`Ctrl/⌘+Shift+L` means light / dark theme** everywhere, including the standalone Time window, where it used to
+    switch the compact / full view (that view keeps its header button and tray item).
+  - **`F6` / `Shift+F6`** walk the window's areas in every module: title bar, rail, then the module's panes (Chat:
+    sidebar, conversation, thread; Tasks: page, task panel; Time: sidebar, list, details). From nowhere, `F6` starts at
+    the module's first pane.
+  - **`Alt+↑` / `Alt+↓`**: previous / next conversation (Chat, as before), board (Tasks board and list views) or section
+    (Time, full layout).
+- **One Tab stop per long list** (UXA-10): the chat sidebar (sections and conversations; `↑ ↓ Home End`, the open
+  conversation takes Tab), My tasks and the list view (`↑ ↓` between rows, `← →` to the row's checkbox, status menu and
+  play button; `S` starts the timer on a row). Tab follows the visual order: title bar, rail, sidebar, content.
+- **Landmarks and headings** (UXA-27): Chat's conversation and the Tasks page are each the module's `main`; the
+  groups of My tasks and the board's columns are `h2` under the page's `h1`; the task panel has a heading; the list's
+  timer column has a (visually hidden) header.
+- **Copy** (UXA-14, 19, 20, 21, 32, 43):
+  - Chat's sidebar says nothing while the connection is healthy; *Reconnecting*, *Offline* or *Slowing down* still
+    show there. Settings → Chat shows the connection line ("Checking for new messages every 30 s") with its state.
+  - Spanish says *temporizador* everywhere (no more *cronómetro*).
+  - A stop under a minute says "Saved a short entry (0:00) on …. If it was a slip, you can delete it in Beacon.", never
+    "Nice work".
+  - Real plurals in both languages (`Intl.PluralRules`): "1 action will be sent", "3 actions…", no "action(s)", and a
+    count of 0 is not shown ("Offline. Your changes will be sent…"). Also "1 result", "1 task found", "1 open task".
+  - The Tasks connect card is plain ("One more short approval in Beacon, just for tasks…"); the keychain detail sits
+    behind *How this works*. Column markers are "Beacon's column emojis".
+  - A direct message starts with "This is the start of your conversation with Maya Okafor.".
+  - The stop dialog has no empty line under the activity type until there is something to say, and the client hint
+    reads "Beacon confirms the client when you save.".
+- **400 px Time view**: the task list scrolled under the search field gets a soft edge, so its first row no longer
+  looks tucked under the field.
+- Verified, already done by batches 5 and 7: day dividers are in each message's spoken label (UXA-29); the 900 px title
+  bar keeps names and 24 px targets (UXA-9, UXA-28; now checked with a running timer too).
+
 BD-3b, second part (design `docs/design/BEACON_DESKTOP_TASKS.md` §9, `BEACON_DESKTOP.md` §7.3): the Tasks module, 0.13.0
 candidate. Needs TaskBoardBundle **3.4** (`client_api`, `/api/task-board/v1`) and Beacon's `tasks` scope family
 (`task-board:read task-board:write`); without them the module shows its "Connect tasks" card and a refused request

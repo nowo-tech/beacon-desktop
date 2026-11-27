@@ -5,9 +5,9 @@
  *   breakpoint, so a window a bit wider than the column never shows a stretched, empty UI;
  * - `full` (from `FULL_BREAKPOINT`): sections sidebar · task list · detail pane.
  *
- * "Compact view" / "Full view" (header, tray, Ctrl/⌘+Shift+L) resize the window to the size remembered for that layout
- * (or its preset), centred on the screen when it would not fit on one. Sizes are kept in physical pixels, as the OS
- * reports them, per device (local storage, never sent).
+ * "Compact view" / "Full view" (header, tray; Ctrl/⌘+Shift+L is the theme since UX batch 3) resize the window to the
+ * size remembered for that layout (or its preset), centred on the screen when it would not fit on one. Sizes are kept
+ * in physical pixels, as the OS reports them, per device (local storage, never sent).
  */
 export type LayoutMode = 'compact' | 'full';
 

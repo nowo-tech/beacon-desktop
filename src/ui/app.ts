@@ -1415,8 +1415,10 @@ export class DesktopApp {
 
   /** Success moment after a stop: what was saved, in one of a few friendly wordings (queued: kept here for now). */
   private saved(timer: Timer, queued: boolean): void {
-    const params = { time: formatHoursMinutes(elapsedSeconds(timer.startedAt, this.now())), task: timer.taskTitle };
-    this.setNotice(queued ? this.t('savedOffline', params) : this.t(variant(SAVED_VARIANTS, this.saves++), params), 'saved');
+    const seconds = elapsedSeconds(timer.startedAt, this.now());
+    const params = { time: formatHoursMinutes(seconds), task: timer.taskTitle };
+    // UXA-20: under a minute is likely a slip: plain words, never praise ("Saved 0:00 … Nice work").
+    this.setNotice(queued ? this.t('savedOffline', params) : seconds < 60 ? this.t('savedShort', params) : this.t(variant(SAVED_VARIANTS, this.saves++), params), 'saved');
     const kind = this.timerKind(timer);
     const messages = afterStop(this.state.messages, kind, timer.startedAt, this.now());
     const locale = this.messageLocale();
@@ -3504,12 +3506,31 @@ export class DesktopApp {
 
   /** F6 / Shift+F6: sidebar → main pane → detail pane (full layout). */
   private cyclePane(step: number): void {
-    const panes = [this.sidebar, this.center, this.detail].filter((pane) => !pane.hidden);
+    const panes = this.panes();
     const at = panes.findIndex((pane) => pane.contains(document.activeElement));
-    const next = panes[at === -1 ? 0 : (at + step + panes.length) % panes.length];
-    const preferred = next === this.sidebar ? next.querySelector<HTMLElement>('[aria-current="page"]') : next === this.center && this.view === 'main' && this.currentSection() === 'tasks' ? this.main?.search : null;
-    const target = preferred ?? next.querySelector<HTMLElement>('button:not([disabled]), a[href], input, select, [tabindex="0"]') ?? next;
+    this.focusPane(panes[at === -1 ? 0 : (at + step + panes.length) % panes.length]);
+  }
+
+  /** The panes shown (sidebar, main pane, detail pane), for F6 here and in the shell (UX batch 3). */
+  panes(): HTMLElement[] {
+    return [this.sidebar, this.center, this.detail].filter((pane) => !pane.hidden);
+  }
+
+  /** F6 into a pane: the current section, the search field (Track), else its first control. */
+  focusPane(pane: HTMLElement): void {
+    const preferred = pane === this.sidebar ? pane.querySelector<HTMLElement>('[aria-current="page"]') : pane === this.center && this.view === 'main' && this.currentSection() === 'tasks' ? this.main?.search : null;
+    const target = preferred ?? pane.querySelector<HTMLElement>('button:not([disabled]), a[href], input, select, [tabindex="0"]') ?? pane;
     target.focus();
+  }
+
+  /** Alt+↑ / Alt+↓ (UX batch 3): the previous / next sidebar section, as Chat's conversations. Full layout only. */
+  stepSection(step: 1 | -1): boolean {
+    if (!this.fullLayout() || this.view !== 'main') return false;
+    const order: Section[] = ['tasks', 'quick', 'time'];
+    const next = order[(order.indexOf(this.section) + step + order.length) % order.length];
+    this.showSection(next);
+    this.sidebar.querySelector<HTMLElement>('[aria-current="page"]')?.focus();
+    return true;
   }
 
   // ---- keyboard ---------------------------------------------------------------------------------------------------
@@ -3523,11 +3544,13 @@ export class DesktopApp {
 
   /**
    * In-app shortcuts: Ctrl/⌘+K or "/" search, Alt+1…9 quick tasks, Ctrl/⌘+Shift+S stop / resume, Ctrl/⌘+, settings,
-   * Ctrl/⌘+Shift+L compact / full view, F6 / Shift+F6 next / previous pane (full view).
+   * Ctrl/⌘+Shift+L light / dark theme (one meaning app-wide, UX batch 3; the compact / full view keeps its button and
+   * tray item), F6 / Shift+F6 next / previous pane (full view). Hosted, the shell takes the app-wide keys first (it
+   * marks them handled): Ctrl/⌘+K is then the global switcher, F6 walks the whole window.
    */
   private onKey(event: KeyboardEvent): void {
-    // Another module of the shell is shown (chat): its own keys apply.
-    if (!this.root.isConnected || this.root.closest('[hidden]') !== null) return;
+    // Another module of the shell is shown (chat): its own keys apply. A key the shell already handled is not ours.
+    if (event.defaultPrevented || !this.root.isConnected || this.root.closest('[hidden]') !== null) return;
     if (this.view !== 'main' && this.view !== 'settings' && this.view !== 'privacy') return;
     const mod = event.ctrlKey || event.metaKey;
     const target = event.target as HTMLElement | null;
@@ -3540,7 +3563,8 @@ export class DesktopApp {
       this.focusSearch();
     } else if (mod && event.shiftKey && event.key.toLowerCase() === 'l' && this.host === null) {
       event.preventDefault();
-      void this.setLayoutMode(otherMode(this.layout));
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      void this.setTheme(dark ? 'light' : 'dark');
     } else if (event.key === 'F6' && this.fullLayout()) {
       event.preventDefault();
       this.cyclePane(event.shiftKey ? -1 : 1);
@@ -3564,7 +3588,8 @@ export class DesktopApp {
   /** Arrow keys between the search field and the rows' main buttons (roving focus, no extra tab stops). */
   private onListKey(event: KeyboardEvent): void {
     const main = this.main;
-    if (main === null) return;
+    // Alt+↑ / ↓ (sections) and the app-wide chords are not list moves.
+    if (main === null || event.altKey || event.ctrlKey || event.metaKey) return;
     const buttons = [...main.root.querySelectorAll<HTMLButtonElement>('button.row-action')];
     const index = buttons.indexOf(event.target as HTMLButtonElement);
     let next: HTMLElement | undefined;
@@ -3784,7 +3809,7 @@ export class DesktopApp {
   private layoutToggle(): HTMLButtonElement {
     const to = otherMode(this.layout);
     const label = this.t(to === 'full' ? 'layoutToFull' : 'layoutToCompact');
-    const props = { id: 'layout-toggle', onClick: () => void this.setLayoutMode(to), shortcut: 'Control+Shift+L' };
+    const props = { id: 'layout-toggle', onClick: () => void this.setLayoutMode(to), shortcut: undefined };
     if (to === 'full') return this.iconButton('columns', label, props);
     return h(
       'button',
@@ -4302,7 +4327,8 @@ export class DesktopApp {
     const modal = h('div', { class: 'idle-modal', id: 'idle-modal', attrs: { hidden: true } });
     const search = h('input', {
       id: 'search',
-      attrs: { type: 'search', placeholder: t('searchTasks'), 'aria-label': t('searchLabel'), 'aria-describedby': 'search-hint', 'aria-keyshortcuts': 'Control+K /', autocomplete: 'off' },
+      // Hosted, Ctrl/⌘+K is the shell's global switcher (UX batch 3): "/" searches the tasks.
+      attrs: { type: 'search', placeholder: t(this.host !== null ? 'searchTasksHosted' : 'searchTasks'), 'aria-label': t('searchLabel'), 'aria-describedby': 'search-hint', 'aria-keyshortcuts': this.host !== null ? '/' : 'Control+K /', autocomplete: 'off' },
     });
     search.value = this.query;
     search.addEventListener('input', () => {
@@ -4340,6 +4366,8 @@ export class DesktopApp {
       prompt: new PromptMount(modal, { onAnswer: (answer) => void this.answerPrompt(answer), onExpired: () => void this.tick(), now: this.now }),
     };
     regions.scroller.append(regions.banners, regions.quick, regions.list, regions.time);
+    // Scrolled: a soft edge under the search field, so rows never look tucked under it (400 px window, UX batch 3).
+    regions.scroller.addEventListener('scroll', () => regions.root.classList.toggle('list-scrolled', regions.scroller.scrollTop > 0), { passive: true });
     // A window resized: the scroller may start or stop overflowing.
     if (typeof ResizeObserver === 'function') new ResizeObserver(() => this.syncScrollerFocus(regions.scroller)).observe(regions.scroller);
     regions.root.addEventListener('keydown', (event) => {

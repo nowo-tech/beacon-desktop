@@ -24,6 +24,7 @@ import { isMuted, type SectionId, sectionOf } from './store';
 import { ChatSync, type SyncClock, realClock } from './sync';
 import type { ChatMe, Context, Conversation, Message } from './types';
 import { parseHint, writeAccess } from './types';
+import { Roving } from '../ui/roving';
 
 export interface ChatModuleDeps {
   t: ChatText;
@@ -121,6 +122,8 @@ export class ChatModule {
   private shown = false;
   private readonly side: HTMLElement;
   private readonly main: HTMLElement;
+  /** The sidebar's sections and conversations: one Tab stop, ↑ ↓ Home End move (UXA-10). */
+  private readonly sideRows: Roving;
   private readonly threadSlot: HTMLElement;
   private readonly scroller: HTMLElement;
   private readonly list: HTMLElement;
@@ -178,9 +181,11 @@ export class ChatModule {
     this.foot = h('div', { class: 'ch-foot', id: 'chat-foot' });
     this.home = h('section', { class: 'ch-home', id: 'chat-home', attrs: { 'aria-labelledby': 'chat-home-title', hidden: true } });
     this.home.addEventListener('keydown', (event) => this.onHomeKey(event));
-    this.main = h('div', { class: 'chat-main', id: 'chat-main' }, this.head, this.ask, this.banner, h('div', { class: 'msgs-wrap' }, this.scroller, this.home, this.pill), this.foot);
+    // UXA-27: the conversation (or the home view) is the module's `main` landmark.
+    this.main = h('main', { class: 'chat-main', id: 'chat-main', attrs: { 'aria-label': deps.t('moduleChat') } }, this.head, this.ask, this.banner, h('div', { class: 'msgs-wrap' }, this.scroller, this.home, this.pill), this.foot);
     this.threadSlot = h('div', { class: 'thread-slot', id: 'thread-slot' });
     this.root = h('div', { class: 'chat', id: 'chat' }, this.side, this.main, this.threadSlot);
+    this.sideRows = new Roving(this.side, { items: '.side-scroll .sec-h, .side-scroll .conv, .side-scroll .sec-more', preferred: () => this.side.querySelector<HTMLElement>('.conv[aria-current="true"]') });
     this.scroller.addEventListener('scroll', () => this.onScroll(), { passive: true });
     // The thread panel or a window resize reflows the timeline: keep the bottom when reading there.
     if (typeof ResizeObserver !== 'undefined') {
@@ -703,6 +708,37 @@ export class ChatModule {
     return true;
   }
 
+  /** The module's panes for F6 (UX batch 3): sidebar, conversation (or home), thread. */
+  panes(): HTMLElement[] {
+    if (this.root.firstChild !== this.side) return [this.root];
+    return [this.side, this.main, ...(this.threadSlot.firstChild !== null ? [this.threadSlot] : [])];
+  }
+
+  /** F6 into a pane: the conversation that takes Tab, the message box (or the home view's first row), the thread's box. */
+  focusPane(pane: HTMLElement): void {
+    if (pane === this.side) {
+      if (!this.sideRows.focus()) this.side.querySelector<HTMLElement>('button')?.focus();
+      return;
+    }
+    if (pane === this.main) {
+      const home = !this.home.hidden ? this.home.querySelector<HTMLElement>('.hm-row[tabindex="0"]') ?? this.home.querySelector<HTMLElement>('.hm-row') : null;
+      if (home !== null) home.focus();
+      else if (this.composer === null || !this.composer.root.isConnected || !this.focusComposerOf(this.composer)) (this.list.querySelector<HTMLElement>('li.msg[tabindex="0"]') ?? this.scroller).focus();
+      return;
+    }
+    if (pane === this.threadSlot) {
+      if (this.threadComposer !== null && this.threadComposer.root.isConnected) this.threadComposer.focus();
+      else this.threadSlot.querySelector<HTMLElement>('button, [tabindex="0"]')?.focus();
+      return;
+    }
+    (pane.querySelector<HTMLElement>('button:not([disabled]), [tabindex="0"]') ?? pane).focus();
+  }
+
+  private focusComposerOf(composer: Composer): boolean {
+    composer.focus();
+    return composer.root.contains(document.activeElement);
+  }
+
   /** Keys while the chat is shown (the shell routes them here). Returns whether it handled the key. */
   onKey(event: KeyboardEvent): boolean {
     if (!this.connected) return false;
@@ -957,7 +993,7 @@ export class ChatModule {
           'button',
           {
             class: `conv${unread && !muted ? ' unread' : ''}${muted ? ' muted' : ''}`,
-            attrs: { type: 'button', 'data-conv': row.uuid, 'aria-current': row.uuid === open ? 'true' : 'false' },
+            attrs: { type: 'button', 'data-conv': row.uuid, 'data-roving': row.uuid, 'aria-current': row.uuid === open ? 'true' : 'false' },
           },
           h('span', { class: 'c-ico' }, this.convIcon(row)),
           h('span', { class: 'sr-only' }, `${this.convKind(row)} `),
@@ -985,25 +1021,28 @@ export class ChatModule {
     const active = document.activeElement;
     const key = active instanceof HTMLElement && this.side.contains(active) ? (active.dataset.conv ?? active.dataset.key ?? active.id) : null;
     this.side.replaceChildren(...(nodes.filter(Boolean) as Node[]));
+    this.sideRows.sync();
     if (key !== null && key !== '') (this.side.querySelector<HTMLElement>(`[data-conv="${key}"], [data-key="${key}"], [id="${key}"]`))?.focus({ preventScroll: true });
     this.renderSideFoot();
   }
 
-  private renderSideFoot(): void {
-    const foot = this.side.querySelector('#chat-side-foot');
-    if (foot === null) return;
+  /** The connection as one line (Settings → Chat shows it always; the sidebar only when something is wrong). */
+  connectionStatus(): { tone: 'ok' | 'warn' | 'off'; text: string } {
     const t = this.t;
-    const [dot, text] =
-      this.netState === 'offline'
-        ? ['off', t('statusOffline')]
-        : this.netState === 'limited'
-          ? ['warn', t('statusLimited')]
-          : this.mode === 'live'
-            ? ['ok', t('statusLive')]
-            : this.wasLive
-              ? ['warn', t('statusReconnecting')]
-              : ['ok', t('statusPolling')];
-    foot.replaceChildren(h('span', { class: `dot ${dot}`, attrs: { 'aria-hidden': 'true' } }), h('span', {}, text));
+    if (this.netState === 'offline') return { tone: 'off', text: t('statusOffline') };
+    if (this.netState === 'limited') return { tone: 'warn', text: t('statusLimited') };
+    if (this.mode === 'live') return { tone: 'ok', text: t('statusLive') };
+    if (this.wasLive) return { tone: 'warn', text: t('statusReconnecting') };
+    return { tone: 'ok', text: t('statusPolling') };
+  }
+
+  /** UXA-14: a healthy connection says nothing here (Slack-like); reconnecting, offline or paused shows one line. */
+  private renderSideFoot(): void {
+    const foot = this.side.querySelector<HTMLElement>('#chat-side-foot');
+    if (foot === null) return;
+    const { tone, text } = this.connectionStatus();
+    foot.hidden = tone === 'ok';
+    foot.replaceChildren(...(tone === 'ok' ? [] : [h('span', { class: `dot ${tone}`, attrs: { 'aria-hidden': 'true' } }), h('span', {}, text)]));
   }
 
   private iconButton(className: string, name: ChatIconName, label: string, onClick: () => void, id?: string): HTMLButtonElement {
@@ -1144,7 +1183,7 @@ export class ChatModule {
     const base = JSON.stringify([row?.canSend ?? false, this.access(), this.me?.reactions.quick ?? [], this.me?.user.uuid ?? null, this.deps.locale]);
     const wanted: Keyed[] = [];
     if (timeline.hasMore) skeletonMessages(2, true).forEach((node, i) => wanted.push({ key: `older-${i}`, sig: '', build: () => node }));
-    else if (row !== null) wanted.push({ key: `start:${open}`, sig: row.title, build: () => h('li', { class: 'conv-start' }, this.convIcon(row, ''), h('span', {}, t('startOfConversation', { title: row.title }))) });
+    else if (row !== null) wanted.push({ key: `start:${open}`, sig: row.title, build: () => h('li', { class: 'conv-start' }, this.convIcon(row, ''), h('span', {}, t(row.kind === 'direct' ? 'startOfDirect' : 'startOfConversation', { title: row.title }))) });
     const [shown, pending] = this.withPending(open, null, timeline.messages);
     const now = this.now();
     for (const item of rows(shown, this.dividerAt, now, t, this.deps.locale)) {
@@ -1558,7 +1597,7 @@ export class ChatModule {
       column.append(
         h(
           'div',
-          { class: 'reacts', attrs: { role: 'group', 'aria-label': t('reactionsReadOnly') } },
+          { class: 'reacts', attrs: { role: 'group', 'aria-label': t('reactions') } },
           ...message.reactions.map((reaction) =>
             h(
               'span',

@@ -1,11 +1,13 @@
 /** Strings of the Tasks module (BD-3b), English and Spanish: every string the module shows. */
-import type { Locale } from '../lib/i18n';
+import { fill, pluralKey, type Locale } from '../lib/i18n';
 
 const en = {
   moduleTasks: 'Tasks',
   connectTitle: 'Connect your tasks',
   connectText: 'See your boards and tasks, create and move tasks, tick checklists and start a timer from a task.',
-  connectPoints: 'Beacon asks you to approve this computer once more: a separate approval for tasks, revocable on its own. Nothing is stored on this computer but the approval, in the system keychain.',
+  connectPoints: 'One more short approval in Beacon, just for tasks. You can disconnect tasks later without signing out.',
+  connectHow: 'How this works',
+  connectHowText: 'Tasks get their own approval, separate from time tracking and chat, so you can end it on its own (Settings → Account, or Account → Security in Beacon). Your boards are not stored on this computer: only the approval is kept, in the system keychain.',
   connectButton: 'Connect tasks',
   connectWaiting: 'Waiting for your approval in Beacon…',
   connectCode: 'Code',
@@ -28,6 +30,7 @@ const en = {
   noBoardsHint: 'Boards you may open in Beacon show here.',
   mineSub: '{name} · assigned to you or waiting for your review',
   boardSub: '{name} · {count} open tasks',
+  boardSubOne: '{name} · 1 open task',
   boardSubCapped: '{name} · more than {count} open tasks',
   groupOverdue: 'Overdue',
   groupToday: 'Today',
@@ -43,6 +46,7 @@ const en = {
   added: 'Added {task} to {board}',
   onlyMine: 'Only mine',
   colCount: '{name}, {count} tasks',
+  colCountOne: '{name}, 1 task',
   colCountMore: '{name}, {count} tasks shown, more to load',
   colEmpty: 'No tasks',
   colEmptyHint: 'Drag a card here or press Alt+→ on a card.',
@@ -81,6 +85,7 @@ const en = {
   tableAssignee: 'Assignee',
   tableDue: 'Due',
   tableLogged: 'Logged',
+  tableTimer: 'Timer',
   statusOf: 'Status of {task}',
   unassigned: 'Unassigned',
   detailLabel: 'Task {task}',
@@ -137,7 +142,7 @@ const en = {
   tasksNotConnected: 'Not connected',
   disconnectHint: 'Disconnecting keeps time tracking and chat signed in.',
   markers: 'Column markers',
-  markersHint: 'TaskBoard’s column emojis, or a dot in the column colour. Column names always show.',
+  markersHint: 'Beacon’s column emojis, or a dot in the column colour. Column names always show.',
   markersEmoji: 'Emojis',
   markersDots: 'Colour dots',
   keysTasks: 'Tasks',
@@ -147,6 +152,9 @@ const en = {
   keyCardNav: 'Move between cards',
   keyStartTimer: 'Start or stop the timer on a task',
   keyCloseDetail: 'Close the task',
+  keyBoard: 'Previous / next board',
+  keyRows: 'Move between rows (My tasks, List)',
+  keyRowCells: 'Move within a row',
 };
 
 export type TasksKey = keyof typeof en;
@@ -156,7 +164,9 @@ const es: Record<TasksKey, string> = {
   moduleTasks: 'Tareas',
   connectTitle: 'Conecta tus tareas',
   connectText: 'Consulta tus tableros y tareas, crea y mueve tareas, marca listas de comprobación y pon un temporizador desde una tarea.',
-  connectPoints: 'Beacon te pide aprobar este equipo una vez más: una aprobación aparte para las tareas, que se puede revocar por separado. En este equipo solo se guarda la aprobación, en el llavero del sistema.',
+  connectPoints: 'Una aprobación corta más en Beacon, solo para las tareas. Puedes desconectarlas después sin cerrar sesión.',
+  connectHow: 'Cómo funciona',
+  connectHowText: 'Las tareas tienen su propia aprobación, aparte del registro de tiempo y del chat, así que puedes terminarla por separado (Ajustes → Cuenta, o Cuenta → Seguridad en Beacon). Tus tableros no se guardan en este equipo: solo se guarda la aprobación, en el llavero del sistema.',
   connectButton: 'Conectar tareas',
   connectWaiting: 'Esperando tu aprobación en Beacon…',
   connectCode: 'Código',
@@ -179,6 +189,7 @@ const es: Record<TasksKey, string> = {
   noBoardsHint: 'Aquí aparecen los tableros que puedes abrir en Beacon.',
   mineSub: '{name} · asignadas a ti o pendientes de tu revisión',
   boardSub: '{name} · {count} tareas abiertas',
+  boardSubOne: '{name} · 1 tarea abierta',
   boardSubCapped: '{name} · más de {count} tareas abiertas',
   groupOverdue: 'Vencidas',
   groupToday: 'Hoy',
@@ -194,6 +205,7 @@ const es: Record<TasksKey, string> = {
   added: '{task} añadida a {board}',
   onlyMine: 'Solo las mías',
   colCount: '{name}, {count} tareas',
+  colCountOne: '{name}, 1 tarea',
   colCountMore: '{name}, {count} tareas mostradas, hay más por cargar',
   colEmpty: 'Sin tareas',
   colEmptyHint: 'Arrastra una tarjeta aquí o pulsa Alt+→ en una tarjeta.',
@@ -232,6 +244,7 @@ const es: Record<TasksKey, string> = {
   tableAssignee: 'Asignada a',
   tableDue: 'Vence',
   tableLogged: 'Registrado',
+  tableTimer: 'Temporizador',
   statusOf: 'Estado de {task}',
   unassigned: 'Sin asignar',
   detailLabel: 'Tarea {task}',
@@ -288,7 +301,7 @@ const es: Record<TasksKey, string> = {
   tasksNotConnected: 'Sin conectar',
   disconnectHint: 'Al desconectar, el registro de tiempo y el chat siguen conectados.',
   markers: 'Marcadores de columna',
-  markersHint: 'Los emojis de columna de TaskBoard, o un punto del color de la columna. El nombre de la columna siempre se muestra.',
+  markersHint: 'Los emojis de columna de Beacon, o un punto del color de la columna. El nombre de la columna siempre se muestra.',
   markersEmoji: 'Emojis',
   markersDots: 'Puntos de color',
   keysTasks: 'Tareas',
@@ -298,11 +311,17 @@ const es: Record<TasksKey, string> = {
   keyCardNav: 'Moverse entre tarjetas',
   keyStartTimer: 'Poner o parar el temporizador en una tarea',
   keyCloseDetail: 'Cerrar la tarea',
+  keyBoard: 'Tablero anterior / siguiente',
+  keyRows: 'Moverse entre filas (Mis tareas, Lista)',
+  keyRowCells: 'Moverse dentro de una fila',
 };
 
 const CATALOGS: Record<Locale, Record<TasksKey, string>> = { en, es };
 
 export function tasksText(locale: Locale): TasksText {
   const catalog = CATALOGS[locale];
-  return (key, params = {}) => (catalog[key] ?? en[key]).replace(/\{(\w+)\}/g, (match, name: string) => (name in params ? String(params[name]) : match));
+  return (key, params = {}) => {
+    const name = pluralKey(catalog, en, locale, key, params) as TasksKey;
+    return fill(catalog[name] ?? en[name], params);
+  };
 }

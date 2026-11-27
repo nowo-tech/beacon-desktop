@@ -241,8 +241,10 @@ export class AllocationDialog {
     }
     const error = h('span', { class: 'field-err', id: 'alloc-activity-err' }, t('allocActivityRequired'));
     row.classList.toggle('invalid', this.submitted && required && this.activity === null);
-    // The state line and the error share one line (no layout shift when the error appears).
-    row.replaceChildren(label, select, h('div', { class: 'row-msg' }, status, error));
+    // The state line and the error share one line. With nothing to say it takes no room (UXA-43): the line comes back
+    // with the error, the dialog's only change after a submit.
+    const quiet = status.textContent?.trim() === '';
+    row.replaceChildren(label, select, h('div', { class: 'row-msg', attrs: { 'data-quiet': quiet ? 'true' : undefined } }, status, error));
     if (row.classList.contains('invalid')) this.markInvalid(row, select);
   }
 

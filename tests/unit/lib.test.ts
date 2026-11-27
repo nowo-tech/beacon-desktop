@@ -36,7 +36,7 @@ class MemoryStorage implements Storage {
 describe('i18n', () => {
   it('has the same keys in en and es', () => {
     expect(Object.keys(es).sort()).toEqual(Object.keys(en).sort());
-    expect(createTranslator('es')('offline', { count: 2 })).toContain('2 acción(es)');
+    expect(createTranslator('es')('offline', { count: 2 })).toContain('2 acciones se enviarán');
   });
 });
 

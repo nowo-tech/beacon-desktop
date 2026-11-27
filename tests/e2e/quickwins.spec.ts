@@ -75,7 +75,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.locator('#reassign-meeting')).toHaveText('Meeting: Customer call: Acme quarterly review');
     await page.locator('#reassign-search').fill('invoice');
     await page.keyboard.press('Enter');
-    await expect(page.locator('#reassign-status')).toHaveText('1 tasks found.');
+    await expect(page.locator('#reassign-status')).toHaveText('1 task found.');
     await expect(page.locator('#reassign-options input:checked')).toHaveValue('T-104');
     expect(await axe(page)).toEqual([]);
     await page.locator('#reassign-save').click();

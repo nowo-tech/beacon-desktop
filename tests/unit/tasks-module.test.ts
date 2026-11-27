@@ -137,7 +137,7 @@ describe('tasks module', () => {
     expect(ui.platform.hooks.tasksConnectBegins).toBe(1);
     const state = (await env.control('state')) as { requests: { path: string; body: string }[] };
     expect(JSON.parse(state.requests.filter((item) => item.path.endsWith('device/code')).at(-1)?.body ?? '{}')).toMatchObject({ family: 'tasks', scopes: ['task-board:read', 'task-board:write'] });
-    expect([...document.querySelectorAll('#tasks-mine h3')].map((node) => node.textContent?.replace(/·.*/, '').trim())).toEqual(['Overdue', 'Today', 'Upcoming', 'No date', 'To review']);
+    expect([...document.querySelectorAll('#tasks-mine h2')].map((node) => node.textContent?.replace(/·.*/, '').trim())).toEqual(['Overdue', 'Today', 'Upcoming', 'No date', 'To review']);
     expect(ui.$('#mt-overdue').classList.contains('over')).toBe(true);
     expect(ui.$('#tasks-title').textContent).toBe('My tasks');
     expect(document.querySelectorAll('.rail-tab[role="tab"]')).toHaveLength(3);
@@ -159,7 +159,7 @@ describe('tasks module', () => {
     const ui = await connected();
     (ui.$('[data-view="board"]') as HTMLButtonElement).click();
     await until(() => document.querySelector('.col .card') !== null, 'the board');
-    expect([...document.querySelectorAll('.col-h h3')].map((node) => node.textContent)).toEqual(['To do', 'In progress', 'Review', 'Done']);
+    expect([...document.querySelectorAll('.col-h h2')].map((node) => node.textContent)).toEqual(['To do', 'In progress', 'Review', 'Done']);
     expect(document.querySelector('.col-emoji')?.textContent).toBe('📝');
     // UXA-38: the board switcher is a menu button; its menu groups boards by folder and checks the one shown.
     expect(accName('#tasks-board')).toBe('Board: Envelope v2');

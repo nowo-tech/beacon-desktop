@@ -188,7 +188,7 @@ describe('desktop app', () => {
     online = false;
     await ui.app.start({ id: 'T-101', title: 'Write onboarding guide' });
     expect(ui.app.offline).toBe(true);
-    expect(ui.$('#offline').textContent).toContain('1 action(s)');
+    expect(ui.$('#offline').textContent).toContain('1 action will be sent');
     expect(ui.app.state.activeTimer?.taskId).toBe('T-101');
     await ui.app.start({ id: 'T-102', title: 'Review pull request queue' });
     await ui.app.stop();
@@ -199,7 +199,7 @@ describe('desktop app', () => {
     await ui.app.refresh();
     expect(ui.app.offline).toBe(false);
     expect(ui.app.queue.size).toBe(0);
-    expect(ui.$('#notice').textContent).toBe('Back online: 3 action(s) sent.');
+    expect(ui.$('#notice').textContent).toBe('Back online: 3 actions sent.');
     expect(ui.app.state.activeTimer).toBeNull();
   });
 
@@ -514,7 +514,7 @@ describe('desktop app', () => {
     expect(ui.$('#privacy-local').textContent).toContain('never stored, logged or sent');
     ui.click('#clear-local');
     expect(document.activeElement?.id).toBe('clear-local-yes');
-    expect(ui.$('#clear-local-question').textContent).toContain('1 action(s) have not reached the server');
+    expect(ui.$('#clear-local-question').textContent).toContain('1 action has not reached the server');
     ui.click('#clear-local-no');
     expect(document.activeElement?.id).toBe('clear-local');
     ui.click('#clear-local');

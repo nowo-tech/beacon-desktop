@@ -67,7 +67,7 @@ for (const scheme of ['light', 'dark'] as const) {
       await page.locator('[data-task="T-101"] .row-action').click();
       await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
       await expect(page.getByRole('region', { name: 'Working offline' })).toBeVisible();
-      await expect(page.locator('#offline')).toContainText('1 action(s)');
+      await expect(page.locator('#offline')).toContainText('1 action will be sent');
       await shot(page, `desktop-offline-${scheme}`);
     });
 

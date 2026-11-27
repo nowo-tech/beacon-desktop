@@ -196,6 +196,7 @@ svg.i.lg { width: 20px; height: 20px; }
 .side .sec-more:hover { color: var(--chrome-ink); }
 .side-empty { color: var(--chrome-ink-2); font-size: var(--fs-sm); padding: 8px 6px; margin: 0; }
 .side-foot { border-top: 1px solid var(--chrome-line); padding: 8px 12px; font-size: var(--fs-xs); color: var(--chrome-ink-2); display: flex; align-items: center; gap: 6px; }
+.side-foot[hidden] { display: none; }
 .side-foot .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--presence-on); }
 .side-foot .dot.warn { background: var(--signal-dot); }
 .side-foot .dot.off { background: var(--chrome-ink-2); }
@@ -390,6 +391,11 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .cc-ico { width: 44px; height: 44px; border-radius: var(--r-lg); background: var(--moss-soft); color: var(--moss); display: grid; place-items: center; }
 .cc-text { margin: 0; color: var(--ink-2); line-height: 1.55; }
 .cc-points { margin: 0; color: var(--ink-3); font-size: var(--fs-xs); }
+/* UXA-21: the security detail stays one click away ("How this works"). */
+.cc-how { color: var(--ink-3); font-size: var(--fs-xs); }
+.cc-how summary { cursor: pointer; width: fit-content; min-height: 24px; display: inline-flex; align-items: center; color: var(--moss); font-weight: 600; border-radius: var(--r-sm); }
+.cc-how summary:focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; }
+.cc-how p { margin: 4px 0 0; line-height: 1.5; }
 .cc-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .cc-wait { margin: 0; color: var(--ink-2); font-size: var(--fs-sm); }
 .cc-code { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line); }
@@ -500,6 +506,7 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .sh-dialog .form-row .help.warn { color: var(--warn); }
 .sh-dialog .form-row .row-msg { display: grid; }
 .sh-dialog .form-row .row-msg > * { grid-area: 1 / 1; }
+.sh-dialog .form-row:not(.invalid) .row-msg[data-quiet] { display: none; }
 .sh-dialog .form-row .field-err { font-size: var(--fs-xs); color: var(--danger); visibility: hidden; min-height: 1.4em; line-height: 1.4; font-weight: 600; }
 .sh-dialog .form-row.invalid .field-err { visibility: visible; }
 .sh-dialog .form-row.invalid .row-msg .help { visibility: hidden; }
