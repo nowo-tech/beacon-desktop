@@ -275,7 +275,11 @@ describe('tasks module', () => {
     ui.shell.openSettings();
     (ui.$('#shell-settings [aria-label="Column markers"] [data-value="dots"]') as HTMLButtonElement).click();
     expect(ui.shell.prefs.markers).toBe('dots');
+    // Disconnect (Account) asks first (UX batch 6).
     (ui.$('#tasks-disconnect') as HTMLButtonElement).click();
+    await until(() => ui.$<HTMLDialogElement>('#shell-confirm').open, 'the confirmation');
+    expect(ui.$('#shell-confirm-title').textContent).toBe('Disconnect tasks?');
+    ui.$<HTMLButtonElement>('#confirm-ok').click();
     await until(() => !ui.tasks.connected, 'disconnected');
     expect(ui.platform.hooks.tasksToken).toBeNull();
     ui.shell.openKeys();

@@ -85,14 +85,15 @@ test('every view has the same content width at the default window size', async (
   await control('device/approve', { userCode: await page.locator('#user-code').textContent() });
   await expect(page.locator('#tasks li')).toHaveCount(8, { timeout: 15_000 });
   widths.main = await contentBox(page);
-  await page.locator('#open-settings').click();
+  await page.locator('#rail-settings').click();
   widths.settings = await contentBox(page);
-  await page.locator('#settings-tab-general').click();
+  await page.locator('#settings-tab-account').click();
   await page.locator('#open-privacy').click();
   await expect(page.locator('#privacy')).toBeVisible();
   widths.privacy = await contentBox(page);
+  // Back from "What we collect" reopens the one Settings (UX batch 6); close it.
   await page.locator('#back').click();
-  await page.locator('#back').click();
+  await page.locator('#settings-close').click();
   await control('config', { update: { version: '99.0.0', notes: '', pub_date: '2026-11-04T10:00:00Z', url: 'u', signature: 's' }, minSupportedVersion: '99.0.0' });
   await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.refresh());
   await expect(page.locator('#update-required')).toBeVisible();

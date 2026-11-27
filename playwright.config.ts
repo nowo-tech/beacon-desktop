@@ -6,7 +6,14 @@ export default defineConfig({
   workers: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['github'], ['list']] : 'list',
-  use: { baseURL: 'http://127.0.0.1:1420', viewport: { width: 400, height: 640 }, locale: 'en-US' },
+  use: {
+    baseURL: 'http://127.0.0.1:1420',
+    viewport: { width: 400, height: 640 },
+    locale: 'en-US',
+    // Past the guided first run (UX batch 6) and back on Time, as every spec here expects after its sign-in; the setup
+    // and the first landing have their own spec (ux-b6.spec.ts), which starts from an empty storage.
+    storageState: { cookies: [], origins: [{ origin: 'http://127.0.0.1:1420', localStorage: [{ name: 'beacon-desktop-shell', value: '{"setup":"done","module":"time"}' }] }] },
+  },
   webServer: [
     {
       command: 'node mock-server/server.mjs',

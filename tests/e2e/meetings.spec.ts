@@ -58,7 +58,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await call(page, 0, 3, ['teams']);
     await expect(page.locator('#meeting')).toHaveCount(0);
 
-    await page.locator('#open-settings').click();
+    await page.locator('#rail-settings').click();
     await page.locator('#settings-tab-meetings').click();
     const toggle = page.getByLabel("Notice when I'm in a call and ask what to record it as");
     await expect(toggle).not.toBeChecked();
@@ -67,7 +67,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.locator('#meeting-status')).toHaveText('Checking the microphone…');
     expect(await axe(page)).toEqual([]);
     expect((await page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.wakePlan))?.micEverySeconds).toBe(20);
-    await page.locator('#back').click();
+    await page.locator('#settings-close').click();
 
     await call(page, 10, 11.9, ['teams']);
     await expect(page.locator('#meeting')).toHaveCount(0);
@@ -96,11 +96,11 @@ for (const scheme of ['light', 'dark'] as const) {
 test('a running task and a generic meeting: the notification switches, and "Back" returns to the task', async ({ page }) => {
   await signIn(page);
   await page.evaluate(() => void ((window as unknown as Tt).__timeTrack.hooks.notificationPermission = 'granted'));
-  await page.locator('#open-settings').click();
+  await page.locator('#rail-settings').click();
   await page.locator('#settings-tab-meetings').click();
   await page.getByLabel("Notice when I'm in a call and ask what to record it as").check();
   await page.locator('#meeting-generic').selectOption('T-103');
-  await page.locator('#back').click();
+  await page.locator('#settings-close').click();
   await page.locator('[data-task="T-101"] .row-action').click();
   await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
 

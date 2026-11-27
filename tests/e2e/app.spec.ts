@@ -36,7 +36,7 @@ test('device sign-in, start, switch, stop, sign out', async ({ page }) => {
   await signIn(page);
   await page.locator('[data-task="T-104"] .row-action').click();
   await expect(page.locator('#timer-task')).toHaveText('Fix invoice rounding bug');
-  await page.locator('#main [data-task="T-101"] .row-action', { hasText: 'Switch' }).click();
+  await page.locator('#main [data-task="T-101"] .row-action[aria-label^="Switch to"]').click();
   await expect(page.locator('#timer-task')).toHaveText('Write onboarding guide');
   await page.locator('#stop').click();
   await expect(page.locator('#timer')).toContainText('Not tracking');
@@ -45,7 +45,8 @@ test('device sign-in, start, switch, stop, sign out', async ({ page }) => {
     ['T-104', 'desktop'],
     ['T-101', 'desktop'],
   ]);
-  await page.locator('#open-settings').click();
+  await page.locator('#rail-settings').click();
+  await page.locator('#settings-tab-account').click();
   await page.locator('#logout').click();
   await expect(page.locator('#login-form')).toBeVisible();
 });
@@ -166,8 +167,9 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.locator('#gap-resume')).toBeFocused();
     await axe(page, 'resume');
     await page.locator('#gap-dismiss').click();
-    await page.locator('#open-settings').click();
+    await page.locator('#rail-settings').click();
     await axe(page, 'settings');
+    await page.locator('#settings-tab-account').click();
     await page.locator('#open-privacy').click();
     await page.locator('#clear-local').click();
     await axe(page, 'privacy');
@@ -193,7 +195,8 @@ test('offline actions are queued and replayed with their real times', async ({ p
 
 test('privacy screen and clear local data', async ({ page }) => {
   await signIn(page);
-  await page.locator('#open-settings').click();
+  await page.locator('#rail-settings').click();
+  await page.locator('#settings-tab-account').click();
   await page.locator('#open-privacy').click();
   await expect(page.locator('#privacy-sent')).toContainText('Never the input counter');
   await expect(page.locator('#privacy-local')).toContainText('never stored, logged or sent');

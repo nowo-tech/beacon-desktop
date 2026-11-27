@@ -93,6 +93,8 @@ test('a friendly message goes out as a desktop notification, not as a toast; the
 });
 
 test('denied by the OS: the toast stays and Settings says so', async ({ page }) => {
+  // The fixed clock holds CSS animations at their first frame: Settings (a dialog since UX batch 6) opens without one.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await quietClock(page);
   await signIn(page);
   await page.evaluate(() => void ((window as unknown as Tt).__timeTrack.hooks.notificationPermission = 'denied'));
@@ -100,7 +102,7 @@ test('denied by the OS: the toast stays and Settings says so', async ({ page }) 
   await page.evaluate(() => (window as unknown as Tt).__timeTrack.app.tick());
   await expect(page.locator('#cheer')).toBeVisible();
   await expect(page.getByRole('region', { name: 'Desktop notifications are off' })).toBeVisible();
-  await page.locator('#open-settings').click();
+  await page.locator('#rail-settings').click();
   await page.locator('#settings-tab-notifications').click();
   await expect(page.locator('#native-status')).toContainText('turned off for Beacon Desktop');
   await expect(page.getByLabel('Show them as desktop notifications')).toBeChecked();
@@ -143,7 +145,7 @@ test('tray: pause friendly messages for an hour and resume', async ({ page }) =>
   expect(await item()).toEqual({ id: 'pause-friendly', label: 'Pause friendly messages for 1 h' });
   await page.evaluate(() => (window as unknown as Tt).__timeTrack.hooks.trayAction('pause-friendly'));
   await expect.poll(async () => (await item())?.id).toBe('resume-friendly');
-  await page.locator('#open-settings').click();
+  await page.locator('#rail-settings').click();
   await page.locator('#settings-tab-notifications').click();
   await expect(page.locator('#friendly-paused-text')).toContainText('Paused until');
   await page.locator('#friendly-resume').click();
