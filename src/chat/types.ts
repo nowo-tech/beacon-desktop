@@ -3,6 +3,7 @@
  * reads, and parsers that check every field. Anything malformed is dropped or replaced by a safe default, so a server
  * answer can never put a non-string where the UI expects text, or a URL scheme the app would open.
  */
+import { safeLinkUrl } from './markdown';
 
 export type ConversationKind = 'direct' | 'channel' | 'support';
 
@@ -210,6 +211,8 @@ export function parseMe(raw: unknown): ChatMe {
 /** A reaction emoji as the API carries it: a short, non-blank string without control characters (at most 64 UTF-8 bytes, ChatKit's limit). */
 export function isEmoji(value: unknown): value is string {
   if (typeof value !== 'string' || value.trim() === '' || value !== value.trim()) return false;
+  // Dots only (`.`, `..`) would be a path segment of their own in the reaction URL (audit ZDG-I2).
+  if (/^\.+$/.test(value)) return false;
   if ([...value].some((char) => (char.codePointAt(0) ?? 0) < 0x20 || char === '\u007f')) return false;
   return new TextEncoder().encode(value).length <= 64;
 }
@@ -278,40 +281,11 @@ export function parseConversationsPage(raw: unknown): ConversationsPage {
 const MARKS: readonly Mark[] = ['bold', 'italic', 'strike'];
 const TONES = ['neutral', 'info', 'success', 'warning', 'danger'] as const;
 
-/** Mail parameters a chat link keeps (audit ZBZ-L3): never `attach=` and the like. */
-const MAILTO_PARAMS = new Set(['to', 'cc', 'bcc', 'subject', 'body']);
-
-function mailtoWithoutExtras(url: URL): string {
-  // The raw pairs are kept as written (RFC 6068 has no form encoding: `+` is a plus, audit ZCD-I1; the URL parser
-  // already percent-encoded spaces and other unsafe characters); only the name is decoded, to compare it.
-  const kept = url.search
-    .slice(1)
-    .split('&')
-    .filter((pair) => {
-      const name = pair.split('=', 1)[0];
-      try {
-        return MAILTO_PARAMS.has(decodeURIComponent(name).toLowerCase());
-      } catch {
-        return false;
-      }
-    });
-  return `mailto:${url.pathname}${kept.length === 0 ? '' : `?${kept.join('&')}`}`;
-}
-
-/** `http(s)` and `mailto` only, as an absolute URL (relative ones resolved against `origin`); anything else is `null`. */
-export function safeUrl(value: unknown, origin: string): string | null {
-  if (typeof value !== 'string' || value.trim() === '') return null;
-  let url: URL;
-  try {
-    url = new URL(value.trim(), origin);
-  } catch {
-    return null;
-  }
-  if (url.protocol === 'mailto:') return mailtoWithoutExtras(url);
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-  if (url.username !== '' || url.password !== '') return null;
-  return url.href;
-}
+/**
+ * `http(s)` and `mailto` only, as an absolute URL (relative ones resolved against `origin`); anything else is `null`.
+ * Shared with the composer's Markdown subset (markdown.ts), so a pending row links exactly as the server's copy will.
+ */
+export const safeUrl = (value: unknown, origin: string): string | null => safeLinkUrl(value, origin);
 
 export function parseToken(raw: unknown, origin: string): Token | null {
   if (!isObject(raw)) return null;
@@ -414,7 +388,7 @@ function reactionsOf(raw: unknown): Reaction[] {
   return list(raw)
     .filter(isObject)
     .map((item) => ({ emoji: str(item.emoji), count: int(item.count), mine: bool(item.mine) }))
-    .filter((item) => item.emoji !== '' && [...item.emoji].length <= 16 && item.count > 0);
+    .filter((item) => isEmoji(item.emoji) && [...item.emoji].length <= 16 && item.count > 0);
 }
 
 export function parseThreadPage(raw: unknown, origin: string): ThreadPage | null {

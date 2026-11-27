@@ -545,7 +545,7 @@ never patched directly, so `after=` never skips a message). Drafts and unsent me
 | `src/chat/api.ts`, `src/chat/types.ts` | changed | `send`, `reply`, `react` with `Idempotency-Key`; `me.features` 2.5, `limits.textMaxLength`, `reactions.quick / accepted`, `canSend`, `writeAccess()` |
 | `src/chat/module.ts`, `src/chat/store.ts`, `src/chat/sync.ts` | changed | Composer and thread box, pending rows, reaction toggles, hover toolbar, picker (`E`), reply (`R`), `C`, `Shift+F10`, "Allow sending" |
 | `src/api/client.ts` | changed | "Connect chat" asks for `chat:read chat:write`, falls back to `chat:read` on `invalid_scope` |
-| `src-tauri/src/net.rs` | changed | `PUT` / `PATCH` / `DELETE` only on the chat route; `idempotency-key` request header allowed |
+| `src-tauri/src/net.rs`, `src-tauri/src/secret.rs` | changed | `PUT` / `DELETE` only on the anchored reaction route (`is_reaction_path`, audit ZDG-L1); `idempotency-key` request header allowed |
 | `mock-server/chat.mjs`, `mock-server/server.mjs` | changed | Write routes with key replay / mismatch, `read_only`, writes off, read-only chat family |
 | `tests/unit/chat-writes.test.ts`, `tests/unit/shell-writes.test.ts`, `tests/e2e/chat-writes.spec.ts`, `tests/screenshots/bd3b.spec.ts` | new | API, outbox, composer, module, e2e with axe, owner screenshots |
 

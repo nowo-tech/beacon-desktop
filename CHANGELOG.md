@@ -31,7 +31,8 @@ through `GET me`, so a 2.4 server or a read-only token keeps the 0.10 read-only 
   refuses it. `Shift+F10` / the context-menu key opens the message menu from the keyboard.
 - **"Allow sending"**: a chat token approved before 0.12.0 (read only) shows why there is no message box and offers a
   new approval for reading and sending; "Connect chat" asks for `chat:read chat:write`, and for `chat:read` only when
-  the server's chat family does not know `chat:write`.
+  the server's chat family does not know `chat:write`. The read approval is given up first: declining the new one (or
+  letting its code expire) leaves chat disconnected; *Connect chat* again to keep reading.
 - Read-only conversations (read-only channel, closed ticket, `canSend: false`) and servers with writes off say so
   where the box would be.
 
@@ -48,8 +49,9 @@ through `GET me`, so a 2.4 server or a read-only token keeps the 0.10 read-only 
 
 ### Changed
 
-- Rust (`beacon_fetch`): `PUT`, `PATCH` and `DELETE` are accepted for the chat client API only (deny by default for
-  every other route), and the `Idempotency-Key` request header is passed through.
+- Rust (`beacon_fetch`): `PUT` and `DELETE` are accepted only on the chat reaction route
+  (`…/api/chat/v1/conversations/{uuid}/messages/{uuid}/reactions/{emoji}`, deny by default for every other route; no
+  `PATCH`), and the `Idempotency-Key` request header is passed through (audit ZDG-L1).
 
 ## [0.11.0] - 2026-11-27
 

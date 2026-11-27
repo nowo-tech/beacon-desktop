@@ -2,7 +2,7 @@
  * The message composer (BD-3b, approved prototype): a form with a labelled textarea, a formatting toolbar (Markdown as
  * the web dock writes it), a hint, a character counter near the limit and a send button.
  *
- * - **Enter** sends, **Shift+Enter** adds a line, **Ctrl/Cmd+Enter** sends too. Enter never sends while an IME is
+ * - **Enter** sends, **Shift+Enter** adds a line, **Ctrl/Cmd+Enter** sends too. Neither sends while an IME is
  *   composing (`isComposing`, or `keyCode` 229 for WebKit's out-of-order event; Modern Web Guidance
  *   `ime-safe-enter-submit`). The send button is a real submit button: the keys are shortcuts, not the only path.
  * - **Ctrl/Cmd+B / I / E** and **Ctrl/Cmd+Shift+C** wrap the selection in bold, italic, code and a code block.
@@ -143,7 +143,8 @@ export class Composer {
     const mod = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
     if (event.key === 'Enter' && (mod || !event.shiftKey)) {
-      if (!mod && (event.isComposing || event.keyCode === 229)) return;
+      // Never while an IME is composing, with or without Ctrl / Cmd (audit ZDG-I5).
+      if (event.isComposing || event.keyCode === 229) return;
       event.preventDefault();
       this.submit();
       return;

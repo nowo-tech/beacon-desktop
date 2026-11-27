@@ -50,7 +50,7 @@ Only the latest release receives fixes. The server can force an update with `min
   - **Residual risk.** A script running in the main webview (script injection is prevented by `script-src 'self'`
     and a text-only DOM) could still:
     - make authenticated requests to the signed-in server while the app runs (any GET / POST the token's scopes
-      allow, `export` included; with a chat token approved for sending, chat writes: messages and reactions), and send the **data** it reads elsewhere, for example in an https URL given to
+      allow, `export` included; with a chat token approved for sending, chat writes: messages, thread replies and reactions, never edits or deletes), and send the **data** it reads elsewhere, for example in an https URL given to
       `open_external`;
     - sign you out (`secret_delete`) and start a sign-in to a server of its choice (`sign_in_begin`). That needs you
       to press **Sign in** in the native "Sign in to <host>?" dialog showing that host, and any stored sign-in is
@@ -60,7 +60,7 @@ Only the latest release receives fixes. The server can force an update with `min
     It cannot read the token or get it sent to another server.
 - **Network.** HTTPS required; plain `http://` to `localhost` / `127.0.0.1` / `[::1]` only in debug builds. The
   webview cannot reach the network (CSP `connect-src ipc:`, no HTTP plugin): every request goes through the Rust
-  command `beacon_fetch` (main window only; GET / POST, plus PUT / PATCH / DELETE on the chat client API only,
+  command `beacon_fetch` (main window only; GET / POST, plus PUT / DELETE on the chat reaction route only,
   allow-listed headers, no redirects, no cookies). No remote
   code. Rust binds `beacon_fetch`, the update check and the updater to the origin (scheme, host, port) of the server
   being signed in to (`beacon_bind`, before the sign-in requests and at start-up): any other origin is refused, so the
@@ -111,7 +111,8 @@ Only the latest release receives fixes. The server can force an update with `min
 - **Routing.** A chat route (`<server base path>/api/chat/v1/…`, decoded path, anchored) gets the chat token or
   nothing; a path that only looks like one gets no token; every other route the time token or nothing.
   `X-Beacon-Context` and (0.12.0, chat writes) `Idempotency-Key` are the only extra request headers the window may
-  set; `PUT`, `PATCH` and `DELETE` reach chat routes only (deny by default on every other route).
+  set; `PUT` and `DELETE` reach only `…/messages/{uuid}/reactions/{emoji}` (deny by default on every other route, no
+  `PATCH`; audit ZDG-L1).
 - **Revocation.** "Disconnect chat" and sign-out call `POST …/api/chat/v1/logout` with the chat token first (best
   effort, 3 s), then delete it from the keychain.
 - **Realtime** (`src-tauri/src/realtime.rs`): the ticket (`GET …/api/chat/v1/realtime`) and the SSE stream are made in

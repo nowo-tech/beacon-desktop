@@ -119,6 +119,18 @@ describe('chat writes in the module', () => {
     expect(document.activeElement?.classList.contains('msg')).toBe(true);
   });
 
+  it('a context switch forgets the drafts of the previous organization (PRIVACY.md, ZDG-L2)', async () => {
+    const ui = await connected();
+    type(ui.$<HTMLTextAreaElement>('#composer'), 'not for the next organization');
+    ui.$<HTMLButtonElement>('.ctx-tile[data-context="personal"]').click();
+    await until(() => ui.shell.context === 'personal', 'Personal');
+    ui.$<HTMLButtonElement>(`.ctx-tile[data-context="${ORG}"]`).click();
+    await until(() => ui.shell.context === ORG && ui.$(`[data-conv="${ENVELOPE}"]`) !== null, 'back in the organization');
+    ui.$<HTMLButtonElement>(`[data-conv="${ENVELOPE}"]`).click();
+    await until(() => ui.$<HTMLTextAreaElement>('#composer') !== null, 'the message box');
+    expect(ui.$<HTMLTextAreaElement>('#composer').value).toBe('');
+  });
+
   it('a send that fails offers Retry with the same key; a refusal offers Edit and Discard', async () => {
     const ui = await connected();
     await env.control('config', { chatFailNext: { status: 503, error: 'server_error' } });

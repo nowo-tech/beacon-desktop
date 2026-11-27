@@ -111,7 +111,8 @@ Beacon chat sits next to the timer: **Chat** and **Time** on the left rail (`Ctr
 3. Read conversations, threads and reactions. From 0.12.0 (Beacon with ChatKitBundle 2.5) write in the message box
    (Enter sends, Shift+Enter adds a line), reply in threads (`R` on a message) and react (`E`, or the chips). An
    approval made with 0.10 / 0.11 reads only: the box offers **Allow sending**, a new approval for reading and
-   sending. A message that could not be sent shows *Retry* (it is never posted twice) or why the server refused it.
+   sending (the read approval is given up first: declining the new one leaves chat disconnected, connect again to
+   read). A message that could not be sent shows *Retry* (it is never posted twice) or why the server refused it.
    Notifications come later: use "Open in Beacon" meanwhile.
 
 Messages, drafts and unsent messages stay in memory only. "Disconnect chat" (Settings) revokes the chat approval (Beacon with ChatKit 2.4.1; older

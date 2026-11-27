@@ -29,16 +29,56 @@ const DELIMITERS: [string, MdMark][] = [
   ['*', 'italic'],
 ];
 
-/** `http(s)` or `mailto` only, without credentials; else `null`. */
-function linkUrl(value: string): string | null {
+/** Mail parameters a chat link keeps (audit ZBZ-L3): never `attach=` and the like. */
+const MAILTO_PARAMS = new Set(['to', 'cc', 'bcc', 'subject', 'body']);
+
+function mailtoWithoutExtras(url: URL): string {
+  // The raw pairs are kept as written (RFC 6068 has no form encoding: `+` is a plus, audit ZCD-I1; the URL parser
+  // already percent-encoded spaces and other unsafe characters); only the name is decoded, to compare it.
+  const kept = url.search
+    .slice(1)
+    .split('&')
+    .filter((pair) => {
+      const name = pair.split('=', 1)[0];
+      try {
+        return MAILTO_PARAMS.has(decodeURIComponent(name).toLowerCase());
+      } catch {
+        return false;
+      }
+    });
+  return `mailto:${url.pathname}${kept.length === 0 ? '' : `?${kept.join('&')}`}`;
+}
+
+/**
+ * `http(s)` and `mailto` only, without credentials, as an absolute URL (a relative one resolved against `origin` when
+ * given); `mailto` keeps only `to`, `cc`, `bcc`, `subject`, `body`. Anything else is `null`. The chat parsers' `safeUrl`
+ * is this function, so a pending row links exactly as the server's copy (audit ZDG-I1).
+ */
+export function safeLinkUrl(value: unknown, origin?: string): string | null {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  let url: URL;
   try {
-    const url = new URL(value);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:' && url.protocol !== 'mailto:') return null;
-    if (url.username !== '' || url.password !== '') return null;
-    return url.href;
+    url = origin === undefined ? new URL(value.trim()) : new URL(value.trim(), origin);
   } catch {
     return null;
   }
+  if (url.protocol === 'mailto:') return mailtoWithoutExtras(url);
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  if (url.username !== '' || url.password !== '') return null;
+  return url.href;
+}
+
+/** The `)` that closes a link target opened at `start` (balanced parentheses inside the URL, as `…/Foo_(bar)`). */
+function closingParen(line: string, start: number): number {
+  let depth = 0;
+  for (let i = start; i < line.length; i += 1) {
+    if (line[i] === '(') depth += 1;
+    else if (line[i] === ')') {
+      if (depth === 0) return i;
+      depth -= 1;
+    } else if (line[i] === ' ') return -1;
+  }
+  return -1;
 }
 
 /** Inline tokens of one line. Unclosed markers stay as typed. */
@@ -62,8 +102,8 @@ export function inlineTokens(line: string, marks: MdMark[] = []): MdToken[] {
     }
     if (line[i] === '[') {
       const close = line.indexOf('](', i + 1);
-      const end = close < 0 ? -1 : line.indexOf(')', close + 2);
-      const url = end < 0 ? null : linkUrl(line.slice(close + 2, end));
+      const end = close < 0 ? -1 : closingParen(line, close + 2);
+      const url = end < 0 ? null : safeLinkUrl(line.slice(close + 2, end));
       if (url !== null && close > i + 1) {
         flush();
         out.push({ type: 'link', url, text: line.slice(i + 1, close), card: false });

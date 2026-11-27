@@ -13,6 +13,7 @@ import {
   CONTEXT_KEY,
   type Conversation,
   type ConversationsPage,
+  isEmoji,
   isUuid,
   type Message,
   type MessagesPage,
@@ -157,6 +158,7 @@ export class ChatApi {
 
   /** Sets (`on`) or removes the reader's reaction; idempotent on the server. Answers the message's reactions after it. */
   async react(uuid: string, messageUuid: string, emoji: string, on: boolean, key: string): Promise<Reaction[]> {
+    if (!isEmoji(emoji)) throw new ApiError(0, 'invalid_reaction', 'Invalid reaction.');
     const reactions = parseReactions(await this.write(on ? 'PUT' : 'DELETE', `conversations/${uuidPath(uuid)}/messages/${uuidPath(messageUuid)}/reactions/${encodeURIComponent(emoji)}`, key));
     if (reactions === null) throw new ApiError(200, 'invalid_response', 'The server returned an invalid response.');
     return reactions;

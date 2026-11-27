@@ -7,7 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { ApiError, TimeTrackApi } from '../../src/api/client';
 import { ChatApi, IDEMPOTENCY_KEY, newIdempotencyKey, retryable } from '../../src/chat/api';
 import { Composer, insertListItem, wrapSelection } from '../../src/chat/composer';
-import { inlineTokens, markdownBlocks } from '../../src/chat/markdown';
+import { inlineTokens, markdownBlocks, safeLinkUrl } from '../../src/chat/markdown';
 import { placeActions } from '../../src/chat/module';
 import { chatText } from '../../src/chat/i18n';
 import { AUTO_RETRIES, ChatOutbox, type OutboxEvents, refusalOf, toggled, waitFor } from '../../src/chat/outbox';
@@ -101,6 +101,8 @@ describe('chat writes against the mock ChatKit (2.5)', () => {
     const off = await api.react(ENVELOPE, root.uuid, '🎉', false, newIdempotencyKey());
     expect(off.some((reaction) => reaction.emoji === '🎉')).toBe(false);
     await expect(api.react(ENVELOPE, root.uuid, '🦄', true, newIdempotencyKey())).rejects.toMatchObject({ status: 422, code: 'invalid_reaction' });
+    // ZDG-I2: never a dots-only path segment (refused before anything is sent).
+    await expect(api.react(ENVELOPE, root.uuid, '..', true, newIdempotencyKey())).rejects.toMatchObject({ status: 0, code: 'invalid_reaction' });
     const state = (await env.control('state')) as { requests: { method: string; path: string }[] };
     expect(state.requests.filter((item) => item.method === 'PUT' || item.method === 'DELETE').map((item) => decodeURIComponent(item.path.split('/').at(-1) ?? ''))).toEqual(['🎉', '🎉', '🦄']);
   });
@@ -145,6 +147,15 @@ describe('the composer\'s Markdown subset (pending rows and the mock)', () => {
       { type: 'text', text: ' ** j **', marks: [] },
     ]);
     expect(inlineTokens('[x](https://u:p@x.example) [y](not a url) `` **unclosed')).toEqual([{ type: 'text', text: '[x](https://u:p@x.example) [y](not a url) `` **unclosed', marks: [] }]);
+    // ZDG-I1: the same rule as the server's copy: balanced parentheses in a URL, mailto without extras.
+    expect(inlineTokens('[w](https://x.example/Foo_(bar)) [m](mailto:a@b.example?attach=/etc/passwd&subject=hi)')).toEqual([
+      { type: 'link', url: 'https://x.example/Foo_(bar)', text: 'w', card: false },
+      { type: 'text', text: ' ', marks: [] },
+      { type: 'link', url: 'mailto:a@b.example?subject=hi', text: 'm', card: false },
+    ]);
+    expect(safeLinkUrl('/relative')).toBeNull();
+    expect(safeLinkUrl('/relative', 'https://beacon.example')).toBe('https://beacon.example/relative');
+    expect(safeLinkUrl(3)).toBeNull();
   });
 
   it('renders blocks: paragraphs, breaks, lists, quotes, fenced code', () => {
@@ -206,6 +217,10 @@ describe('write parsers', () => {
     expect(isEmoji('👍')).toBe(true);
     expect(isEmoji('a\u007f')).toBe(false);
     expect(isEmoji('x'.repeat(65))).toBe(false);
+    // ZDG-I2: dots only would be a path segment of their own.
+    expect(isEmoji('.')).toBe(false);
+    expect(isEmoji('..')).toBe(false);
+    expect(parseReactions({ reactions: [{ emoji: '..', count: 1 }, { emoji: '👍', count: 1 }] })).toEqual([{ emoji: '👍', count: 1, mine: false }]);
     expect(isEmoji(3)).toBe(false);
     const row = { uuid: '0c000000-0000-4000-8000-0000000000ab', kind: 'support', title: 'T' };
     expect(parseConversation(row)?.canSend).toBe(true);
@@ -227,7 +242,7 @@ describe('write parsers', () => {
     expect(waitFor(new RateLimited(5000), 1000)).toBe(4000);
     expect(waitFor(new RateLimited(1100), 1000)).toBe(1000);
     expect(waitFor(new ApiError(429, 'rate_limited', 'x', 7), 0)).toBe(7000);
-    expect(waitFor(new ApiError(429, 'rate_limited', 'x'), 0)).toBe(5000);
+    expect(waitFor(new ApiError(429, 'rate_limited', 'x'), 0)).toBe(60_000);
     expect(waitFor(new ApiError(409, 'conflict', 'x'), 0)).toBe(1000);
     expect(waitFor(new ApiError(500, 'server_error', 'x'), 0)).toBeNull();
   });
@@ -501,6 +516,8 @@ describe('composer', () => {
     expect(ui.key({ key: 'Enter', shiftKey: true }).defaultPrevented).toBe(false);
     expect(ui.key({ key: 'Enter', isComposing: true }).defaultPrevented).toBe(false);
     expect(ui.key({ key: 'Enter', keyCode: 229 }).defaultPrevented).toBe(false);
+    // ZDG-I5: Ctrl/Cmd+Enter waits for the IME too.
+    expect(ui.key({ key: 'Enter', ctrlKey: true, isComposing: true }).defaultPrevented).toBe(false);
     expect(ui.sent).toEqual([]);
     expect(ui.key({ key: 'Enter' }).defaultPrevented).toBe(true);
     expect(ui.sent).toEqual(['hi']);

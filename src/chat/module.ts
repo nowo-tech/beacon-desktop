@@ -277,6 +277,8 @@ export class ChatModule {
     this.api.setContext(context);
     this.history.clear();
     this.outbox?.clear();
+    // Unsent text of the previous organization goes too (PRIVACY.md, audit ZDG-L2).
+    this.drafts.clear();
     this.dropComposers();
     this.error = null;
     this.render();

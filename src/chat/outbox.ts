@@ -251,7 +251,8 @@ export class ChatOutbox {
 /** How long to wait before an automatic retry: a `429` (its `Retry-After`) or a lock conflict `409`; else `null`. */
 export function waitFor(error: unknown, now: number): number | null {
   if (error instanceof RateLimited) return Math.max(error.until - now, 1000);
-  if (error instanceof ApiError && error.status === 429) return Math.max((error.retryAfter ?? 5) * 1000, 1000);
+  // Without `Retry-After` the sync pauses 60 s (sync.ts): wait as long, so no automatic attempt is spent (ZDG-I3).
+  if (error instanceof ApiError && error.status === 429) return Math.max((error.retryAfter ?? 60) * 1000, 1000);
   if (error instanceof ApiError && error.status === 409) return Math.max((error.retryAfter ?? 1) * 1000, 1000);
   return null;
 }
