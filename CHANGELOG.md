@@ -185,6 +185,26 @@ From the UX audit of 2026-11-27 (UXA-1, 2, 4, 24, 25, 30, 36, 37); the owner app
 - **Security**: the main window's capability adds `core:window:allow-start-dragging`, `allow-minimize`,
   `allow-toggle-maximize` and `allow-close` (main window only; see `SECURITY.md`).
 
+### UX batch 4: status strip, toasts with Undo (UX audit 2026-11-27, owner approval)
+
+- **One status strip** (UXA-7, design §5.2) in Chat, Tasks and Time for offline, a `429`, load errors and refused writes:
+  one line whose height is always kept (nothing below moves), one message at a time, the most severe first, announced
+  once, with *Retry* where it helps and a close button. A `429` is "Paused for a moment. Back in 0:25." counting down,
+  no longer Time's red "Too many requests" card or Tasks' "Slowing down" line; Time tries the action again when the
+  pause ends. Time's "Working offline" card is gone (the strip says it, with the actions waiting). It replaces the Chat
+  and Tasks banners.
+- **Undo** (UXA-8): completing a task, moving a card and discarding or cancelling a chat message not sent show a toast
+  with *Undo* for 7 s (`Ctrl/⌘+Z` outside a text field), in one "Notifications" region at the bottom of the window. An
+  undo goes through the task's write queue with the fresh revision, and a chat message comes back in line with its
+  key, never ahead of a newer one. An organization switch, a disconnect or sign-out drops the toasts; an undo from
+  before sends nothing.
+- Chat: a conversation that waits for a `429` pause says so in its pane after 1.5 s, *Retry* once the pause ends
+  (UXA-13); the jump button says "N new messages below" when those are the only unread ones (UXA-11); the "slowing
+  down" state clears at the next answer.
+- First run (UXA-23): the setup card's time step names you and the organization, not the server address; a later
+  sign-in's "You're in" is a line in Time's strip, not a card above the list.
+- Tray (UXA-22): *Check for updates…* reads "Install update X…" when one is waiting.
+
 BD-3b, second part (design `docs/design/BEACON_DESKTOP_TASKS.md` §9, `BEACON_DESKTOP.md` §7.3): the Tasks module, 0.13.0
 candidate. Needs TaskBoardBundle **3.4** (`client_api`, `/api/task-board/v1`) and Beacon's `tasks` scope family
 (`task-board:read task-board:write`); without them the module shows its "Connect tasks" card and a refused request

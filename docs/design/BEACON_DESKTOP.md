@@ -525,6 +525,38 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
 - **Tray** (UXA-41). *Quick add task…* (while tasks are connected) opens the window on Tasks with quick add focused.
   Empty submenus (Switch to, Today's meetings) are not shown.
 
+### 5.2 Status strip and Undo toasts (UX batch 4, owner approval 2026-11-27)
+
+- **One status strip per module** (UXA-7, `src/ui/statusStrip.ts`) for transient states: Chat under its header, Tasks
+  under its toolbar, Time at the top of its column. One line, 36 px, **its height kept whether it says something or
+  not**, so a message never pushes the list (layout shift ≈ 0). One message at a time, the most severe first:
+  `danger` (a load error, with *Retry*), `warn` (offline, messages waiting to send, a refused write or context), `info`
+  (a `429` pause, reconnecting, Time's "You're in"). A `429` is a calm countdown, "Paused for a moment. Back in 0:25.",
+  never an error card; it ends at `Retry-After`, or earlier at the next answer, and Time then tries the action again
+  once (not when something else was done meanwhile). Each message is announced once, politely, by its text; the
+  countdown is not re-announced. A close button hides it until the message changes. No mascot art for transient
+  states (Time's red `429` card and its "Working offline" card are gone; errors that need a decision keep their card).
+- **Chat, a conversation that cannot load yet** (UXA-13): its skeleton says "Taking a short pause. Loading again in
+  0:25." after 1.5 s, with *Retry* usable once the pause ends; it loads again by itself then too.
+- **One unread truth** (UXA-11): when the only unread messages are below in the open conversation (they count in the
+  rail badge), the sidebar's jump button says "2 new messages below" and `Ctrl+J` goes there.
+- **Undo toasts** (UXA-8, `src/ui/toastRegion.ts`): completing a task, moving a card (drag, `Alt+←/→`, the list's
+  status) and discarding or cancelling a chat message not sent offer *Undo* for 7 s. One region named
+  "Notifications" (`role="region"`, `popover="manual"` in the top layer where the webview has it), bottom centre,
+  at most three toasts; announced with "Undo with Ctrl+Z.", never focused; the timer pauses while the pointer or the
+  focus is in it. `Ctrl/⌘+Z` outside a text field (and no dialog open) undoes the newest; in the message box it does
+  so only while the box holds exactly the cancelled message put back there. Two moves of one card in a row are one
+  toast back to where it started. An undo goes through the same paths as the action: a task's per-task write queue
+  with the revision the move returned (BDA13-L4), a chat message back in line with its `Idempotency-Key` (a message
+  never overtakes a newer one: if one went out meanwhile, it comes back as not sent, with *Retry*). An organization
+  switch, a disconnect or sign-out drops the module's toasts, and an undo that still fires sends nothing (BDA13).
+  Reduced motion: no slide, no fade. *Disconnect…* keeps its confirm dialog (UX batch 6).
+- **First run** (UXA-23): the time step of the setup card names the person and the organization ("Signed in as
+  <name> · <organization>"), not the server address; a later sign-in says "You're in" in Time's status strip instead of a card
+  above the list.
+- **Tray** (UXA-22): with an update to install, *Check for updates…* reads "Install update 0.14.0…" and opens the
+  title bar's update panel.
+
 ## 6. Monitoring screenshots and the update feed: two different S3 paths
 
 They are unrelated and must not be confused:
