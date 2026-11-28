@@ -61,6 +61,43 @@ test.describe('first run', () => {
     });
   }
 
+  // 0.14.2: the Chat approval arrives while the person is in the browser; Rust refuses a connect started then.
+  test('the chained Tasks step waits for the window to come back', async ({ page }) => {
+    await signIn(page);
+    await expect(page.locator('#mod-setup')).toBeVisible({ timeout: 15_000 });
+    // The tasks offer probe has answered (the mock offers tasks).
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('beacon-desktop-tasks-offer') ?? '')).toContain('true');
+    await page.locator('#setup-connect').click();
+    await expect(page.locator('#setup-code')).toBeVisible();
+    await page.evaluate(() => {
+      (window as unknown as { __away: boolean }).__away = true;
+      document.hasFocus = () => !(window as unknown as { __away: boolean }).__away;
+    });
+    await control('device/approve', { userCode: await page.locator('#setup-code').textContent() });
+    await expect(page.locator('#setup-step-tasks')).toHaveAttribute('aria-current', 'step');
+    await page.waitForTimeout(500);
+    await expect(page.locator('#setup-code')).toHaveCount(0);
+    await expect(page.locator('#setup-step-tasks .cc-error')).toHaveCount(0);
+    await page.evaluate(() => {
+      (window as unknown as { __away: boolean }).__away = false;
+      window.dispatchEvent(new Event('focus'));
+    });
+    await expect(page.locator('#setup-step-tasks #setup-code')).toBeVisible();
+  });
+
+  test('nobody at the app: "come back and press Connect", and Connect works again', async ({ page }) => {
+    await signIn(page);
+    await expect(page.locator('#mod-setup')).toBeVisible({ timeout: 15_000 });
+    type Tt = { __timeTrack: { hooks: { connectAway: boolean } } };
+    await page.evaluate(() => void ((window as unknown as Tt).__timeTrack.hooks.connectAway = true));
+    await page.locator('#setup-connect').click();
+    await expect(page.locator('#setup-step-chat .cc-error')).toHaveText('Come back to Beacon Desktop and press Connect to continue.');
+    await expect(page.locator('#setup-connect')).toBeEnabled();
+    await page.evaluate(() => void ((window as unknown as Tt).__timeTrack.hooks.connectAway = false));
+    await page.locator('#setup-connect').click();
+    await expect(page.locator('#setup-code')).toBeVisible();
+  });
+
   test('skip, finish later, and the rail leaves the setup without a layout shift', async ({ page }) => {
     await signIn(page);
     await expect(page.locator('#mod-setup')).toBeVisible({ timeout: 15_000 });

@@ -374,6 +374,8 @@ export class Shell {
       this.tasks?.setShown(this.module === 'tasks' && !document.hidden);
     };
     globalThis.addEventListener?.('focus', visible);
+    // 0.14.2: the person is back from approving Chat in the browser: the chained Tasks step may start now.
+    globalThis.addEventListener?.('focus', () => this.startChain());
     document.addEventListener('visibilitychange', visible);
     this.applyDensity();
     void this.initChrome();
@@ -1826,13 +1828,35 @@ export class Shell {
     }
     const before = document.activeElement;
     const active = this.setup.active();
-    // 0.14.1 (owner approval 2026-11-28): the Chat approval just came through, so the Tasks code is asked for at once,
-    // no extra click (only where the server offers tasks: else the step is not there). Skip and "Later" still work.
-    const chained = this.setupActive === 'chat' && active === 'tasks' && this.chat.connected && this.tasks !== null && this.tasks.connect.kind === 'idle' && this.tasks.connect.message === null;
+    // 0.14.1 (owner approval 2026-11-28): the Chat approval just came through, so the Tasks code is asked for without an
+    // extra click. Skip and "Later" still work. 0.14.2: not at once, see `startChain`.
+    if (this.setupActive === 'chat' && active === 'tasks' && this.chat.connected) this.chainPending = true;
     this.setupActive = active;
     this.setup.render();
     if (before === null || before === document.body || !this.setup.root.contains(document.activeElement)) this.setup.focus();
-    if (chained) void this.tasks?.connectTasks();
+    this.startChain();
+  }
+
+  /** The Chat → Tasks chain is waiting to start (0.14.2): for the window's focus, or for the server's tasks answer. */
+  private chainPending = false;
+
+  /**
+   * Starts the chained Tasks step once it may (0.14.2). The Chat approval arrives while the person is still in the
+   * browser: Rust refuses a connect started while the window is not focused (`sign_in_not_present`, a security guard),
+   * so the chain waits for the window to come back (`focus`). It also waits for `discover()` to say the server offers
+   * tasks: unknown waits (its answer calls `followSetup` again), not offered drops the chain (the step goes). Anything
+   * else in between (Connect pressed, Skip, Later, an error shown) drops it too.
+   */
+  private startChain(): void {
+    if (!this.chainPending) return;
+    const tasks = this.tasks;
+    if (!this.setupShown || tasks === null || this.setup.active() !== 'tasks' || !this.chat.connected || tasks.connect.kind !== 'idle' || tasks.connect.message !== null || tasks.offer === 'no') {
+      this.chainPending = false;
+      return;
+    }
+    if (tasks.offer === 'unknown' || !(document.hasFocus?.() ?? true)) return;
+    this.chainPending = false;
+    void tasks.connectTasks();
   }
 
   /** The rail's place for "Finish setup" (the compact window, 0.14.1). */

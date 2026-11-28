@@ -29,10 +29,18 @@ export function isSignInWait(error: unknown): boolean {
 /** What `sign_in_begin` rejects with, without a dialog, when nobody is at the app (Rust `secret::SIGN_IN_NOT_PRESENT`). */
 export const SIGN_IN_NOT_PRESENT = 'sign_in_not_present';
 
+/**
+ * A connect (`chat_connect_begin` / `tasks_connect_begin`) or the sign-in was refused because nobody was at the app:
+ * the window was not focused, or there was no input in the last 30 s (Rust `secret::person_at_the_app`). 0.14.2.
+ */
+export function isSignInNotPresent(error: unknown): boolean {
+  return (error instanceof Error ? error.message : String(error)) === SIGN_IN_NOT_PRESENT;
+}
+
 /** The person declined the native sign-in confirmation, or the host did not show it (nobody at the app): back to the sign-in view, no error. */
 export function isSignInDeclined(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
-  return text === SIGN_IN_DECLINED || text === SIGN_IN_NOT_PRESENT;
+  return text === SIGN_IN_DECLINED || isSignInNotPresent(error);
 }
 
 /** What `beacon_fetch` receives. */
