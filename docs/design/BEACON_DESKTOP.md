@@ -7,7 +7,9 @@ repository name, secret or release changes with it.
 (CHANGELOG `[0.10.0]`). BD-3a (time context, mini timer, required fields, §7.1) shipped in 0.11.0
 (CHANGELOG `[0.11.0]`). BD-3b part 1 (chat send, thread replies, reactions, §7.2) shipped in 0.12.0
 (CHANGELOG `[0.12.0]`). BD-3b parts 2 and 3 (the Tasks module §7.3; notifications at level None, tray, links §7.4)
-shipped in 0.13.0 (CHANGELOG `[0.13.0]`; Tasks need Beacon 1.183 or later). Where the build differs from this text: the
+shipped in 0.13.0 (CHANGELOG `[0.13.0]`; Tasks need Beacon 1.183 or later). The UX audit batches (one title bar
+§5.1, global shortcuts and the status strip §5.2, one Settings, guided first run) shipped in 0.14.0 (CHANGELOG
+`[0.14.0]`). Where the build differs from this text: the
 modules follow the approved prototype (Chat `Ctrl/Cmd+1`, Tasks `Ctrl/Cmd+2`, Time `Ctrl/Cmd+3`); `GET me` is asked with the last context or
 `personal` (ChatKit needs a context on every request under a context policy) and falls back to `personal` on
 `403 context_forbidden`; the realtime hub must be on the signed-in origin (Beacon's default; another host is refused and
