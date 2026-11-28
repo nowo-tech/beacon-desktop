@@ -13,9 +13,15 @@
 //! **without payload**; it takes the link with `deep_link_take`, at start-up and on each ping, so a link opens exactly
 //! once whether or not the UI was listening. Sign-out forgets a link not taken yet ([`Pending::clear`]).
 //!
+//! Reloads (0.14.1): a link belongs to the page it was announced to. A link that came while a page of the main window
+//! was loaded, and that page never took it (it was not ready: signed out, in the middle of a sign-in), is dropped when
+//! the main window loads a page again ([`Pending::page_started`]), so a reload never opens a link from before it. A link
+//! that came before the first page (the app was started by it) waits for that page.
+//!
 //! Focus (BDA13-I1): links raise and focus the main window at most once per [`RAISE_EVERY`]; a burst of links (a page
 //! opening many) is coalesced, and the latest one is what the UI takes.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -99,24 +105,42 @@ pub fn raise_due(last: Option<Instant>, now: Instant) -> bool {
     last.is_none_or(|at| now.saturating_duration_since(at) >= RAISE_EVERY)
 }
 
-/// The link not taken yet by the UI (the latest wins), and when a link last raised the window.
+/// The link not taken yet by the UI (the latest wins) with the page it was announced to, and when a link last raised
+/// the window.
 #[derive(Default)]
 pub struct Pending {
-    link: Mutex<Option<DeepLink>>,
+    link: Mutex<Option<(DeepLink, u64)>>,
     raised: Mutex<Option<Instant>>,
+    /// Page loads of the main window so far (0: none yet).
+    page: AtomicU64,
 }
 
 impl Pending {
-    /// Keeps `link` (replacing an older one not taken yet).
+    /// Keeps `link` (replacing an older one not taken yet), for the page loaded now.
     pub fn put(&self, link: DeepLink) {
         if let Ok(mut slot) = self.link.lock() {
-            *slot = Some(link);
+            *slot = Some((link, self.page.load(Ordering::SeqCst)));
         }
     }
 
     /// The link, once.
     pub fn take(&self) -> Option<DeepLink> {
-        self.link.lock().ok().and_then(|mut slot| slot.take())
+        self.link
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
+            .map(|(link, _)| link)
+    }
+
+    /// The main window starts loading a page (the first one, or a reload): a link announced to an earlier page and not
+    /// taken by it is dropped; one that came before any page waits for this one.
+    pub fn page_started(&self) {
+        let now = self.page.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Ok(mut slot) = self.link.lock() {
+            if matches!(*slot, Some((_, at)) if at >= 1 && at < now) {
+                *slot = None;
+            }
+        }
     }
 
     /// Sign-out: a link not taken yet never opens after the next sign-in.
@@ -189,6 +213,29 @@ mod tests {
         assert_eq!(pending.take(), None);
         pending.put(link("t-3"));
         pending.clear();
+        assert_eq!(pending.take(), None);
+    }
+
+    #[test]
+    fn a_reload_never_opens_a_link_from_before_it() {
+        let pending = Pending::default();
+        // The app was started by a link: it waits for the first page, which takes it.
+        pending.put(link("t-1"));
+        pending.page_started();
+        assert_eq!(pending.take(), Some(link("t-1")));
+        // A link announced to that page, which was not ready (signed out) and never took it: a reload drops it.
+        pending.put(link("t-2"));
+        pending.page_started();
+        assert_eq!(pending.take(), None);
+        // A link that comes while the reloaded page loads is that page's: taken once, then nothing.
+        pending.put(link("t-3"));
+        assert_eq!(pending.take(), Some(link("t-3")));
+        pending.page_started();
+        assert_eq!(pending.take(), None);
+        // Reloads in a row with a link in between: only the page it was announced to may take it.
+        pending.put(link("t-4"));
+        pending.page_started();
+        pending.page_started();
         assert_eq!(pending.take(), None);
     }
 

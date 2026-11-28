@@ -40,6 +40,13 @@
 //! `<base path>/api/task-board/v1/` routes (never the time or chat token there, never the tasks token anywhere else),
 //! captured only from a 2xx `device/token` answer whose `scopeFamily` is `tasks` after `tasks_connect_begin`, pinned to
 //! the base path it was stored under, deleted by "Disconnect tasks" alone and first on sign-out.
+//!
+//! **Tasks logout retry (0.14.1, BDA13-L2).** Sign-out and "Disconnect tasks" call TaskBoard's `POST …/logout` (3.7.0)
+//! best effort from the UI, then always delete the token. When that call failed in a way worth one more try (network,
+//! `5xx`, `409 unavailable`), the UI parks the token first ([`Session::park_tasks_revoke`]): a fourth entry, user
+//! `tasks-revoke`, never attached to any request of the UI. At the next start `tasks_revoke_retry` takes it out
+//! (deleted **before** the request: one retry at most) and sends that one `POST <origin><base>/api/task-board/v1/logout`
+//! itself, to the origin that issued the token (and in release builds only to the official server).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -54,6 +61,8 @@ const KEYCHAIN_USER: &str = "session-token";
 const KEYCHAIN_CHAT_USER: &str = "chat-token";
 /// The tasks token's keychain user (same service): BD-3b, `BEACON_DESKTOP_TASKS.md` §3.4. Never changes.
 const KEYCHAIN_TASKS_USER: &str = "tasks-token";
+/// A tasks token whose server logout waits for one retry at the next start (0.14.1). Never attached by `beacon_fetch`.
+const KEYCHAIN_TASKS_REVOKE_USER: &str = "tasks-revoke";
 
 /// What the UI gets in place of the token (sign-in answers). Not a credential: Rust ignores it.
 pub const SESSION_HANDLE: &str = "stored-in-os-keychain";
@@ -155,6 +164,13 @@ impl Keychain {
     pub fn tasks() -> Self {
         Self {
             user: KEYCHAIN_TASKS_USER,
+        }
+    }
+
+    /// User `tasks-revoke`: a tasks token parked for one server logout retry (0.14.1).
+    pub fn tasks_revoke() -> Self {
+        Self {
+            user: KEYCHAIN_TASKS_REVOKE_USER,
         }
     }
 
@@ -600,6 +616,8 @@ pub struct Session {
     chat_store: Box<dyn TokenStore>,
     /// The tasks token's entry (`tasks-token`).
     tasks_store: Box<dyn TokenStore>,
+    /// A tasks token parked for one server logout retry (`tasks-revoke`, 0.14.1).
+    revoke_store: Box<dyn TokenStore>,
     io: Mutex<()>,
     state: Mutex<State>,
     sign_in_window: Duration,
@@ -713,6 +731,48 @@ fn default_tasks_store() -> Box<dyn TokenStore> {
     }
 }
 
+/// The parked tasks token's entry (memory only in tests).
+fn default_revoke_store() -> Box<dyn TokenStore> {
+    #[cfg(not(test))]
+    {
+        Box::new(Keychain::tasks_revoke())
+    }
+    #[cfg(test)]
+    {
+        Box::new(tests::MemoryStore::default())
+    }
+}
+
+/// Where a parked tasks token's one logout retry goes: `<origin><base>/api/task-board/v1/logout`, only for an entry
+/// with an origin that is a valid server (in release builds, `fixed`: the official one only). `None` otherwise.
+pub fn revoke_url(stored: &Stored, allow_loopback_http: bool, fixed: bool) -> Option<url::Url> {
+    let origin = stored.origin.as_deref()?;
+    let server = crate::net::validate_server_url_with(origin, allow_loopback_http, fixed).ok()?;
+    if server.origin().ascii_serialization() != origin {
+        return None;
+    }
+    let base = stored.base.as_deref().unwrap_or("").trim_end_matches('/');
+    if !(base.is_empty() || base.starts_with('/'))
+        || base.contains("..")
+        || base.contains('?')
+        || base.contains('#')
+    {
+        return None;
+    }
+    let url = url::Url::parse(&format!("{origin}{base}{TASKS_PREFIX}logout")).ok()?;
+    (url.origin() == server.origin()).then_some(url)
+}
+
+/// What the one retry of a parked tasks logout came to (`tasks_revoke_retry`).
+pub fn revoke_outcome(status: Option<u16>) -> &'static str {
+    match status {
+        None => "none",
+        Some(200..=299) => "revoked",
+        Some(404) => "gone",
+        Some(_) => "failed",
+    }
+}
+
 /// The two extra families (each its own keychain entry, connect window and route).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Extra {
@@ -749,6 +809,7 @@ impl Session {
             store,
             chat_store: default_chat_store(),
             tasks_store: default_tasks_store(),
+            revoke_store: default_revoke_store(),
             io: Mutex::new(()),
             state: Mutex::new(State::default()),
             sign_in_window,
@@ -769,6 +830,47 @@ impl Session {
     pub fn with_tasks_store(mut self, store: Box<dyn TokenStore>) -> Self {
         self.tasks_store = store;
         self
+    }
+
+    /// Parks tasks tokens for a logout retry in `store` (the app: [`Keychain::tasks_revoke`]).
+    pub fn with_revoke_store(mut self, store: Box<dyn TokenStore>) -> Self {
+        self.revoke_store = store;
+        self
+    }
+
+    /// Parks the stored tasks token for one server logout retry at the next start (0.14.1): the UI's `POST logout`
+    /// failed with a network error, `5xx` or `409`. Replaces an older parked one (at most one waits). Nothing stored,
+    /// or a token without an origin: nothing parked (`false`). The tasks token itself is deleted as usual afterwards.
+    pub fn park_tasks_revoke(&self) -> Result<bool, String> {
+        let _io = self.io()?;
+        self.load_extra_locked(Extra::Tasks)?;
+        let stored = slot(&mut *self.lock()?, Extra::Tasks).1.clone();
+        match stored {
+            Some(stored) if stored.origin.is_some() => {
+                self.revoke_store.write(&stored)?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Takes the parked tasks token out for its one retry: the entry is deleted **first** (a failed delete keeps it and
+    /// sends nothing), so it is never sent twice. Returns where to send it and the bearer; `None` when nothing waits or
+    /// the entry is not one this build may send ([`revoke_url`]).
+    pub fn take_tasks_revoke(&self) -> Result<Option<(url::Url, HeaderValue)>, String> {
+        let _io = self.io()?;
+        let Some(stored) = self.revoke_store.read()? else {
+            return Ok(None);
+        };
+        self.revoke_store.delete()?;
+        let Some(url) = revoke_url(
+            &stored,
+            crate::net::ALLOW_LOOPBACK_HTTP,
+            crate::net::FIXED_SERVER,
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some((url, bearer(&stored.token)?)))
     }
 
     /// Measures the pause with `clock` instead of the system clock (set it before [`Self::with_declines_file`]).
@@ -1469,6 +1571,43 @@ pub async fn tasks_disconnect(
     blocking(move || session.disconnect_extra(Extra::Tasks)).await
 }
 
+/// Parks the tasks token for one server logout retry at the next start (0.14.1, BDA13-L2): the UI's `POST logout` failed
+/// with a network error, `5xx` or `409`. Called before `tasks_disconnect` / `secret_delete`.
+#[tauri::command]
+pub async fn tasks_revoke_park(
+    window: tauri::Window,
+    session: tauri::State<'_, Arc<Session>>,
+) -> Result<bool, String> {
+    crate::only_from(&window, "main")?;
+    let session = Arc::clone(&session);
+    blocking(move || session.park_tasks_revoke()).await
+}
+
+/// The one retry of a parked tasks logout (at start-up): taken out of the keychain first, then `POST …/logout` with that
+/// token, from Rust (the token never reaches the webview). `none` (nothing parked), `revoked`, `gone` (a server before
+/// TaskBoard 3.7.0) or `failed`; never retried again.
+#[tauri::command]
+pub async fn tasks_revoke_retry(
+    window: tauri::Window,
+    session: tauri::State<'_, Arc<Session>>,
+) -> Result<String, String> {
+    crate::only_from(&window, "main")?;
+    let session = Arc::clone(&session);
+    let Some((url, value)) = blocking(move || session.take_tasks_revoke()).await? else {
+        return Ok(revoke_outcome(None).into());
+    };
+    let status = crate::net::client()
+        .post(url)
+        .header(reqwest::header::AUTHORIZATION, value)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map(|response| response.status().as_u16())
+        .unwrap_or(0);
+    Ok(revoke_outcome(Some(status)).into())
+}
+
 /// Whether a session token is stored (the UI then starts signed in). Never the token itself.
 #[tauri::command]
 pub async fn secret_status(
@@ -2038,6 +2177,102 @@ pub mod tests {
         );
         assert_eq!(chat.stored().unwrap().token, "chat-secret");
         assert_eq!(time.stored().unwrap().token, "time-secret");
+    }
+
+    #[test]
+    fn a_parked_tasks_token_is_sent_once_and_never_attached_to_a_request() {
+        let (time, chat, tasks, parked) = (
+            MemoryStore::with(A, "time-secret"),
+            MemoryStore::default(),
+            MemoryStore::with(A, "tasks-secret"),
+            MemoryStore::default(),
+        );
+        let session = Arc::new(
+            Session::with_timing(Box::new(time.clone()), SIGN_IN_WINDOW, Duration::ZERO)
+                .with_chat_store(Box::new(chat.clone()))
+                .with_tasks_store(Box::new(tasks.clone()))
+                .with_revoke_store(Box::new(parked.clone())),
+        );
+        session.bind(&url(A)).unwrap();
+        assert_eq!(Keychain::tasks_revoke().user, "tasks-revoke");
+        // Nothing parked: nothing to send.
+        assert_eq!(session.take_tasks_revoke().unwrap(), None);
+        // The UI's logout failed (network, 5xx, 409): the token is parked, then deleted as usual (sign-out).
+        assert!(session.park_tasks_revoke().unwrap());
+        session.sign_out().unwrap();
+        assert_eq!(tasks.stored(), None);
+        assert_eq!(parked.stored().unwrap().token, "tasks-secret");
+        // A parked token is never attached to anything the UI sends, not even the logout route.
+        session.bind(&url(A)).unwrap();
+        for route in [
+            "/api/task-board/v1/logout",
+            "/api/task-board/v1/me",
+            "/api/time-track/me",
+        ] {
+            assert_eq!(bearer_of(&session, &format!("{A}{route}")), None, "{route}");
+        }
+        // The one retry: deleted before it is sent, so a second start sends nothing.
+        let (target, value) = session.take_tasks_revoke().unwrap().unwrap();
+        assert_eq!(target.as_str(), format!("{A}/api/task-board/v1/logout"));
+        assert_eq!(value.to_str().unwrap(), "Bearer tasks-secret");
+        assert!(value.is_sensitive());
+        assert_eq!(parked.stored(), None);
+        assert_eq!(session.take_tasks_revoke().unwrap(), None);
+        // A keychain that refuses the delete keeps it and sends nothing.
+        parked.value.lock().unwrap().replace(Stored {
+            origin: Some(A.into()),
+            token: "tasks-secret".into(),
+            base: None,
+        });
+        parked.fail_delete.store(true, Ordering::SeqCst);
+        assert!(session.take_tasks_revoke().is_err());
+        // No tasks token stored: nothing parked.
+        assert!(!session.park_tasks_revoke().unwrap());
+    }
+
+    #[test]
+    fn a_parked_logout_goes_to_its_own_origin_and_base_only() {
+        let entry = |origin: Option<&str>, base: Option<&str>| Stored {
+            origin: origin.map(str::to_string),
+            token: "t".into(),
+            base: base.map(str::to_string),
+        };
+        assert_eq!(
+            revoke_url(&entry(Some("https://beacon.nowo.tech"), None), false, true)
+                .unwrap()
+                .as_str(),
+            "https://beacon.nowo.tech/api/task-board/v1/logout"
+        );
+        assert_eq!(
+            revoke_url(&entry(Some(A), Some("/beacon")), false, false)
+                .unwrap()
+                .as_str(),
+            format!("{A}/beacon/api/task-board/v1/logout")
+        );
+        // Release builds: the official server only; never http, a look-alike, an origin with a path, or no origin.
+        for (origin, base) in [
+            (Some(A), None),
+            (Some("http://beacon.nowo.tech"), None),
+            (Some("https://beacon.nowo.tech:8443"), None),
+            (Some("https://beacon.nowo.tech.example"), None),
+            (Some("https://beacon.nowo.tech/x"), None),
+            (None, None),
+            (Some("https://beacon.nowo.tech"), Some("x")),
+            (Some("https://beacon.nowo.tech"), Some("/../other")),
+            (Some("https://beacon.nowo.tech"), Some("/a?b")),
+        ] {
+            assert_eq!(
+                revoke_url(&entry(origin, base), false, true),
+                None,
+                "{origin:?} {base:?}"
+            );
+        }
+        assert_eq!(revoke_outcome(None), "none");
+        assert_eq!(revoke_outcome(Some(204)), "revoked");
+        assert_eq!(revoke_outcome(Some(404)), "gone");
+        for status in [0, 401, 409, 500] {
+            assert_eq!(revoke_outcome(Some(status)), "failed");
+        }
     }
 
     #[test]
