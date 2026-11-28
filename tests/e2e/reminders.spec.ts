@@ -80,7 +80,7 @@ for (const scheme of ['light', 'dark'] as const) {
   test(`Settings → Meeting reminders: on with a calendar, lead presets and custom, switches; accessible (${scheme})`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
     await signIn(page);
-    await page.locator('#open-settings').click();
+    await page.locator('#rail-settings').click();
     await page.locator('#settings-tab-meetings').click();
     const section = page.getByRole('region', { name: 'Meeting reminders' });
     await expect(section).toBeVisible();
@@ -104,7 +104,7 @@ for (const scheme of ['light', 'dark'] as const) {
     expect(await axe(page)).toEqual([]);
     await toggle.uncheck();
     await expect(page.locator('#meeting-reminders-options')).toHaveCount(0);
-    await page.locator('#back').click();
+    await page.locator('#settings-close').click();
     await expect(page.locator('#meetings-today')).toHaveCount(0);
   });
 }
@@ -146,7 +146,7 @@ test('an older server: no reminders, and Settings says why', async ({ page }) =>
   await control('config', { meetings: null, meetingsScope: false });
   await signIn(page);
   await expect(page.locator('#meetings-today')).toHaveCount(0);
-  await page.locator('#open-settings').click();
+  await page.locator('#rail-settings').click();
   await page.locator('#settings-tab-meetings').click();
   await expect(page.locator('#meeting-reminders-unavailable')).toContainText('TimeTrack 1.14');
   await expect(page.getByLabel('Remind me before my meetings')).toBeDisabled();

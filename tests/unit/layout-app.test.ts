@@ -189,9 +189,11 @@ describe('window layouts', () => {
 
   it('resizes the window to the remembered size of each view and remembers moves', async () => {
     const width = { value: 400 };
+    // A window last used in the compact view (a first run opens the full one, UXA-30: see ux-b6.test.ts).
+    localStorage.setItem(WINDOW_KEY, JSON.stringify({ mode: 'compact', bounds: {} }));
     const ui = await signedIn(width);
     const hooks = ui.platform.hooks.window;
-    // First launch: the compact preset, centred.
+    // The compact preset, centred.
     expect(hooks.set[0]).toEqual({ x: 760, y: 200, width: 400, height: 640 });
     ui.click('#layout-toggle');
     await tick(5);
@@ -206,8 +208,15 @@ describe('window layouts', () => {
     ui.platform.hooks.windowChanged();
     await tick(20);
     expect(JSON.parse(localStorage.getItem(WINDOW_KEY) ?? '{}').bounds.full).toEqual({ x: 100, y: 50, width: 1300, height: 800 });
-    // Ctrl+Shift+L back to compact: its first position again.
+    // Ctrl+Shift+L is the light / dark theme everywhere (UX batch 3): the window keeps its size.
+    const sets = hooks.set.length;
+    const theme = document.documentElement.getAttribute('data-theme');
     key(document.body, { key: 'L', ctrlKey: true, shiftKey: true });
+    await tick(5);
+    expect(hooks.set).toHaveLength(sets);
+    expect(document.documentElement.getAttribute('data-theme')).toBe(theme === 'dark' ? 'light' : 'dark');
+    // The view toggle back to compact: its first position again.
+    ui.click('#layout-toggle');
     await tick(5);
     expect(hooks.set.at(-1)).toEqual({ x: 760, y: 200, width: 400, height: 640 });
     width.value = 400;
@@ -227,7 +236,8 @@ describe('window layouts', () => {
     // "Clear local data" forgets the window too.
     await ui.app.clearLocalData();
     expect(localStorage.getItem(WINDOW_KEY)).toBeNull();
-    expect(ui.app.windowMemory).toEqual({ mode: 'compact', bounds: {} });
+    // Back to a first run's memory (UXA-30: the full view).
+    expect(ui.app.windowMemory).toEqual({ mode: 'full', bounds: {} });
   });
 
   it('opens in the view last used, and survives a window that cannot be read or moved', async () => {

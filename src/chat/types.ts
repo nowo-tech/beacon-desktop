@@ -53,6 +53,8 @@ export interface Conversation {
   subtitle: string;
   initials: string;
   channelKey: string | null;
+  /** The other person of a direct message (ChatKit `peerUuid`): the same avatar colour as their messages (UXA-12). */
+  peerUuid?: string | null;
   peerStatus: string | null;
   unread: number;
   archived: boolean;
@@ -254,6 +256,7 @@ export function parseConversation(raw: unknown): Conversation | null {
     subtitle: str(raw.subtitle),
     initials: initials(raw.initials, title),
     channelKey: strOrNull(raw.channelKey),
+    peerUuid: kind === 'direct' && isUuid(raw.peerUuid) ? raw.peerUuid.toLowerCase() : null,
     peerStatus: strOrNull(raw.peerStatus),
     unread: int(raw.unread),
     archived: bool(raw.archived),

@@ -9,8 +9,9 @@
  * switcher as rail tiles or a dropdown, and a timer never keeps running in another organization (Q4).
  */
 import type { DesktopApp } from '../ui/app';
-import { type Child, h } from '../ui/dom';
-import type { DeepLink, Platform } from '../platform';
+import { type Child, h, patch } from '../ui/dom';
+import { type ChromeMode, type DeepLink, hostOs, type Platform } from '../platform';
+import { windowControls } from './windowControls';
 import { ChatNotifier, chatClickTarget, PAUSE_HOUR_MS, parseChatClick, tomorrowMorning } from '../chat/notifications';
 import type { Locale } from '../lib/i18n';
 import type { ThemePreference } from '../lib/theme';
@@ -26,6 +27,12 @@ import type { Allocation } from '../api/types';
 import { type AskOn, meContexts } from '../lib/allocation';
 import { AllocationDialog, type AllocationRequest } from './allocationDialog';
 import type { MiniAction, MiniView } from '../ui/miniWindow';
+import { shellText, type ShellText } from './i18n';
+import { type AnyTab, isTimeTab, SettingsDialog, type SettingsSource } from './settings';
+import { type SetupState, type SetupStep, SetupView } from './setup';
+import { mergeSwitch, scoreItems, type SwitchGroup, type SwitchItem } from './switcher';
+import { taskRef } from '../tasks/format';
+import { ToastRegion } from '../ui/toastRegion';
 
 export type ModuleId = 'chat' | 'tasks' | 'time';
 export type Density = 'comfortable' | 'compact';
@@ -42,15 +49,19 @@ export interface ShellPrefs {
   context: string | null;
   /** Column markers (owner decision 2026-11-25): TaskBoard's emojis or colour dots. */
   markers: Markers;
+  /** Guided first run (UX batch 6): `null` never run, `pending` on screen when the app quit, `done`. */
+  setup: SetupState;
+  /** Setup steps skipped. */
+  skipped: SetupStep[];
 }
 
 export const SHELL_KEY = 'beacon-desktop-shell';
-const DEFAULTS: ShellPrefs = { module: null, density: 'comfortable', switcher: 'tiles', timer: 'title', context: null, markers: 'emoji' };
+const DEFAULTS: ShellPrefs = { module: null, density: 'comfortable', switcher: 'tiles', timer: 'title', context: null, markers: 'emoji', setup: null, skipped: [] };
 
 export function loadShellPrefs(storage: Storage | undefined): ShellPrefs {
   try {
     const raw = JSON.parse(storage?.getItem(SHELL_KEY) ?? 'null') as Partial<ShellPrefs> | null;
-    if (raw === null || typeof raw !== 'object') return { ...DEFAULTS };
+    if (raw === null || typeof raw !== 'object') return { ...DEFAULTS, skipped: [] };
     return {
       module: raw.module === 'chat' || raw.module === 'time' || raw.module === 'tasks' ? raw.module : null,
       density: raw.density === 'compact' ? 'compact' : 'comfortable',
@@ -58,9 +69,11 @@ export function loadShellPrefs(storage: Storage | undefined): ShellPrefs {
       timer: raw.timer === 'title-sidebar' ? 'title-sidebar' : 'title',
       context: typeof raw.context === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(raw.context) ? raw.context : null,
       markers: raw.markers === 'dots' ? 'dots' : 'emoji',
+      setup: raw.setup === 'pending' || raw.setup === 'done' ? raw.setup : null,
+      skipped: Array.isArray(raw.skipped) ? (['chat', 'tasks'] as const).filter((step) => raw.skipped?.includes(step)) : [],
     };
   } catch {
-    return { ...DEFAULTS };
+    return { ...DEFAULTS, skipped: [] };
   }
 }
 
@@ -120,14 +133,27 @@ export class Shell {
   unreadCapped = false;
   private readonly t: ChatText;
   private readonly titlebar: HTMLElement;
+  /** The title bar's own content, rebuilt on every render (the window buttons stay, so they keep the focus). */
+  private readonly titleMain: HTMLElement;
+  /** Who draws the title bar (UX batch 7, UXA-45): until the host answers, the system (nothing changes). */
+  chrome: ChromeMode = 'native';
+  /** The update offer's panel, opened from the title bar's pill (UX batch 7, UXA-22). */
+  private readonly updatePop: HTMLElement;
   private readonly rail: HTMLElement;
   private readonly chatPanel: HTMLElement;
   private readonly timePanel: HTMLElement;
   private readonly tasksPanel: HTMLElement;
   private readonly tt: TasksText;
   private readonly live: HTMLElement;
+  /** The one toast region with *Undo* (UX batch 4, UXA-8). */
+  readonly toasts: ToastRegion;
   private readonly switcher: HTMLDialogElement;
   private readonly settings: HTMLDialogElement;
+  /** The one Settings (UX batch 6). */
+  private readonly settingsDialog: SettingsDialog;
+  /** The guided first run (UX batch 6). */
+  private readonly setup: SetupView;
+  private readonly st: ShellText;
   private readonly keys: HTMLDialogElement;
   private readonly confirm: HTMLDialogElement;
   /** Required time fields (Q5, BD-3a). */
@@ -139,7 +165,7 @@ export class Shell {
   private started = false;
   private lastBadge = -1;
   private switcherIndex = 0;
-  private switcherItems: Conversation[] = [];
+  private switcherItems: SwitchItem[] = [];
 
   constructor(
     private readonly mount: HTMLElement,
@@ -147,11 +173,21 @@ export class Shell {
     private readonly deps: ShellDeps,
   ) {
     this.t = chatText(deps.locale);
+    this.st = shellText(deps.locale);
     this.prefs = loadShellPrefs(deps.storage);
     this.notifier = new ChatNotifier(deps.storage, () => this.now());
     this.timeRoot = h('div', { class: 'time-root', id: 'app', attrs: { 'aria-busy': 'true' } });
-    this.titlebar = h('header', { class: 'titlebar', id: 'titlebar' });
+    this.titleMain = h('div', { class: 'tb-main' });
+    this.titlebar = h('header', { class: 'titlebar', id: 'titlebar' }, this.titleMain);
     this.rail = h('nav', { class: 'rail', id: 'rail', attrs: { 'aria-label': this.t('modules') } });
+    this.toasts = new ToastRegion({
+      label: this.st('toasts'),
+      undoLabel: this.st('toastUndo'),
+      dismissLabel: this.st('toastClose'),
+      undoHint: this.st('toastUndoHint', { shortcut: `${modKey()}+Z` }),
+      shortcut: `${modKey()}+Z`,
+      announce: (text) => this.announce(text),
+    });
     const host = platform.chat;
     if (host === undefined) throw new Error('This host has no chat support.');
     this.chat = new ChatModule({
@@ -195,6 +231,7 @@ export class Shell {
         if (current !== null) this.followTimeContext(current);
         void this.tasks?.switchContext();
         this.renderChrome();
+        this.refreshSwitcher();
       },
       onUnread: (total, capped) => {
         this.unread = total;
@@ -209,12 +246,15 @@ export class Shell {
       onConnection: (connected) => {
         if (!connected) this.notifier.reset();
         this.renderChrome();
+        this.followSetup();
         void this.app?.updateTray();
       },
       onList: (rows, open) => this.onChatList(rows, open),
       notifyCard: () => this.notifyCard(),
+      onConnectRender: () => this.followSetup(),
       sidebarTimer: () => this.sidebarTimer(),
       preferredContext: () => this.prefs.context,
+      toasts: this.toasts,
       storage: deps.storage,
     });
     this.tt = tasksText(deps.locale);
@@ -238,7 +278,11 @@ export class Shell {
             announce: (text) => this.announce(text),
             context: () => this.context,
             contextLabel: () => this.currentContext()?.context.label ?? this.t('moduleTasks'),
-            onConnection: () => this.renderRail(),
+            onConnection: () => {
+              this.renderRail();
+              this.followSetup();
+            },
+            onConnectRender: () => this.followSetup(),
             onForbidden: (hidden) => {
               this.tasksHidden = hidden;
               if (hidden && this.module === 'tasks') this.show('chat', false);
@@ -252,6 +296,7 @@ export class Shell {
             },
             runningTaskId: () => this.app?.state.activeTimer?.taskId ?? null,
             markers: () => this.prefs.markers,
+            toasts: this.toasts,
             storage: deps.storage,
           });
     this.tasksPanel = h('section', { class: 'module', id: 'mod-tasks', attrs: { role: 'tabpanel', 'aria-labelledby': 'tab-tasks', hidden: true } }, this.tasks?.root ?? null);
@@ -259,13 +304,40 @@ export class Shell {
     this.timePanel = h('section', { class: 'module', id: 'mod-time', attrs: { role: 'tabpanel', 'aria-labelledby': 'tab-time' } }, this.timeRoot);
     this.live = h('p', { class: 'sr-only', id: 'shell-live', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
     this.switcher = this.buildSwitcher();
-    this.settings = h('dialog', { class: 'sh-dialog', id: 'shell-settings', attrs: { 'aria-labelledby': 'shell-settings-title', closedby: 'any' } });
+    this.settingsDialog = new SettingsDialog(this.settingsSource(), deps.storage);
+    this.settings = this.settingsDialog.dialog;
+    this.setup = new SetupView({
+      t: this.st,
+      chat: this.chat,
+      tasks: this.tasks,
+      tasksHidden: () => this.tasksHidden,
+      skipped: () => this.prefs.skipped,
+      signedIn: () => ({ name: this.app?.state.session?.displayName ?? this.app?.state.session?.identifier ?? '', org: this.currentContext()?.context.label ?? null }),
+      skip: (step) => {
+        if (!this.prefs.skipped.includes(step)) this.prefs.skipped = [...this.prefs.skipped, step];
+        if (step === 'chat') this.chat.cancelConnect();
+        else this.tasks?.cancelConnect();
+        this.save();
+        this.followSetup();
+      },
+      copy: (text) => void this.copy(text),
+      openVerification: (url) => void this.app?.openVerification(url),
+      finish: () => this.finishSetup(true),
+      later: () => {
+        this.chat.cancelConnect();
+        this.tasks?.cancelConnect();
+        this.finishSetup(false);
+      },
+    });
     this.keys = h('dialog', { class: 'sh-dialog', id: 'shell-keys', attrs: { 'aria-labelledby': 'shell-keys-title', closedby: 'any' } });
     this.confirm = h('dialog', { class: 'sh-dialog', id: 'shell-confirm', attrs: { 'aria-labelledby': 'shell-confirm-title' } });
     this.allocation = new AllocationDialog(this.t, (text) => this.announce(text), () => this.now());
-    this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.tasksPanel, this.timePanel), this.live, this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog);
+    this.updatePop = this.buildUpdatePop();
+    this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.tasksPanel, this.timePanel, this.setup.root), this.live, this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog, this.updatePop, this.toasts.root);
     platform.miniWindow?.onAction((action) => void this.onMiniAction(action));
     platform.onTray((action) => void this.onTrayAction(action));
+    // BDA14-L3: the tray's *Quit* while messages wait to send (closing the window only hides it; *Quit* is the end).
+    host.onQuitRequest?.(() => void this.quitRequested());
     platform.onNotificationAction((id) => {
       const target = parseChatClick(id);
       if (target !== null) void this.openTarget({ kind: 'chat', ...target }, 'notification');
@@ -282,11 +354,146 @@ export class Shell {
     globalThis.addEventListener?.('focus', visible);
     document.addEventListener('visibilitychange', visible);
     this.applyDensity();
+    void this.initChrome();
+  }
+
+  // ---- window chrome and the update pill (UX batch 7) ---------------------------------------------------------------
+
+  /**
+   * Custom title bar (UXA-45): on Windows / Linux without a system frame the title bar is the drag region (double click
+   * maximises, the OS snaps it) and draws its own window buttons; on macOS the traffic lights overlay its left end.
+   */
+  private async initChrome(): Promise<void> {
+    const host = this.platform.chrome;
+    const mode = host === undefined ? 'native' : await host.mode().catch(() => 'native' as const);
+    this.chrome = mode;
+    document.documentElement.dataset.chrome = mode;
+    if (mode === 'native' || host === undefined) return;
+    // `deep`: the whole bar drags, except its buttons and links (Tauri's drag script skips clickable elements).
+    this.titlebar.setAttribute('data-tauri-drag-region', 'deep');
+    if (mode === 'custom') this.titlebar.append(windowControls(host, hostOs(), this.t).root);
+    this.renderTitlebar();
+  }
+
+  private buildUpdatePop(): HTMLElement {
+    const pop = h('div', { class: 'update-pop', id: 'update-pop', attrs: { role: 'dialog', 'aria-labelledby': 'update-title', popover: 'auto', hidden: !supportsPopover() } });
+    // The pill is the popover's invoker (`popovertarget`): the browser toggles it, light dismiss and Escape included.
+    pop.addEventListener('beforetoggle', (event) => {
+      if ((event as ToggleEvent).newState !== 'open') return;
+      const app = this.app;
+      if (app === null || !app.updateVisible() || this.root.dataset.bare === 'true') event.preventDefault();
+      else patch(pop, [app.updatePanel()]);
+    });
+    pop.addEventListener('toggle', (event) => {
+      if ((event as ToggleEvent).newState === 'closed') this.updatePopClosed();
+      else {
+        this.syncPill();
+        this.focusUpdateAction();
+      }
+    });
+    pop.addEventListener('keydown', (event) => {
+      // Without the Popover API (tests), Escape closes it like a popover would.
+      if (event.key === 'Escape' && !supportsPopover()) {
+        event.preventDefault();
+        this.closeUpdate();
+      }
+    });
+    return pop;
+  }
+
+  /** Whether the update panel is open. */
+  updateOpen(): boolean {
+    return supportsPopover() ? this.updatePop.matches(':popover-open') : !this.updatePop.hidden;
+  }
+
+  /** Opens the update panel (the pill, or a manual "Check for updates…" that found one) and focuses its first action. */
+  openUpdate(): void {
+    const app = this.app;
+    if (app === null || !app.updateVisible() || this.root.dataset.bare === 'true') return;
+    patch(this.updatePop, [app.updatePanel()]);
+    if (!this.updateOpen()) {
+      if (supportsPopover()) this.updatePop.showPopover();
+      else this.updatePop.hidden = false;
+    }
+    this.syncPill();
+    this.focusUpdateAction();
+  }
+
+  private focusUpdateAction(): void {
+    if (this.updatePop.contains(document.activeElement)) return;
+    this.updatePop.querySelector<HTMLElement>('#update-now, #update-after-stop, #update-anyway')?.focus();
+  }
+
+  closeUpdate(): void {
+    if (!this.updateOpen()) return;
+    if (supportsPopover()) this.updatePop.hidePopover();
+    else {
+      this.updatePop.hidden = true;
+      this.updatePopClosed();
+    }
+  }
+
+  private updatePopClosed(): void {
+    this.syncPill();
+    // Focus goes back to the pill (or to the search when the offer is gone).
+    const active = document.activeElement;
+    if (active === null || active === document.body || this.updatePop.contains(active)) {
+      (this.titlebar.querySelector<HTMLElement>('#tb-update') ?? this.titlebar.querySelector<HTMLElement>('#tb-search:not([hidden])'))?.focus();
+    }
+  }
+
+  /** After a Time render: the panel follows the update's stage, and closes when there is nothing left to show. */
+  private renderUpdate(): void {
+    const app = this.app;
+    if (app === null || !this.updateOpen()) return;
+    if (!app.updateVisible() || this.root.dataset.bare === 'true') {
+      this.closeUpdate();
+      return;
+    }
+    patch(this.updatePop, [app.updatePanel()]);
+  }
+
+  private syncPill(): void {
+    this.titlebar.querySelector('#tb-update')?.setAttribute('aria-expanded', this.updateOpen() ? 'true' : 'false');
+  }
+
+  /** The title bar's update pill (UXA-22): the offer, "after stop", then the download's progress. */
+  private updatePill(): HTMLElement | null {
+    const app = this.app;
+    if (app === null || app.update === null || !app.updateVisible()) return null;
+    const t = this.t;
+    const version = app.update.version;
+    const stage = app.updateStage;
+    const percent = app.updatePercent();
+    const [text, label] =
+      stage === 'downloading'
+        ? [percent === null ? t('updatePillDownloadingShort') : t('updatePillDownloading', { percent }), percent === null ? t('updatePillDownloadingShort') : t('updatePillDownloading', { percent })]
+        : stage === 'installing'
+          ? [t('updatePillInstalling'), t('updatePillInstalling')]
+          : stage === 'after-stop'
+            ? [t('updatePillAfterStop'), t('updatePillAfterStopLabel', { version })]
+            : [t('updatePill'), t('updatePillLabel', { version })];
+    const busy = stage === 'downloading' || stage === 'installing';
+    const pill = h(
+      'button',
+      {
+        class: 'tb-update',
+        id: 'tb-update',
+        attrs: { type: 'button', 'aria-haspopup': 'dialog', 'aria-controls': 'update-pop', 'aria-expanded': this.updateOpen() ? 'true' : 'false', 'aria-label': label, title: label, 'data-stage': stage },
+      },
+      busy ? h('span', { class: 'tu-ring', attrs: { 'aria-hidden': 'true' } }) : chatIcon('down', 'sm'),
+      h('span', { class: 'tu-text', attrs: { 'aria-hidden': 'true' } }, text),
+    );
+    if (supportsPopover()) pill.setAttribute('popovertarget', 'update-pop');
+    else pill.addEventListener('click', () => (this.updateOpen() ? this.closeUpdate() : this.openUpdate()));
+    return pill;
   }
 
   /** Attaches the Time module (its constructor needs `timeRoot`) and follows its renders. */
   attach(app: DesktopApp): void {
     this.app = app;
+    // UX batch 6 (UXA-1, UXA-2): the Time module drops its own header and Settings; the shell's are the only ones.
+    app.embed({ openSettings: (tab) => this.openSettings(tab as AnyTab | undefined), localKeys: [SHELL_KEY] });
     // Before the first time API request: the organization used last (Personal on a first launch).
     app.setContext(this.prefs.context);
   }
@@ -365,6 +572,8 @@ export class Shell {
     } else if (!signedIn && this.signedIn && app.state.session === null) {
       this.signedIn = false;
       this.started = false;
+      this.hideSetup();
+      this.settingsDialog.close();
       this.chat.signedOut();
       this.tasks?.signedOut();
       this.tasksHidden = false;
@@ -378,6 +587,8 @@ export class Shell {
       // preferences are stored at all ("Clear local data" before a sign-out leaves nothing behind).
       this.prefs.context = null;
       if (this.deps.storage?.getItem(SHELL_KEY) !== null && this.deps.storage?.getItem(SHELL_KEY) !== undefined) this.save();
+      // "Clear local data" removed them (UX batch 6): the next sign-in is a first run again.
+      else this.prefs = loadShellPrefs(undefined);
       void this.platform.chat?.setUnreadBadge(0).catch(() => undefined);
     }
     this.root.dataset.bare = signedIn ? 'false' : 'true';
@@ -385,8 +596,10 @@ export class Shell {
     if (signedIn) this.timeContexts();
     if (!signedIn && this.miniOpen) void this.closeMini();
     this.renderTitlebar();
+    this.renderUpdate();
     this.syncTicker();
     this.pushMini();
+    if (signedIn) this.renderSettings();
     // The running timer's task is marked in the Tasks views.
     const running = app.state.activeTimer?.taskId ?? null;
     if (this.tasks?.connected === true && running !== this.lastRunning) this.tasks.render();
@@ -456,6 +669,12 @@ export class Shell {
   }
 
   /** The tray's chat items (AppDeps.trayChat): "Open chat", pause / resume chat notifications. */
+  /** The tray's tasks items (AppDeps.trayTasks, UXA-41): "Quick add task…" while tasks are connected. */
+  trayTasks(): { id: string; label: string }[] {
+    if (this.tasks === null || !this.tasks.connected || this.tasksHidden) return [];
+    return [{ id: 'quick-add-task', label: this.t('trayQuickAdd') }];
+  }
+
   trayChat(): { id: string; label: string }[] {
     if (!this.chat.connected) return [];
     const t = this.t;
@@ -472,6 +691,11 @@ export class Shell {
 
   private async onTrayAction(action: string): Promise<void> {
     if (action === 'open-chat') this.show('chat');
+    else if (action === 'quick-add-task' && this.tasks !== null && !this.tasksHidden) {
+      // The host showed the window: Tasks, quick add focused (the connect card when tasks are not connected).
+      this.show('tasks');
+      this.tasks.focusQuickAdd();
+    }
     else if (action === 'pause-chat') this.pauseNotifications(this.now() + PAUSE_HOUR_MS);
     else if (action === 'resume-chat') this.pauseNotifications(null);
   }
@@ -539,11 +763,15 @@ export class Shell {
     const app = this.app;
     if (app === null || this.started) return;
     this.started = true;
-    // A fresh interactive sign-in stays on Time (where it happened); a launch follows the landing rule (Q1).
-    this.show(this.freshSignIn ? 'time' : landingModule(this.prefs, app.state.activeTimer !== null), false);
+    // Landing rule (owner Q1): Chat on the first launch, then the last module, Time while a timer runs. A first sign-in
+    // (or a setup the app quit in the middle of) opens the guided setup instead (UX batch 6, UXA-4), which ends on Chat.
+    const timer = app.state.activeTimer !== null;
+    const setup = (this.freshSignIn && this.prefs.setup === null) || (this.prefs.setup === 'pending' && !timer);
+    this.show(setup ? 'chat' : landingModule(this.prefs, timer), false);
     await this.chat.init(this.prefs.context);
     await this.tasks?.init();
     this.renderChrome();
+    if (setup && this.app?.state.session !== null) this.startSetup();
     // A `beacon-desktop://` link the app was started with.
     this.ready = true;
     const pending = this.pendingTarget;
@@ -553,10 +781,19 @@ export class Shell {
     else if (pending !== null) await this.openTarget(pending, 'notification');
   }
 
-  /** Set by main.ts when the session came from a sign-in in this run (not a launch with a stored session). */
+  /**
+   * Set by main.ts when the session came from a sign-in in this run (not a launch with a stored session): a first one
+   * opens the guided setup (UX batch 6).
+   */
   freshSignIn = false;
 
   show(module: ModuleId, remember = true): void {
+    if (this.setupShown) {
+      // Another module picked from the rail (or a link): the setup is left for later (Settings → Account).
+      this.hideSetup();
+      this.prefs.setup = 'done';
+      this.save();
+    }
     this.module = module;
     this.chatPanel.hidden = module !== 'chat';
     this.tasksPanel.hidden = module !== 'tasks';
@@ -627,6 +864,15 @@ export class Shell {
     const current = this.currentContext();
     const brand = h('div', { class: 'brand' }, h('span', { class: 'brand-mark', attrs: { 'aria-hidden': 'true' } }, chatIcon('beacon')), h('span', {}, t('appName')));
     const left = h('div', { class: 'tb-left' }, brand);
+    // Signed out with our own chrome (UX batch 7): a bare bar, the brand and the window buttons only (drag, close).
+    if (this.root?.dataset.bare === 'true') {
+      this.titleMain.replaceChildren(left);
+      document.title = t('appName');
+      return;
+    }
+    // The bar is rebuilt on every render: the focused tool keeps the focus.
+    const active = document.activeElement;
+    const focused = active instanceof HTMLElement && this.titleMain.contains(active) && active.id !== '' ? active.id : null;
     if (current !== null) {
       const badge = contextBadge(current.context, current.index);
       if (this.prefs.switcher === 'dropdown' && this.contexts.length > 1) {
@@ -653,8 +899,7 @@ export class Shell {
     }
     const search = h('button', { class: 'tb-search', id: 'tb-search', attrs: { type: 'button', 'aria-haspopup': 'dialog', 'aria-keyshortcuts': 'Control+K Meta+K' } }, chatIcon('search', 'sm'), h('span', {}, t('searchJump')), h('kbd', {}, `${modKey()} K`));
     search.addEventListener('click', () => this.openSwitcher());
-    search.hidden = !this.chat.connected;
-    const right = h('div', { class: 'tb-right' }, this.timerPill());
+    const right = h('div', { class: 'tb-right' }, this.updatePill(), this.timerPill());
     const dark = document.documentElement.getAttribute('data-theme') === 'dark' || (document.documentElement.getAttribute('data-theme') === null && globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches === true);
     const theme = this.iconButton('tb-btn', dark ? 'sun' : 'moon', dark ? t('themeLight') : t('themeDark'), () => void this.setTheme(dark ? 'light' : 'dark'), 'tb-theme');
     const help = this.iconButton('tb-btn', 'keyboard', t('shortcuts'), () => this.openKeys(), 'tb-help');
@@ -665,7 +910,8 @@ export class Shell {
       right.append(mini);
     }
     right.append(theme, help);
-    this.titlebar.replaceChildren(left, h('div', { class: 'tb-mid' }, search), right);
+    this.titleMain.replaceChildren(left, h('div', { class: 'tb-mid' }, search), right);
+    if (focused !== null) this.titleMain.querySelector<HTMLElement>(`[id="${focused}"]`)?.focus();
     document.title = current !== null ? `${current.context.label} · ${t('appName')}` : t('appName');
   }
 
@@ -757,13 +1003,13 @@ export class Shell {
     };
     const specs = this.moduleOrder().map((id) => all[id]);
     specs.forEach(([id, icon, label, aria], index) => {
-      const selected = this.module === id;
+      const selected = !this.setupShown && this.module === id;
       const tab = h(
         'button',
         {
           class: 'rail-tab',
           id: `tab-${id}`,
-          attrs: { type: 'button', role: 'tab', 'aria-selected': selected ? 'true' : 'false', 'aria-controls': `mod-${id}`, tabindex: selected ? '0' : '-1', title: `${label} (${modKey()}+${index + 1})`, 'aria-keyshortcuts': `Control+${index + 1}` },
+          attrs: { type: 'button', role: 'tab', 'aria-selected': selected ? 'true' : 'false', 'aria-controls': `mod-${id}`, tabindex: selected || (this.setupShown && index === 0) ? '0' : '-1', title: `${label} (${modKey()}+${index + 1})`, 'aria-keyshortcuts': `Control+${index + 1}` },
         },
         h('span', { class: 'rt-ico' }, chatIcon(icon)),
         h('span', { class: 'rt-label' }, label),
@@ -807,6 +1053,8 @@ export class Shell {
         return;
       }
     }
+    // BDA14-L3: the chat's offline queue does not follow to another organization; ask before it goes.
+    if (!(await this.askUnsent('unsentSwitch'))) return;
     const timer = app?.state.activeTimer ?? null;
     if (app !== null && timer !== null) {
       const target = this.contexts.find((item) => item.key === key)?.label ?? key;
@@ -848,6 +1096,32 @@ export class Shell {
     }
     if (this.context === key) this.announce(this.t('contextSwitched', { name: label }));
     this.renderChrome();
+    this.refreshSwitcher();
+  }
+
+  /**
+   * BDA14-L1: an open quick switcher follows an organization switch (a link or a notification can switch while it is
+   * open): its results are built again for the new organization, the typed text kept.
+   */
+  private refreshSwitcher(): void {
+    if (this.switcher.open) this.renderSwitcher();
+  }
+
+  /**
+   * BDA14-L3: before something drops the chat's offline queue (an organization switch, sign-out, *Quit*), ask: Cancel is
+   * the default. Nothing waiting: `true` at once.
+   */
+  private async askUnsent(action: 'unsentSwitch' | 'unsentSignOut' | 'unsentQuit'): Promise<boolean> {
+    const count = this.chat.unsentCount();
+    if (count === 0) return true;
+    const st = this.st;
+    return this.askDestructive(st('unsentTitle', { count }), st('unsentText', { count }), st(action, { count }));
+  }
+
+  /** The tray's *Quit* with messages waiting (BDA14-L3): asked in the main window, which Rust has shown. */
+  private async quitRequested(): Promise<void> {
+    if (!(await this.askUnsent('unsentQuit'))) return;
+    await this.platform.chat?.quit?.();
   }
 
   /** A link wants another organization (BDA13-I1): the same confirm dialog as the timer's switch question. */
@@ -898,7 +1172,7 @@ export class Shell {
   private buildSwitcher(): HTMLDialogElement {
     const t = this.t;
     const input = h('input', { id: 'sw-input', attrs: { type: 'text', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'sw-list', 'aria-autocomplete': 'list', autocomplete: 'off', spellcheck: 'false', 'aria-label': t('switcherLabel') } });
-    const list = h('div', { class: 'sw-list', id: 'sw-list', attrs: { role: 'listbox', 'aria-label': t('conversations') } });
+    const list = h('div', { class: 'sw-list', id: 'sw-list', attrs: { role: 'listbox', 'aria-label': this.st('switcherResults') } });
     const dialog = h(
       'dialog',
       { class: 'sh-dialog', id: 'switcher', attrs: { 'aria-label': t('switcherLabel'), closedby: 'any' } },
@@ -931,17 +1205,113 @@ export class Shell {
     return dialog;
   }
 
+  /** The global quick switcher (UX batch 3, UXA-3): conversations, boards and tasks, Time's timer actions and views. */
   openSwitcher(): void {
-    if (!this.chat.connected) return;
+    if (this.root.dataset.bare === 'true') return;
     for (const dialog of [this.settings, this.keys]) if (dialog.open) dialog.close();
     const input = this.switcher.querySelector<HTMLInputElement>('#sw-input');
     if (input === null) return;
     input.value = '';
-    input.placeholder = this.t('switcherPlaceholder');
+    input.placeholder = this.st('switcherPlaceholderAll');
     this.switcherIndex = 0;
     this.renderSwitcher();
     if (!this.switcher.open) this.switcher.showModal();
     input.focus();
+  }
+
+  /** Every module's candidates for `query` (only what is connected and shown). */
+  private switchGroups(query: string): SwitchGroup[] {
+    const t = this.t;
+    const st = this.st;
+    const groups: SwitchGroup[] = [];
+    if (this.chat.connected) {
+      const now = this.now();
+      const items = rankConversations(this.chat.allConversations(), this.chat.recent, query).map((row): SwitchItem => {
+        const section = sectionOf(row);
+        const kind = row.kind === 'direct' ? t('kindDirect') : section === 'projects' ? t('kindProject') : row.kind === 'support' ? t('kindSupport') : t('kindChannel');
+        return {
+          key: `c-${row.uuid}`,
+          module: 'chat',
+          label: row.title,
+          meta: row.unread > 0 ? t('switcherUnread', { count: row.unread }) : this.chat.recent.includes(row.uuid) ? t('switcherRecent') : kind,
+          extra: kind,
+          icon: row.kind === 'direct' ? 'users' : row.kind === 'support' ? 'headset' : section === 'projects' ? 'folder' : 'hash',
+          unread: row.unread,
+          strong: row.unread > 0 && !isMuted(row, now),
+          run: () => {
+            this.show('chat');
+            void this.chat.open(row.uuid);
+          },
+        };
+      });
+      groups.push({ module: 'chat', items: scoreItems(query, items) });
+    }
+    const tasks = this.tasks;
+    if (tasks !== null && tasks.connected && !this.tasksHidden) {
+      const { boards, tasks: cards } = tasks.switchTargets();
+      const boardItems = boards.map((board): SwitchItem => ({
+        key: `b-${board.id}`,
+        module: 'tasks',
+        label: board.title,
+        meta: st('switchBoard'),
+        extra: board.group?.label,
+        icon: 'folder',
+        run: () => {
+          this.show('tasks');
+          tasks.jumpToBoard(board.id);
+        },
+      }));
+      const taskItems = cards.map((card): SwitchItem => {
+        const board = boards.find((item) => item.id === card.boardId)?.title;
+        return {
+          key: `t-${card.id}`,
+          module: 'tasks',
+          label: card.title,
+          meta: board !== undefined ? `${taskRef(card)} · ${board}` : taskRef(card),
+          extra: `${taskRef(card)} ${board ?? ''}`,
+          icon: 'tasks',
+          run: () => {
+            this.show('tasks');
+            void tasks.openTask(card.id);
+          },
+        };
+      });
+      // No query: a few boards, then the tasks (My tasks first), then the other boards.
+      groups.push({ module: 'tasks', items: scoreItems(query, [...boardItems.slice(0, 3), ...taskItems, ...boardItems.slice(3)]) });
+    }
+    const app = this.app;
+    if (app !== null && app.state.session !== null) {
+      const timer = app.state.activeTimer;
+      const items: SwitchItem[] = [];
+      if (timer !== null) {
+        items.push({ key: 'time-stop', module: 'time', label: st('switchStopLabel'), meta: timer.taskTitle, extra: `${timer.taskTitle} ${st('switchStop')}`, icon: 'stop', run: () => void app.stop() });
+      }
+      const seen = new Set<string>(timer !== null ? [timer.taskId] : []);
+      const verb = timer !== null ? st('switchSwitch') : st('switchStart');
+      // BDA14-L1: only tasks of the current organization (the list may still hold the previous one's until it reloads).
+      for (const task of [...app.quickTasks(), ...(query.trim() === '' ? [] : app.tasks)]) {
+        if (seen.has(task.id) || !app.inCurrentContext(task.id)) continue;
+        seen.add(task.id);
+        items.push({ key: `s-${task.id}`, module: 'time', label: task.title, meta: verb, extra: `${verb} ${task.boardTitle ?? task.projectTitle ?? ''}`, icon: 'play', run: () => void app.start(task) });
+      }
+      if (app.fullLayout()) {
+        const view = (key: 'quick' | 'time', label: string): SwitchItem => ({
+          key: `v-${key}`,
+          module: 'time',
+          label,
+          meta: st('switchTimeView'),
+          extra: st('switchTimeView'),
+          icon: 'clock',
+          run: () => {
+            this.show('time');
+            app.showSection(key);
+          },
+        });
+        items.push(view('time', app.t('myTime')), view('quick', app.t('pinnedRecent')));
+      }
+      groups.push({ module: 'time', items: scoreItems(query, items) });
+    }
+    return groups;
   }
 
   private renderSwitcher(): void {
@@ -949,26 +1319,22 @@ export class Shell {
     const input = this.switcher.querySelector<HTMLInputElement>('#sw-input');
     const list = this.switcher.querySelector<HTMLElement>('#sw-list');
     if (input === null || list === null) return;
-    this.switcherItems = rankConversations(this.chat.allConversations(), this.chat.recent, input.value).slice(0, 14);
+    this.switcherItems = mergeSwitch(this.switchGroups(input.value), this.module, input.value);
     this.switcherIndex = Math.min(this.switcherIndex, Math.max(0, this.switcherItems.length - 1));
     if (this.switcherItems.length === 0) {
       list.replaceChildren(h('div', { class: 'sw-empty' }, t('switcherEmpty')));
       input.removeAttribute('aria-activedescendant');
       return;
     }
-    const now = this.now();
     list.replaceChildren(
-      ...this.switcherItems.map((row, index) => {
-        const section = sectionOf(row);
-        const icon: ChatIconName = row.kind === 'direct' ? 'users' : row.kind === 'support' ? 'headset' : section === 'projects' ? 'folder' : 'hash';
-        const meta = row.unread > 0 ? t('switcherUnread', { count: row.unread }) : this.chat.recent.includes(row.uuid) ? t('switcherRecent') : row.kind === 'direct' ? t('kindDirect') : section === 'projects' ? t('kindProject') : row.kind === 'support' ? t('kindSupport') : t('kindChannel');
+      ...this.switcherItems.map((item, index) => {
         const option = h(
           'div',
-          { class: `opt${row.unread > 0 && !isMuted(row, now) ? ' unread' : ''}`, id: `sw-${index}`, attrs: { role: 'option', 'aria-selected': index === this.switcherIndex ? 'true' : 'false' } },
-          h('span', { class: 'o-ico' }, chatIcon(icon, 'sm')),
-          h('span', { class: 'o-t' }, row.title),
-          row.unread > 0 ? h('span', { class: 'badge', attrs: { 'aria-hidden': 'true' } }, String(row.unread)) : null,
-          h('span', { class: 'o-m' }, meta),
+          { class: `opt${item.strong === true ? ' unread' : ''}`, id: `sw-${index}`, attrs: { role: 'option', 'aria-selected': index === this.switcherIndex ? 'true' : 'false', 'data-switch': item.key, 'data-module': item.module } },
+          h('span', { class: 'o-ico' }, chatIcon(item.icon, 'sm')),
+          h('span', { class: 'o-t' }, item.label),
+          item.unread !== undefined && item.unread > 0 ? h('span', { class: 'badge', attrs: { 'aria-hidden': 'true' } }, String(item.unread)) : null,
+          h('span', { class: 'o-m' }, item.meta),
         );
         option.addEventListener('click', () => {
           this.switcherIndex = index;
@@ -993,11 +1359,10 @@ export class Shell {
   }
 
   private runSwitcher(): void {
-    const row = this.switcherItems[this.switcherIndex];
-    if (row === undefined) return;
+    const item = this.switcherItems[this.switcherIndex];
+    if (item === undefined) return;
     this.switcher.close();
-    this.show('chat');
-    void this.chat.open(row.uuid);
+    item.run();
   }
 
   // ---- settings and the shortcut sheet ------------------------------------------------------------------------------
@@ -1008,10 +1373,11 @@ export class Shell {
     if (this.settings.open) this.renderSettings();
   }
 
-  openSettings(): void {
-    this.renderSettings();
-    if (!this.settings.open) this.settings.showModal();
-    this.settings.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+  /** The one Settings (UXA-2): the rail's gear, Ctrl/⌘+, in every module, the tray, the Time module's own links. */
+  openSettings(tab?: AnyTab): void {
+    for (const dialog of [this.switcher, this.keys]) if (dialog.open) dialog.close();
+    this.app?.prepareSettings();
+    this.settingsDialog.show(tab);
   }
 
   private segmented<T extends string>(label: string, options: [T, string][], value: T, onPick: (value: T) => void): HTMLElement {
@@ -1032,31 +1398,79 @@ export class Shell {
     return group;
   }
 
-  private settingRow(title: string, hint: string | null, control: HTMLElement): HTMLElement {
+  private settingRow(title: string, hint: string | null, control: HTMLElement | null): HTMLElement {
     return h('div', { class: 'set-row' }, h('div', { class: 's-l' }, h('div', { class: 's-t' }, title), hint !== null ? h('div', { class: 's-d' }, hint) : null), control);
   }
 
   private renderSettings(): void {
-    const t = this.t;
-    const theme = (this.app?.state.settings.theme ?? 'system') as ThemePreference;
-    const update = (patch: Partial<ShellPrefs>) => {
-      this.prefs = { ...this.prefs, ...patch };
-      this.save();
-      this.renderChrome();
-      this.renderSettings();
+    this.settingsDialog.render();
+  }
+
+  /** What the one Settings shows in each tab (the Time module's panels, then the shell's rows). */
+  private settingsSource(): SettingsSource {
+    return {
+      hasTasks: () => this.tasks !== null,
+      label: (tab) => {
+        if (isTimeTab(tab)) return this.app?.settingsTabLabel(tab) ?? tab;
+        return this.st(tab === 'appearance' ? 'tabAppearance' : tab === 'chat' ? 'tabChat' : tab === 'tasks' ? 'tabTasks' : 'tabAccount');
+      },
+      content: (tab) => this.settingsContent(tab),
+      title: () => this.st('settingsTitle'),
+      sectionsLabel: () => this.st('settingsSections'),
+      closeLabel: () => this.t('close'),
     };
-    const close = this.iconButton('x-btn', 'x', t('close'), () => this.settings.close(), 'settings-close');
-    const look = h(
+  }
+
+  private updatePrefs(patch: Partial<ShellPrefs>): void {
+    this.prefs = { ...this.prefs, ...patch };
+    this.save();
+    this.renderChrome();
+    this.renderSettings();
+  }
+
+  private settingsContent(tab: AnyTab): Child[] {
+    const app = this.app;
+    if (tab === 'appearance') return [this.appearanceSettings()];
+    if (tab === 'chat') return [this.chatSettings()];
+    if (tab === 'tasks') return [this.tasksSettings()];
+    if (tab === 'account') return [this.accountSettings()];
+    if (app === null || app.state.session === null) return [];
+    if (tab === 'timer') return [this.timeSettings(), ...app.settingsContent(tab)];
+    return app.settingsContent(tab);
+  }
+
+  private appearanceSettings(): HTMLElement {
+    const t = this.t;
+    const mini = this.miniSetting();
+    return h(
       'div',
-      { class: 'set-group' },
-      h('h3', {}, t('settingsAppearance')),
-      this.settingRow(t('theme'), null, this.segmented(t('theme'), [['system', t('themeSystem')], ['light', t('themeLightOption')], ['dark', t('themeDarkOption')]], theme, (value) => void this.setTheme(value))),
-      this.settingRow(t('density'), t('densityHint'), this.segmented(t('density'), [['comfortable', t('densityComfortable')], ['compact', t('densityCompact')]], this.prefs.density, (density) => update({ density }))),
-      this.settingRow(t('switcherStyle'), t('switcherStyleHint'), this.segmented(t('switcherStyle'), [['tiles', t('switcherTiles')], ['dropdown', t('switcherDropdown')]], this.prefs.switcher, (switcher) => update({ switcher }))),
-      this.settingRow(t('timerPlacement'), t('timerPlacementHint'), this.segmented(t('timerPlacement'), [['title', t('timerTitle')], ['title-sidebar', t('timerTitleSidebar')]], this.prefs.timer, (timer) => update({ timer }))),
+      { class: 'set-stack' },
+      this.app?.themeSetting() ?? null,
+      h(
+        'div',
+        { class: 'set-group' },
+        this.settingRow(t('density'), t('densityHint'), this.segmented(t('density'), [['comfortable', t('densityComfortable')], ['compact', t('densityCompact')]], this.prefs.density, (density) => this.updatePrefs({ density }))),
+        this.settingRow(t('switcherStyle'), t('switcherStyleHint'), this.segmented(t('switcherStyle'), [['tiles', t('switcherTiles')], ['dropdown', t('switcherDropdown')]], this.prefs.switcher, (switcher) => this.updatePrefs({ switcher }))),
+        this.settingRow(t('timerPlacement'), t('timerPlacementHint'), this.segmented(t('timerPlacement'), [['title', t('timerTitle')], ['title-sidebar', t('timerTitleSidebar')]], this.prefs.timer, (timer) => this.updatePrefs({ timer }))),
+        mini,
+      ),
     );
+  }
+
+  /** The mini timer window (Q2, BD-3a), next to the timer placement it goes with. */
+  private miniSetting(): HTMLElement | null {
+    if (this.platform.miniWindow === null) return null;
+    const t = this.t;
+    const mini = h('button', { class: 'btn sm', id: 'settings-mini', attrs: { type: 'button', 'aria-pressed': this.miniOpen ? 'true' : 'false' } }, chatIcon('pip', 'sm'), this.miniOpen ? t('miniClose') : t('miniOpen'));
+    mini.addEventListener('click', () => void this.toggleMini().then(() => this.renderSettings()));
+    return this.settingRow(t('miniTimer'), t('miniTimerHint'), mini);
+  }
+
+  /** Time tracking rows of the shell (BD-3a: required fields), at the top of the Timer tab. */
+  private timeSettings(): HTMLElement {
+    const t = this.t;
     const settings = this.app?.state.settings;
-    const time = h('div', { class: 'set-group' }, h('h3', {}, t('settingsTime')));
+    const time = h('div', { class: 'set-group', id: 'settings-time-tracking' }, h('h3', {}, t('settingsTime')));
     if (settings !== undefined) {
       time.append(
         this.settingRow(t('askOn'), t('askOnHint'), this.segmented<AskOn>(t('askOn'), [['stop', t('askOnStop')], ['start', t('askOnStart')], ['both', t('askOnBoth')]], settings.askOn, (askOn) => {
@@ -1069,18 +1483,22 @@ export class Shell {
         })),
       );
     }
-    if (this.platform.miniWindow !== null) {
-      const mini = h('button', { class: 'btn sm', id: 'settings-mini', attrs: { type: 'button', 'aria-pressed': this.miniOpen ? 'true' : 'false' } }, chatIcon('pip', 'sm'), this.miniOpen ? t('miniClose') : t('miniOpen'));
-      mini.addEventListener('click', () => void this.toggleMini().then(() => this.renderSettings()));
-      time.append(this.settingRow(t('miniTimer'), t('miniTimerHint'), mini));
-    }
+    return time;
+  }
+
+  private chatSettings(): HTMLElement {
+    const t = this.t;
+    const st = this.st;
     const connection = h('div', { class: 'set-group' }, h('h3', {}, t('settingsChat')));
     if (this.chat.connected) {
-      const disconnect = h('button', { class: 'btn sm danger', id: 'chat-disconnect', attrs: { type: 'button' } }, t('disconnect'));
-      disconnect.addEventListener('click', () => {
-        void this.chat.disconnect().then(() => this.renderSettings());
-      });
-      connection.append(this.settingRow(t('chatConnection'), `${t('chatConnected')}. ${t('disconnectHint')}`, disconnect));
+      const manage = h('button', { class: 'btn sm', id: 'settings-chat-manage', attrs: { type: 'button' } }, st('manage'));
+      manage.addEventListener('click', () => this.openSettings('account'));
+      // UXA-14: the connection detail the sidebar no longer shows while healthy ("Checking for new messages every 30 s").
+      const status = this.chat.connectionStatus();
+      const row = this.settingRow(t('chatConnection'), status.text, manage);
+      row.id = 'settings-chat-status';
+      row.querySelector('.s-t')?.append(' ', h('span', { class: `conn-state${status.tone === 'ok' ? ' on' : ''}`, attrs: { title: status.text } }, h('span', { class: `conn-dot ${status.tone}`, attrs: { 'aria-hidden': 'true' } }), st(status.tone === 'ok' ? 'connOn' : 'connTrouble')));
+      connection.append(row);
       // Notifications (BD-3b): opt-in, level None, pause.
       const prefs = this.notifier.prefs;
       connection.append(
@@ -1104,51 +1522,226 @@ export class Shell {
           tomorrow.addEventListener('click', () => this.pauseNotifications(tomorrowMorning(this.now())));
           pause.append(hour, tomorrow);
         }
-        connection.append(this.settingRow(t('notifyPause'), this.notifier.paused() ? t('notifyPausedUntil', { time: this.clockTime(prefs.pausedUntil as number) }) : t('notifyNotPaused'), pause));
+        connection.append(this.settingRow(t('notifyPause'), this.notifier.paused() ? t('notifyPausedUntil', { time: this.clockTime(this.notifier.prefs.pausedUntil as number) }) : t('notifyNotPaused'), pause));
       }
     } else {
-      const connect = h('button', { class: 'btn sm primary', id: 'settings-chat-connect', attrs: { type: 'button' } }, t('connectButton'));
-      connect.addEventListener('click', () => {
-        this.settings.close();
-        this.show('chat');
-        void this.chat.connectChat();
-      });
-      connection.append(this.settingRow(t('chatConnection'), t('chatNotConnected'), connect));
+      connection.append(this.settingRow(t('chatConnection'), t('chatNotConnected'), this.connectButton('chat', 'settings-chat-connect', t('connectButton'))));
     }
-    const tasks = this.tasks;
-    const tasksGroup = tasks === null ? null : h('div', { class: 'set-group' }, h('h3', {}, this.tt('settingsTasks')));
-    if (tasks !== null && tasksGroup !== null) {
-      const tt = this.tt;
-      if (tasks.connected) {
-        const disconnect = h('button', { class: 'btn sm danger', id: 'tasks-disconnect', attrs: { type: 'button' } }, tt('disconnect'));
-        disconnect.addEventListener('click', () => void tasks.disconnect().then(() => this.renderSettings()));
-        tasksGroup.append(this.settingRow(tt('tasksConnection'), `${tt('tasksConnected')}. ${tt('disconnectHint')}`, disconnect));
-      } else {
-        const connect = h('button', { class: 'btn sm primary', id: 'settings-tasks-connect', attrs: { type: 'button' } }, tt('connectButton'));
-        connect.addEventListener('click', () => {
-          this.settings.close();
-          this.show('tasks');
-          void tasks.connectTasks();
-        });
-        tasksGroup.append(this.settingRow(tt('tasksConnection'), tt('tasksNotConnected'), connect));
-      }
-      tasksGroup.append(this.settingRow(tt('markers'), tt('markersHint'), this.segmented<Markers>(tt('markers'), [['emoji', tt('markersEmoji')], ['dots', tt('markersDots')]], this.prefs.markers, (markers) => update({ markers }))));
-    }
-    this.settings.replaceChildren(h('div', { class: 'dlg settings' }, h('div', { class: 'dlg-h' }, h('h1', { id: 'shell-settings-title' }, t('shellSettings')), close), h('div', { class: 'dlg-b' }, look, time, connection, tasksGroup)));
+    return connection;
   }
 
+  private tasksSettings(): HTMLElement | null {
+    const tasks = this.tasks;
+    if (tasks === null) return null;
+    const tt = this.tt;
+    const group = h('div', { class: 'set-group' }, h('h3', {}, tt('settingsTasks')));
+    if (tasks.connected) {
+      const manage = h('button', { class: 'btn sm', id: 'settings-tasks-manage', attrs: { type: 'button' } }, this.st('manage'));
+      manage.addEventListener('click', () => this.openSettings('account'));
+      group.append(this.settingRow(tt('tasksConnection'), this.tasksHidden ? this.st('connTasksHidden') : this.st('connOn'), manage));
+    } else {
+      group.append(this.settingRow(tt('tasksConnection'), tt('tasksNotConnected'), this.connectButton('tasks', 'settings-tasks-connect', tt('connectButton'))));
+    }
+    group.append(this.settingRow(tt('markers'), tt('markersHint'), this.segmented<Markers>(tt('markers'), [['emoji', tt('markersEmoji')], ['dots', tt('markersDots')]], this.prefs.markers, (markers) => this.updatePrefs({ markers }))));
+    return group;
+  }
+
+  /** "Connect" from Settings: closes it and starts the module's device flow in its own module. */
+  private connectButton(module: 'chat' | 'tasks', id: string, label = this.st('connect')): HTMLButtonElement {
+    const button = h('button', { class: 'btn sm primary', id, attrs: { type: 'button' } }, label);
+    button.addEventListener('click', () => {
+      this.settingsDialog.close();
+      this.show(module);
+      if (module === 'chat') void this.chat.connectChat();
+      else void this.tasks?.connectTasks();
+    });
+    return button;
+  }
+
+  /** Account (UXA-2): who is signed in, the three connections (Disconnect asks first, UXA-8), Sign out. */
+  private accountSettings(): HTMLElement {
+    const st = this.st;
+    const session = this.app?.state.session ?? null;
+    const name = session?.displayName ?? session?.identifier ?? '';
+    const host = hostOf(session?.server ?? null);
+    const status = (on: boolean) => h('span', { class: `conn-state${on ? ' on' : ''}` }, h('span', { class: 'conn-dot', attrs: { 'aria-hidden': 'true' } }), on ? st('connOn') : st('connOff'));
+    const row = (id: string, title: string, hint: string, on: boolean, action: HTMLElement | null) =>
+      h('div', { class: 'set-row conn-row', id }, h('div', { class: 's-l' }, h('div', { class: 's-t' }, title, ' ', status(on)), h('div', { class: 's-d' }, hint)), action);
+    const chatAction = this.chat.connected ? this.disconnectButton('chat') : this.connectButton('chat', 'account-chat-connect');
+    const tasks = this.tasks;
+    const connections = h(
+      'div',
+      { class: 'set-group' },
+      h('h3', {}, st('connections')),
+      row('account-time', st('connTime'), st('connTimeHint'), session !== null, null),
+      row('account-chat', st('connChat'), st('connChatHint'), this.chat.connected, chatAction),
+      tasks === null ? null : row('account-tasks', st('connTasks'), this.tasksHidden ? st('connTasksHidden') : st('connTasksHint'), tasks.connected, tasks.connected ? this.disconnectButton('tasks') : this.connectButton('tasks', 'account-tasks-connect')),
+    );
+    const privacy = h('button', { class: 'btn sm', id: 'open-privacy', attrs: { type: 'button' } }, st('whatWeCollect'));
+    privacy.addEventListener('click', () => {
+      this.settingsDialog.close();
+      this.show('time');
+      this.app?.show('privacy');
+    });
+    const logout = h('button', { class: 'btn sm danger', id: 'logout', attrs: { type: 'button' } }, st('signOut'));
+    logout.addEventListener('click', () => {
+      void (async () => {
+        // BDA14-L3: messages waiting to send are dropped with the sign-out: asked first.
+        if (!(await this.askUnsent('unsentSignOut'))) return;
+        this.settingsDialog.close();
+        await this.app?.logout();
+      })();
+    });
+    const setup = this.setup.needed() ? h('button', { class: 'btn sm primary', id: 'account-finish-setup', attrs: { type: 'button' } }, st('finishSetup')) : null;
+    setup?.addEventListener('click', () => {
+      this.settingsDialog.close();
+      this.prefs.skipped = [];
+      this.startSetup();
+    });
+    return h(
+      'div',
+      { class: 'set-stack' },
+      h(
+        'div',
+        { class: 'set-group' },
+        this.settingRow(st('accountSignedIn', { name }), host !== '' ? st('accountServer', { host }) : null, null),
+        setup !== null ? this.settingRow(st('finishSetup'), st('finishSetupHint'), setup) : null,
+      ),
+      connections,
+      h('div', { class: 'cc-row account-actions' }, privacy, logout),
+    );
+  }
+
+  private disconnectButton(module: 'chat' | 'tasks'): HTMLButtonElement {
+    const st = this.st;
+    const button = h('button', { class: 'btn sm danger', id: `${module}-disconnect`, attrs: { type: 'button' } }, st('disconnect'));
+    button.addEventListener('click', () => void this.disconnectModule(module));
+    return button;
+  }
+
+  /** Disconnect chat / tasks, after a confirmation (UXA-8); time stays signed in. */
+  async disconnectModule(module: 'chat' | 'tasks'): Promise<void> {
+    const st = this.st;
+    // BDA14-L3: one question also names the messages still waiting to send (they go with the chat).
+    const unsent = module === 'chat' ? this.chat.unsentCount() : 0;
+    const text = st(module === 'chat' ? 'confirmChatText' : 'confirmTasksText');
+    const ok = await this.askDestructive(st(module === 'chat' ? 'confirmChatTitle' : 'confirmTasksTitle'), unsent > 0 ? `${st('unsentTitle', { count: unsent })} ${text}` : text, st('confirmDisconnect'));
+    if (!ok) return;
+    if (module === 'chat') await this.chat.disconnect();
+    else await this.tasks?.disconnect();
+    this.announce(st(module === 'chat' ? 'chatDisconnected' : 'tasksDisconnected'));
+    this.renderSettings();
+    this.settings.querySelector<HTMLElement>(`#account-${module}-connect`)?.focus();
+  }
+
+  /** A destructive question: Cancel is the default (focused first, Esc), the action is named and styled as danger. */
+  private askDestructive(title: string, text: string, action: string): Promise<boolean> {
+    // One question at a time, as in askConfirm: a second one while the first is asked is a "no".
+    if (this.confirm.open) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const cancel = h('button', { class: 'btn', id: 'confirm-cancel', attrs: { type: 'button', autofocus: true } }, this.st('cancel'));
+      const go = h('button', { class: 'btn primary danger-fill', id: 'confirm-ok', attrs: { type: 'button' } }, action);
+      this.confirm.replaceChildren(h('div', { class: 'dlg' }, h('div', { class: 'dlg-h' }, h('h1', { id: 'shell-confirm-title' }, title)), h('div', { class: 'dlg-b' }, h('p', {}, text)), h('div', { class: 'dlg-f' }, cancel, go)));
+      let answer = false;
+      const done = () => {
+        this.confirm.removeEventListener('close', done);
+        resolve(answer);
+      };
+      this.confirm.addEventListener('close', done);
+      cancel.addEventListener('click', () => this.confirm.close());
+      go.addEventListener('click', () => {
+        answer = true;
+        this.confirm.close();
+      });
+      this.confirm.showModal();
+      cancel.focus();
+    });
+  }
+
+  // ---- guided first run (UXA-4) -------------------------------------------------------------------------------------
+
+  /** The setup card on screen (the modules are hidden behind it; the rail stays usable). */
+  setupShown = false;
+
+  private startSetup(): void {
+    if (!this.setup.needed()) {
+      this.finishSetup(false);
+      return;
+    }
+    this.setupShown = true;
+    this.prefs.setup = 'pending';
+    this.save();
+    this.module = 'chat';
+    this.chatPanel.hidden = true;
+    this.tasksPanel.hidden = true;
+    this.timePanel.hidden = true;
+    this.setup.root.hidden = false;
+    this.root.dataset.setup = 'true';
+    this.chat.setShown(false);
+    this.tasks?.setShown(false);
+    this.setup.render();
+    this.renderRail();
+    this.renderTitlebar();
+    this.setup.focus();
+  }
+
+  private hideSetup(): void {
+    this.setupShown = false;
+    this.setup.root.hidden = true;
+    delete this.root.dataset.setup;
+  }
+
+  /** Nothing left (or "Finish later"): the setup is over; the app lands on Chat (owner Q1). */
+  private finishSetup(announce: boolean): void {
+    const shown = this.setupShown;
+    this.hideSetup();
+    this.prefs.setup = 'done';
+    this.save();
+    if (shown) {
+      this.show('chat');
+      if (announce) this.announce(this.st('setupFinished'));
+      this.chatPanel.querySelector<HTMLElement>('#chat-connect, .side .conv, .chat-main')?.focus?.();
+    }
+  }
+
+  /** A module's connection or its device-flow state changed: the setup card follows, and moves on when done. */
+  private followSetup(): void {
+    if (!this.setupShown) return;
+    if (!this.setup.needed()) {
+      this.finishSetup(true);
+      return;
+    }
+    const before = document.activeElement;
+    this.setup.render();
+    if (before === null || before === document.body || !this.setup.root.contains(document.activeElement)) this.setup.focus();
+  }
+
+  /** The shortcut sheet (`?`, UX batch 3): what works anywhere, then the keys of the module in view, and only those. */
   openKeys(): void {
     const t = this.t;
+    const st = this.st;
     const mod = modKey();
-    const sections: [string, [string, string[]][]][] = [
-      [t('keysAnywhere'), [[t('keySwitcher'), [mod, 'K']], [t('keyModules'), [mod, this.moduleOrder().length === 3 ? '1 2 3' : '1 2']], [t('keySettings'), [mod, ',']], [t('keyTheme'), [mod, 'Shift', 'L']], [t('keyToggleTimer'), [mod, 'Shift', 'S']], [t('keyMini'), [mod, 'Shift', 'M']], [t('keySheet'), ['?']]]],
-      [
+    const anywhere: [string, string[]][] = [
+      [t('keySwitcher'), [mod, 'K']],
+      [t('keyModules'), [mod, this.moduleOrder().length === 3 ? '1 2 3' : '1 2']],
+      [st('keyPanes'), ['F6', 'Shift F6']],
+      [t('keySettings'), [mod, ',']],
+      [t('keyTheme'), [mod, 'Shift', 'L']],
+      [t('keyToggleTimer'), [mod, 'Shift', 'S']],
+      [st('keyUndo'), [mod, 'Z']],
+      ...(this.platform.miniWindow !== null ? [[t('keyMini'), [mod, 'Shift', 'M']] as [string, string[]]] : []),
+      [t('keySheet'), ['?']],
+    ];
+    const sections: [string, [string, string[]][]][] = [[t('keysAnywhere'), anywhere]];
+    if (this.module === 'chat') {
+      sections.push([
         t('keysChat'),
         [
           [t('keyConv'), ['Alt', '↑ ↓']],
           [t('keyUnread'), ['Alt', 'Shift', '↑ ↓']],
           [t('keyJumpUnread'), [mod, 'J']],
           [t('keyHistory'), [mod, '[ ]']],
+          [st('keySideRows'), ['↑ ↓']],
           [t('keyMessages'), ['↑ ↓']],
           [t('keyThread'), ['Enter']],
           [t('keyReply'), ['R']],
@@ -1157,19 +1750,33 @@ export class Shell {
           [t('keySend'), ['Enter', 'Shift Enter']],
           [t('keyLeave'), ['Esc']],
         ],
-      ],
-    ];
-    if (this.tasks !== null && !this.tasksHidden) {
+      ]);
+    } else if (this.module === 'tasks' && this.tasks !== null && !this.tasksHidden) {
       const tt = this.tt;
       sections.push([
         tt('keysTasks'),
         [
           [tt('keyQuickAdd'), ['N']],
+          [tt('keyBoard'), ['Alt', '↑ ↓']],
           [tt('keyOpenCard'), ['Enter']],
           [tt('keyCardNav'), ['← → ↑ ↓']],
           [tt('keyMoveCard'), ['Alt', '← →']],
+          [tt('keyRows'), ['↑ ↓']],
+          [tt('keyRowCells'), ['← →']],
           [tt('keyStartTimer'), ['S']],
           [tt('keyCloseDetail'), ['Esc']],
+        ],
+      ]);
+    } else if (this.module === 'time') {
+      const full = this.app?.fullLayout() === true;
+      sections.push([
+        st('keysTime'),
+        [
+          [st('keyTimeSearch'), ['/']],
+          [st('keyTimeRows'), ['↑ ↓']],
+          [st('keyTimeStart'), ['Enter', 'S']],
+          [st('keyTimeQuick'), ['Alt', '1…9']],
+          ...(full ? [[st('keyTimeSection'), ['Alt', '↑ ↓']] as [string, string[]]] : []),
         ],
       ]);
     }
@@ -1275,64 +1882,119 @@ export class Shell {
 
   // ---- keys ---------------------------------------------------------------------------------------------------------
 
+  /**
+   * Keys (UX batch 3, UXA-3 / UXA-10, owner approval "global shortcuts in every module"). The app-wide ones are handled
+   * here first, the same in Chat, Tasks and Time, and marked handled (the Time module then leaves them alone):
+   * Ctrl/⌘+K the global switcher, Ctrl/⌘+1…3 the modules, F6 / Shift+F6 the window's areas, Ctrl/⌘+, Settings,
+   * Ctrl/⌘+Shift+L light / dark (its one meaning), Ctrl/⌘+Shift+S the timer, Ctrl/⌘+Shift+M the mini timer, `?` the
+   * sheet. Then Alt+↑ / Alt+↓ and the module's own keys go to the module in view.
+   */
   private onKey(event: KeyboardEvent): void {
-    if (this.root.dataset.bare === 'true') return;
+    // A shell no longer in the page (tests mount several) never takes a key; a key already handled is not ours either.
+    if (!this.root.isConnected || this.root.dataset.bare === 'true' || event.defaultPrevented) return;
     const mod = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
     const dialogOpen = [this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog].some((dialog) => dialog.open);
     const target = event.target as HTMLElement | null;
     const typing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target?.isContentEditable === true;
-    if (mod && !event.shiftKey && key === 'k' && this.module === 'chat') {
+    const handled = (run: () => void) => {
       event.preventDefault();
-      if (this.switcher.open) this.switcher.close();
-      else this.openSwitcher();
-      return;
+      run();
+    };
+    if (mod && !event.shiftKey && !event.altKey && key === 'k') {
+      // Toggles from anywhere, even a text field; not over another dialog.
+      if (dialogOpen && !this.switcher.open) return;
+      return handled(() => (this.switcher.open ? this.switcher.close() : this.openSwitcher()));
     }
     if (dialogOpen) return;
-    if (mod && event.shiftKey && !event.altKey && key === 'm' && this.platform.miniWindow !== null) {
-      event.preventDefault();
-      void this.toggleMini();
-      return;
-    }
+    if (mod && event.shiftKey && !event.altKey && key === 'm' && this.platform.miniWindow !== null) return handled(() => void this.toggleMini());
     const order = this.moduleOrder();
     if (mod && !event.shiftKey && !event.altKey && /^[1-3]$/.test(event.key) && Number(event.key) <= order.length) {
-      event.preventDefault();
-      const next: ModuleId = order[Number(event.key) - 1];
-      this.show(next);
-      this.rail.querySelector<HTMLElement>(`#tab-${next}`)?.focus();
-      return;
+      return handled(() => {
+        const next: ModuleId = order[Number(event.key) - 1];
+        this.show(next);
+        this.rail.querySelector<HTMLElement>(`#tab-${next}`)?.focus();
+      });
     }
-    if (mod && event.shiftKey && key === 'l' && this.module === 'chat') {
-      event.preventDefault();
-      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-      void this.setTheme(dark ? 'light' : 'dark');
-      return;
+    if (mod && event.shiftKey && !event.altKey && key === 'l') {
+      return handled(() => {
+        const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        void this.setTheme(dark ? 'light' : 'dark');
+      });
     }
+    if (mod && event.shiftKey && !event.altKey && key === 's' && this.app !== null && this.app.state.session !== null) return handled(() => void this.app?.toggle());
+    if (mod && !event.shiftKey && !event.altKey && event.key === ',') return handled(() => this.openSettings());
+    if (event.key === 'F6' && !mod && !event.altKey) return handled(() => this.cyclePanes(event.shiftKey ? -1 : 1));
+    if (!typing && !mod && !event.altKey && event.key === '?') return handled(() => this.openKeys());
     if (this.module === 'tasks') {
-      if (mod && event.key === ',') {
-        event.preventDefault();
-        this.openSettings();
-      } else if (!typing && !mod && !event.altKey && event.key === '?') {
-        event.preventDefault();
-        this.openKeys();
-      } else if ((!typing || (event.key === 'Escape' && this.tasks?.detail !== null)) && this.tasks?.onKey(event) === true) event.preventDefault();
+      if ((!typing || (event.key === 'Escape' && this.tasks?.detail !== null)) && this.tasks?.onKey(event) === true) event.preventDefault();
       return;
     }
-    if (this.module !== 'chat') return;
-    if (mod && event.key === ',') {
-      event.preventDefault();
-      this.openSettings();
-      return;
-    }
-    if (!typing && !mod && !event.altKey && event.key === '?') {
-      event.preventDefault();
-      this.openKeys();
+    if (this.module === 'time') {
+      if (!typing && event.altKey && !mod && !event.shiftKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp') && this.app?.stepSection(event.key === 'ArrowDown' ? 1 : -1) === true) event.preventDefault();
       return;
     }
     if (!typing && this.chat.onKey(event)) event.preventDefault();
+  }
+
+  /**
+   * The window's areas for F6 / Shift+F6, in visual order: title bar, rail, then the module's panes (Chat: sidebar,
+   * conversation, thread; Tasks: page, task panel; Time: sidebar, list, details). From outside any area, F6 starts at the
+   * module's first pane (the person is "in" the module), Shift+F6 at its last.
+   */
+  private areas(): HTMLElement[] {
+    const panes = this.setupShown
+      ? [this.setup.root]
+      : this.module === 'chat'
+        ? this.chat.panes()
+        : this.module === 'tasks'
+          ? (this.tasks?.panes() ?? [])
+          : this.app !== null && this.app.state.session !== null
+            ? this.app.panes()
+            : [this.timePanel];
+    return [this.titlebar, this.rail, ...panes.filter((pane) => pane.closest('[hidden]') === null)];
+  }
+
+  cyclePanes(step: 1 | -1): void {
+    const areas = this.areas();
+    const at = areas.findIndex((area) => area.contains(document.activeElement));
+    const next = at === -1 ? areas[step === 1 ? Math.min(2, areas.length - 1) : areas.length - 1] : areas[(at + step + areas.length) % areas.length];
+    this.focusArea(next);
+  }
+
+  private focusArea(area: HTMLElement): void {
+    if (area === this.titlebar) {
+      (this.titlebar.querySelector<HTMLElement>('#tb-search') ?? this.titlebar.querySelector<HTMLElement>('button:not([disabled])'))?.focus();
+    } else if (area === this.rail) {
+      this.rail.querySelector<HTMLElement>('.rail-tab[tabindex="0"]')?.focus();
+    } else if (this.module === 'chat' && !this.setupShown) {
+      this.chat.focusPane(area);
+    } else if (this.module === 'tasks' && !this.setupShown && this.tasks !== null && area !== this.tasks.root) {
+      if (area.tagName === 'MAIN') this.tasks.focusPage();
+      else (area.querySelector<HTMLElement>('#task-close') ?? area).focus();
+    } else if (this.module === 'time' && !this.setupShown && this.app !== null && this.app.state.session !== null) {
+      this.app.focusPane(area);
+    } else {
+      (area.querySelector<HTMLElement>('button:not([disabled]), a[href], input, select, textarea, [tabindex="0"]') ?? area).focus();
+    }
   }
 }
 
 function modKey(): string {
   return /mac/i.test(globalThis.navigator?.platform ?? '') ? '⌘' : 'Ctrl';
+}
+
+/** The host of a server address for Settings → Account (the address itself when it does not parse). */
+function hostOf(server: string | null): string {
+  if (server === null) return '';
+  try {
+    return new URL(server).host;
+  } catch {
+    return server;
+  }
+}
+
+/** The Popover API (the update panel); test DOMs without it get a `hidden` panel with the same keys. */
+function supportsPopover(): boolean {
+  return typeof HTMLElement !== 'undefined' && typeof (HTMLElement.prototype as { showPopover?: unknown }).showPopover === 'function';
 }

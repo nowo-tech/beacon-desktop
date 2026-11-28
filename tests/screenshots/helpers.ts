@@ -76,12 +76,18 @@ export async function connect(page: Page): Promise<string> {
   return code;
 }
 
-/** Signs in; the "You're in!" card is dismissed unless `keepWelcome` (its own screenshot). */
+/** Signs in; "You're in" (a line in the status strip since UX batch 4) is dismissed unless `keepWelcome`. */
 export async function signIn(page: Page, keepWelcome = false): Promise<void> {
   const code = await connect(page);
   await control('device/approve', { userCode: code });
   await expect(page.locator('#tasks li')).toHaveCount(8, { timeout: 15_000 });
-  if (!keepWelcome) await page.locator('#welcome-dismiss').click();
+  if (!keepWelcome) await dismissWelcome(page);
+}
+
+/** Closes "You're in" in the status strip (UXA-23), when it shows. */
+export async function dismissWelcome(page: Page): Promise<void> {
+  const dismiss = page.locator('#time-strip-dismiss');
+  if (await dismiss.isVisible()) await dismiss.click();
 }
 
 /** Viewport screenshot after checking that no local address or demo identity is visible. */

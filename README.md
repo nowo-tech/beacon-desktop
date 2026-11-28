@@ -2,7 +2,7 @@
 
 Formerly **TimeTrack desktop** (renamed in 0.9.0). Tray app (Tauri 2) for
 [symfony-beacon](https://github.com/nowo-tech/symfony-beacon): start, stop and switch your time tracking, and read and
-write Beacon chat ([design](docs/design/BEACON_DESKTOP.md)). Current version: **0.12.0**. Windows, macOS and Linux.
+write Beacon chat ([design](docs/design/BEACON_DESKTOP.md)). Current version: **0.14.0**. Windows, macOS and Linux.
 English and Spanish.
 
 | Feature | Needs on the Beacon server |
@@ -11,6 +11,7 @@ English and Spanish.
 | Organizations, required fields (0.11.0) | TimeTrackBundle 2.1 (activity types, subjects) and 2.2 (context policy); older servers ask nothing |
 | Chat, read (0.10.0) | TimeTrackBundle 2.2 and ChatKitBundle 2.4 (2.4.1 to revoke the chat approval from the app) |
 | Chat, send, threads, reactions (0.12.0) | ChatKitBundle 2.5 and a chat approval for sending |
+| Tasks (0.13.0) | Beacon 1.183 or later (TaskBoardBundle 3.4 client API and a tasks approval); older servers say Tasks is not available yet |
 
 <img src="docs/images/desktop-device-code-light.webp" alt="Device sign-in code" width="250"> <img src="docs/images/desktop-timer-light.webp" alt="Running timer and task list" width="250">
 
@@ -111,8 +112,9 @@ a ghost Windows removes when the mouse passes over it.
 
 ### Sign in
 
-1. Enter your Beacon URL and click **Connect**. The app asks *Sign in to <host>?* in a system dialog: check the host
-   and click **Sign in** (if you did not just ask to sign in, click **Cancel**).
+1. Click **Sign in with Beacon**. Beacon Desktop always uses **https://beacon.nowo.tech** (owner decision 2026-11-27):
+   there is no address to type and no *Sign in to <host>?* question, since the host is fixed and its TLS keys are
+   pinned. An install signed in to another server is signed out at the next start with a message saying so.
 2. The app shows a code like `BCDF-GHJK` and opens Beacon's *Connect a device* page in your browser. The page's
    address is shown too, with **Copy link** (0.12.1): if the browser that opened is not the one where you are signed
    in to Beacon, paste it there.
@@ -160,7 +162,8 @@ Your Beacon tasks next to chat and the timer: **Chat**, **Tasks** and **Time** o
    **Board** and **List** show one board of the organization; *Only mine* narrows it.
 3. Move a card by dragging it, with `Alt+←/→`, or with its status. Open a task (`Enter`) to change its fields, tick its
    checklist, read its description and comments, or start the timer on it (`S` on a card). `N` adds a task
-   (`!high #tag @tomorrow ~2h`).
+   (`!high #tag @tomorrow ~2h`; the Spanish words `!alta`, `!urgente`, `!baja`, `@hoy`, `@mañana` work too). The
+   estimate takes `4h`, `90m` or `1h30`; the due date has Today / Tomorrow / Next week shortcuts.
 
 **Notifications and links.** Chat notifications are off until you turn them on (Chat asks once; Settings → Chat).
 They only say "New message in Beacon", never who wrote or what; a click opens the conversation. Pause them for an hour
@@ -446,7 +449,8 @@ required" screen send you to the Store listing instead.
   self-signed certificate) is **not supported**: sign-in, API calls, the update check and in-app updates all fail
   with a certificate error. Use a certificate that chains to the Mozilla root store (for example Let's Encrypt).
 - **Bound to your server.** Every request the app makes and the updater go to the origin (scheme, host, port) of the
-  server you signed in to, and nowhere else; switching servers means signing out first. The session token stays
+  server you signed in to, and nowhere else. Release builds bind https://beacon.nowo.tech only (owner decision
+  2026-11-27); another server is a development option (see *Development*). The session token stays
   in Rust with the server that issued it, so even script running in the window cannot read it or send it elsewhere;
   script itself is prevented by the CSP and the text-only DOM (SECURITY.md, *Credentials*). Plain `http://` to `localhost`,
   `127.0.0.1` or `[::1]` works in development (debug) builds only; release builds require `https://`.
@@ -499,6 +503,10 @@ required" screen send you to the Store listing instead.
   `allow-unlisten` (its view) and `mini_view`, `mini_action` (`start`, `stop`, `expand`, `close`; anything else is
   refused). The main window opens, updates and closes it (`mini_open`, `mini_update`, `mini_close`) and may bring
   itself forward (`core:window:allow-show`, `allow-unminimize`, `allow-set-focus`) for a dialog it must answer.
+- Window chrome (UX batch 7): the main window draws its own title bar on Windows and Linux (no system frame) and
+  overlays the macOS one, so `default.json` adds `core:window:allow-start-dragging`, `allow-minimize`,
+  `allow-toggle-maximize` and `allow-close` for the main window only (close hides it to the tray, as before).
+  `BEACON_DESKTOP_SYSTEM_TITLEBAR=1` keeps the system title bar (see `docs/design/BEACON_DESKTOP.md` §5.1).
 - Defence in depth: every command also checks the calling window's label (`main` for the keychain, updater, tray,
   shortcut, heartbeat, notifications and opening / focusing / closing the prompt; `prompt` for reading its view,
   answering and "Open Beacon Desktop"). Answers are allow-listed (`{ action, note?, taskId? }`), pose ids are looked up in
@@ -524,7 +532,14 @@ pnpm screenshots          # regenerates docs/images/*.webp (real UI, fake platfo
 (cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test)
 ```
 
-The mock's device page is `http://127.0.0.1:8787/device` (approve the code shown by the app). `src/api/` is shared
+The mock's device page is `http://127.0.0.1:8787/device` (approve the code shown by the app).
+
+**Development server.** Release builds talk to https://beacon.nowo.tech only: the UI has no address field and Rust
+(`net::validate_server_url`, release builds) refuses to bind any other origin. For development and tests, the address
+field comes back in `pnpm dev` / `pnpm tauri dev` (Vite's dev server) and in any build made with
+`BEACON_SERVER_FIELD=1` (the Playwright configs set it for the mock server; `BEACON_URL` then prefills the field).
+Only a debug Rust build accepts such a server, and only there does a sign-in to a host other than beacon.nowo.tech
+still ask *Sign in to <host>?* with the line *This is not beacon.nowo.tech*. `src/api/` is shared
 verbatim with [time-track-extension](https://github.com/nowo-tech/time-track-extension).
 
 ## Tests and coverage
@@ -557,7 +572,7 @@ steps: [docs/RELEASE-PLAN-0.4.0.md](docs/RELEASE-PLAN-0.4.0.md).
 | `MSIX_IDENTITY_NAME`, `MSIX_PUBLISHER`, `MSIX_PUBLISHER_DISPLAY_NAME`, `TIMETRACK_STORE_URL` | variables (optional) | Microsoft Store package (Partner Center → Product identity) |
 | `TIME_TRACK_S3_ENDPOINT`, `TIME_TRACK_S3_BUCKET`, `TIME_TRACK_S3_ACCESS_KEY_ID`, `TIME_TRACK_S3_SECRET_ACCESS_KEY` (+ optional `TIME_TRACK_S3_REGION`) | secrets | upload (`s3:PutObject` on `time-track-clients/*` only) |
 | `S3_CLIENTS_PREFIX` | variable (optional) | S3 key prefix of every release key (files and `stable.json`; read by `channel.mjs` and `s3-put.sh`); allowlist `time-track-clients` (default) or `beacon-clients`, anything else fails the build. **The Beacon updater must read the same prefix before the variable is flipped**; the app's updater endpoint is unchanged |
-| `BEACON_URL` | variable | prefilled server URL |
+| `BEACON_URL` | variable | unused by release builds since 2026-11-27 (always https://beacon.nowo.tech); prefills the development address field only |
 | `TIME_TRACK_MIN_SUPPORTED_VERSION` | variable (optional) | `min_supported_version` in `stable.json` |
 | `LINUX_RUNNER`, `WINDOWS_RUNNER`, `MACOS_RUNNER` | variables (optional) | JSON `runs-on` value per platform, e.g. `["self-hosted","linux","x64","tauri-build"]`; default `"ubuntu-22.04"`, `"windows-latest"`, `"macos-latest"` |
 | `WINDOWS_BUILD`, `MACOS_BUILD` | variables (optional) | `false` skips that platform (no entries for it in that version's `stable.json`) |

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../src/api/client';
 import { describeError } from '../../src/lib/errors';
 import { preflight } from '../../src/lib/preflight';
@@ -144,5 +144,17 @@ describe('region patch keeps focus', () => {
     expect(icon('settings').getAttribute('aria-hidden')).toBe('true');
     expect(icon('stop').querySelector('rect')?.getAttribute('rx')).toBe('2');
     expect(icon('clock').querySelector('circle')?.getAttribute('r')).toBe('9');
+  });
+
+  it('refocuses without scrolling the region to the element (BDA14-I6)', () => {
+    const region = h('div');
+    document.body.replaceChildren(region);
+    patch(region, [h('button', { key: 'card' }, 'one')]);
+    (region.querySelector('[data-key="card"]') as HTMLElement).focus();
+    const next = h('button', { key: 'card' }, 'two');
+    const focus = vi.spyOn(next, 'focus');
+    patch(region, [next]);
+    expect(document.activeElement).toBe(next);
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
   });
 });

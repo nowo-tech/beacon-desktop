@@ -33,8 +33,9 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# Release builds bind the fixed server https://beacon.nowo.tech (owner decision 2026-11-27): no BEACON_URL here (it
+# only prefilled the development server field), and BEACON_SERVER_FIELD must stay unset (guard steps, BDA14-I3).
 env:
-  BEACON_URL: ${{ vars.BEACON_URL }}
   # Read by scripts/release/channel.mjs and s3-put.sh in every job (allowlist: time-track-clients | beacon-clients).
   S3_CLIENTS_PREFIX: ${{ vars.S3_CLIENTS_PREFIX || 'time-track-clients' }}
 
@@ -62,6 +63,8 @@ jobs:
           version="$(node -p "require('./package.json').version")"
           [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != package.json $version"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          # BDA14-I3: a release build never has the development server field.
+          [ -z "${BEACON_SERVER_FIELD:-}" ] || { echo "::error::BEACON_SERVER_FIELD must not be set for a release (fixed server https://beacon.nowo.tech)"; exit 1; }
           have() { for v in "$@"; do [ -n "${!v}" ] || return 1; done; }
           flag() { if have "${@:3}"; then echo "$1=true" >> "$GITHUB_OUTPUT"; else echo "$1=false" >> "$GITHUB_OUTPUT"; echo "::notice title=Skipped::$2 (missing: ${*:3})"; fi; }
           [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo "::error::TAURI_SIGNING_PRIVATE_KEY is missing: updater artifacts are required since 0.4.0"; exit 1; }
@@ -138,6 +141,13 @@ jobs:
             echo '{}' > "$RUNNER_TEMP/tauri.release.json"
           fi
           pnpm tauri build ${{ matrix.args }} --config "$RUNNER_TEMP/tauri.release.json"
+      # BDA14-I3: the fixed server holds in Rust anyway; this keeps the UI honest too (no server address field built in).
+      - name: Release guard (fixed server, no server field)
+        shell: bash
+        run: |
+          [ -z "${BEACON_SERVER_FIELD:-}" ] || { echo "::error::BEACON_SERVER_FIELD must not be set for a release build"; exit 1; }
+          # main.ts passes `fixedServer` only when the field is off: the built UI must carry it with the official host.
+          grep -rqE 'fixedServer:["`'"'"']https://beacon\.nowo\.tech["`'"'"']' dist/assets/ || { echo "::error::the built UI is not bound to https://beacon.nowo.tech (server field build?)"; exit 1; }
       - name: Collect bundles and stable.json entries
         shell: bash
         run: scripts/release/collect-desktop.sh ${{ matrix.os }} "${{ needs.prepare.outputs.version }}" out "${{ matrix.bundle }}" "${{ needs.prepare.outputs.updater }}"

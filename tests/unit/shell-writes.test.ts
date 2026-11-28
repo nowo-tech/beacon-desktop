@@ -131,16 +131,20 @@ describe('chat writes in the module', () => {
     expect(ui.$<HTMLTextAreaElement>('#composer').value).toBe('');
   });
 
-  it('a send that fails offers Retry with the same key; a refusal offers Edit and Discard', async () => {
+  it('a send the server could not take waits in the queue (Try now, same key); a refusal offers Edit and Discard', async () => {
     const ui = await connected();
-    await env.control('config', { chatFailNext: { status: 503, error: 'server_error' } });
+    await env.control('config', { chatFailNext: { status: 503, error: 'server_error', writesOnly: true, times: 1000 } });
     const field = ui.$<HTMLTextAreaElement>('#composer');
     type(field, 'First try');
     enter(field);
-    await until(() => document.querySelector('#msg-list li.msg.pending.failed') !== null, 'the failure');
-    const failed = ui.$('#msg-list li.msg.pending.failed');
-    expect(failed.querySelector('[role="alert"]')?.textContent).toContain('Not sent. Check the connection and retry.');
-    const retry = [...failed.querySelectorAll('button')].find((button) => button.textContent === 'Retry') as HTMLButtonElement;
+    // UXA-6: a 5xx (or no network) is not "Not sent": the message waits, with Try now and Cancel.
+    await until(() => document.querySelector('#msg-list li.msg.pending.queued .m-status.offline') !== null, 'the queued message');
+    const queued = ui.$('#msg-list li.msg.pending.queued');
+    expect(queued.querySelector('[role="status"]')?.textContent).toContain('Waiting for connection. It sends when you are back online.');
+    expect(queued.querySelector('[role="alert"]')).toBeNull();
+    expect([...queued.querySelectorAll('button')].map((button) => button.textContent)).toEqual(['Try now', 'Cancel']);
+    await env.control('config', { chatFailNext: null });
+    const retry = [...queued.querySelectorAll('button')].find((button) => button.textContent === 'Try now') as HTMLButtonElement;
     retry.click();
     await until(async () => (await writes()).length === 1, 'the retried write');
     await until(() => document.querySelector('#msg-list li.msg.pending') === null, 'the sent message');

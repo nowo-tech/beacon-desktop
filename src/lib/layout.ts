@@ -5,9 +5,9 @@
  *   breakpoint, so a window a bit wider than the column never shows a stretched, empty UI;
  * - `full` (from `FULL_BREAKPOINT`): sections sidebar · task list · detail pane.
  *
- * "Compact view" / "Full view" (header, tray, Ctrl/⌘+Shift+L) resize the window to the size remembered for that layout
- * (or its preset), centred on the screen when it would not fit on one. Sizes are kept in physical pixels, as the OS
- * reports them, per device (local storage, never sent).
+ * "Compact view" / "Full view" (header, tray; Ctrl/⌘+Shift+L is the theme since UX batch 3) resize the window to the
+ * size remembered for that layout (or its preset), centred on the screen when it would not fit on one. Sizes are kept
+ * in physical pixels, as the OS reports them, per device (local storage, never sent).
  */
 export type LayoutMode = 'compact' | 'full';
 
@@ -42,7 +42,7 @@ export interface Screens {
 }
 
 export interface WindowMemory {
-  /** View last used. */
+  /** View last used (UXA-30: a first run opens the full one, about 1200 × 780, centred on the work area). */
   mode: LayoutMode;
   /** Last size and position of the window in each view. */
   bounds: Partial<Record<LayoutMode, Rect>>;
@@ -72,9 +72,9 @@ export function loadWindowMemory(storage: Storage): WindowMemory {
       const rect = raw.bounds?.[mode];
       if (isRect(rect)) bounds[mode] = { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
     }
-    return { mode: raw.mode === 'full' ? 'full' : 'compact', bounds };
+    return { mode: raw.mode === 'compact' ? 'compact' : 'full', bounds };
   } catch {
-    return { mode: 'compact', bounds: {} };
+    return { mode: 'full', bounds: {} };
   }
 }
 

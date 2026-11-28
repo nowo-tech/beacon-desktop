@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { BEACON, connect, control, reset } from './helpers';
+import { BEACON, connect, control, dismissWelcome, reset } from './helpers';
 
 /**
  * Review screenshots of the window layouts (`pnpm screenshots:layout`, Spanish): compact (400 × 640), the width between
@@ -46,7 +46,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.setViewportSize(SIZES.compact);
     await control('device/approve', { userCode: await connect(page) });
     await expect(page.locator('#main li[data-task]')).toHaveCount(8, { timeout: 15_000 });
-    await page.locator('#welcome-dismiss').click();
+    await dismissWelcome(page);
     // A running timer, two pinned tasks.
     await page.locator('[data-task="T-104"] .row-action').click();
     await expect(page.locator('#timer-task')).toHaveText('Fix invoice rounding bug');
@@ -70,8 +70,9 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.locator('#time-week li')).toHaveCount(7);
     await shot(page, `full-my-time-${scheme}`);
 
-    await page.locator('#nav-settings').click();
-    await expect(page.locator('#main-pane #settings')).toBeVisible();
+    // UX batch 6 (UXA-2): the one Settings dialog opens from the rail's gear (the Time sidebar has no Settings entry).
+    await page.locator('#rail-settings').click();
+    await expect(page.locator('#shell-settings')).toBeVisible();
     await shot(page, `full-settings-${scheme}`);
     expect(BEACON).toContain('example.test');
   });

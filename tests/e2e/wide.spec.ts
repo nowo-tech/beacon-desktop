@@ -2,8 +2,9 @@ import { expect, test, type Page } from '@playwright/test';
 import { axe } from './axe';
 
 /**
- * Wide windows: one responsive --content-max (31rem compact, 40rem full), the detail pane kept on Settings and "What we
- * collect", and the Settings tabs as a vertical list in the full layout (horizontal row with faded edges in compact).
+ * Wide windows: one responsive --content-max (31rem compact, 40rem full), the detail pane kept on "What we collect"
+ * (from 1100 px, UX batch 6), and the one Settings dialog's tabs as a vertical list when it has room (a horizontal row
+ * with faded edges in a narrow window).
  */
 const MOCK = 'http://127.0.0.1:8787';
 const SIZES = [400, 720, 900, 1000, 1100, 1280, 1440] as const;
@@ -30,7 +31,7 @@ const viewWidth = (page: Page) => page.locator('#view > *').first().evaluate((el
 
 /** Every tab fully inside the tablist, and the tablist does not scroll sideways. */
 const tabsFit = (page: Page) =>
-  page.locator('#app [role="tablist"]').evaluate((list) => {
+  page.locator('#shell-settings [role="tablist"]').evaluate((list) => {
     const box = list.getBoundingClientRect();
     const cut = [...list.querySelectorAll('[role="tab"]')].filter((tab) => {
       const r = tab.getBoundingClientRect();
@@ -41,7 +42,7 @@ const tabsFit = (page: Page) =>
 
 /** Form controls of every Settings panel wider than, or outside, their panel (each tab opened in turn). */
 const overflowingControls = (page: Page) =>
-  page.locator('#settings').evaluate(async (settings) => {
+  page.locator('#shell-settings').evaluate(async (settings) => {
     const out: string[] = [];
     for (const tab of settings.querySelectorAll<HTMLButtonElement>('[role="tab"]')) {
       tab.click();
@@ -66,44 +67,43 @@ for (const locale of ['en-US', 'es-ES'] as const) {
   test.describe(locale, () => {
     test.use({ locale });
 
-    test(`main, Settings and What we collect share one width at ${SIZES.join(', ')} px; the tabs fit in the full layout`, async ({ page }) => {
+    test(`main and What we collect share one width at ${SIZES.join(', ')} px; Settings fits every window`, async ({ page }) => {
       await page.setViewportSize({ width: 400, height: 800 });
       await signIn(page);
       for (const width of SIZES) {
         await page.setViewportSize({ width, height: 800 });
         const full = width >= 900;
+        // Hosted in the shell (UXA-1): the detail pane waits for 1100 px.
+        const detail = width >= 1100;
         await expect(page.locator('#app')).toHaveAttribute('data-layout', full ? 'full' : 'compact');
         if (full) await page.locator('#nav-tasks').click();
         const widths: Record<string, number> = { main: await viewWidth(page) };
-        if (full) await page.locator('#nav-settings').click();
-        else await page.locator('#open-settings').click();
-        await expect(page.locator('#settings')).toBeVisible();
-        widths.settings = await viewWidth(page);
+        await page.locator('#rail-settings').click();
+        await expect(page.locator('#shell-settings')).toBeVisible();
         const tabs = await tabsFit(page);
-        await expect(page.locator('#detail')).toBeVisible({ visible: full });
-        // The shell's 64 px rail (BD-2) sits beside the Time module: the vertical list needs a 1280 px window now.
-        if (width >= 1280) {
+        if (width >= 720) {
           // Room for the vertical list beside the options: every tab visible, nothing scrolls sideways.
           expect(tabs, `${width} px`).toEqual({ cut: [], sideways: false, orientation: 'vertical' });
         } else {
-          // Compact, or a full window whose Settings content is under 34rem: the faded horizontal row above the options.
+          // A narrow window: the faded horizontal row above the options.
           expect(tabs.orientation, `${width} px`).toBe('horizontal');
         }
-        if (full) expect(await axe(page), `${locale} ${width} settings`).toEqual([]);
+        expect(await axe(page), `${locale} ${width} settings`).toEqual([]);
         expect(await overflowingControls(page), `${width} px`).toEqual([]);
-        await page.locator('#settings-tab-general').click();
+        await page.locator('#settings-tab-account').click();
         await page.locator('#open-privacy').click();
         await expect(page.locator('#privacy')).toBeVisible();
-        await expect(page.locator('#detail')).toBeVisible({ visible: full });
+        await expect(page.locator('#detail')).toBeVisible({ visible: detail });
         widths.privacy = await viewWidth(page);
-        // One width for the three; 40rem when the window has room for it, 31rem compact.
-        expect(widths.settings, `${width} px`).toBe(widths.main);
+        // One width for both; 40rem when the window has room for it, 31rem compact.
         expect(widths.privacy, `${width} px`).toBe(widths.main);
         if (width < 900) expect(widths.main).toBeLessThanOrEqual(31 * 16);
-        // 40rem from 1440 px since the rail (BD-2) takes 64 px.
+        // 40rem from 1440 px beside the rail and the 260 px sidebar.
         if (width >= 1440) expect(widths.main).toBe(40 * 16);
+        // Back from "What we collect" reopens Settings; Esc closes it.
         await page.locator('#back').click();
-        await page.locator('#back').click();
+        await expect(page.locator('#shell-settings')).toBeVisible();
+        await page.keyboard.press('Escape');
         await expect(page.locator('#main')).toBeVisible();
       }
       expect(await page.evaluate(() => document.scrollingElement?.scrollHeight ?? 0)).toBeLessThanOrEqual(800);
@@ -114,26 +114,26 @@ for (const locale of ['en-US', 'es-ES'] as const) {
 test('full layout: a vertical tablist with ↑/↓ (wrapping), Home, End and a visible focus; compact keeps the faded row', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await signIn(page);
-  await page.locator('#nav-settings').click();
+  await page.locator('#rail-settings').click();
   const tablist = page.getByRole('tablist', { name: 'Settings sections' });
   await expect(tablist).toHaveAttribute('aria-orientation', 'vertical');
   await page.locator('#settings-tab-general').focus();
   // The selected tab's side bar: a border, not only a colour.
   expect(await page.locator('#settings-tab-general').evaluate((el) => getComputedStyle(el, '::after').borderInlineStartWidth)).toBe('3px');
   await page.keyboard.press('ArrowDown');
-  await expect(page.locator('#settings-tab-shortcuts')).toBeFocused();
-  await expect(page.locator('#settings-tab-shortcuts')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#settings-tab-appearance')).toBeFocused();
+  await expect(page.locator('#settings-tab-appearance')).toHaveAttribute('aria-selected', 'true');
   // Keyboard focus: the ring drawn inside the tab.
-  expect(await page.locator('#settings-tab-shortcuts').evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none');
-  await expect(page.locator('#shortcut')).toBeVisible();
+  expect(await page.locator('#settings-tab-appearance').evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none');
+  await expect(page.locator('#theme')).toBeVisible();
   await page.keyboard.press('ArrowRight');
-  await expect(page.locator('#settings-tab-shortcuts')).toBeFocused();
+  await expect(page.locator('#settings-tab-appearance')).toBeFocused();
   await page.keyboard.press('End');
-  await expect(page.locator('#settings-tab-updates')).toBeFocused();
+  await expect(page.locator('#settings-tab-account')).toBeFocused();
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('#settings-tab-general')).toBeFocused();
   await page.keyboard.press('ArrowUp');
-  await expect(page.locator('#settings-tab-updates')).toBeFocused();
+  await expect(page.locator('#settings-tab-account')).toBeFocused();
   await page.keyboard.press('Home');
   await expect(page.locator('#settings-tab-general')).toBeFocused();
 
@@ -151,5 +151,5 @@ test('full layout: a vertical tablist with ↑/↓ (wrapping), Home, End and a v
   expect(row.fadeEnd).toBeGreaterThan(0);
   await page.locator('#settings-tab-timer').focus();
   await page.keyboard.press('ArrowRight');
-  await expect(page.locator('#settings-tab-schedule')).toBeFocused();
+  await expect(page.locator('#settings-tab-shortcuts')).toBeFocused();
 });

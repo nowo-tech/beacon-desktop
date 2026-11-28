@@ -1,0 +1,57 @@
+/*
+ * UX batch 4: the status strip (UXA-7) and the toast region with Undo (UXA-8), shared by Chat, Tasks and Time.
+ * Shell tokens (chat.css); motion off with reduced motion; AA contrast in both themes (the Tasks banner's colours).
+ */
+
+/* ---- status strip: one line, its height always kept (no layout shift) ---- */
+.status-strip { flex: none; box-sizing: border-box; block-size: 36px; display: flex; contain: layout paint; }
+.status-strip[hidden] { display: none; }
+.status-strip .ss-box { flex: 1; min-width: 0; box-sizing: border-box; display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-2) 0 var(--sp-4); font-size: var(--fs-sm); line-height: 1.3; color: var(--ink-2); background: var(--surface-2); border-bottom: 1px solid var(--line); }
+.status-strip .ss-box[hidden] { display: none; }
+.status-strip .ss-box.warn { color: var(--warn); background: var(--warn-soft); }
+.status-strip .ss-box.danger { color: var(--danger); background: var(--danger-soft); }
+.status-strip .ss-ico { display: grid; flex: none; }
+.status-strip .ss-ico svg { width: 16px; height: 16px; }
+.status-strip .ss-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.status-strip .ss-action { flex: none; min-height: 0; height: 26px; padding: 0 var(--sp-2); border: 1px solid currentColor; border-radius: var(--r-sm); background: transparent; color: inherit; font: inherit; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; }
+.status-strip .ss-action:hover:not([disabled]) { background: color-mix(in srgb, currentColor 10%, transparent); }
+.status-strip .ss-action[disabled] { opacity: 0.6; cursor: default; }
+.status-strip .ss-close { flex: none; display: grid; place-items: center; width: 28px; height: 28px; min-height: 0; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: inherit; cursor: pointer; }
+.status-strip .ss-close svg { width: 16px; height: 16px; }
+.status-strip .ss-close:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.status-strip :focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* Time: the strip sits in the content column, as a quiet rounded line above the timer card. */
+#mod-time #time-strip-strip { margin-bottom: var(--sp-2); }
+#mod-time #time-strip-strip .ss-box { border: 1px solid var(--line); border-radius: var(--r-md); }
+#mod-time #time-strip-strip .ss-box.warn { border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+
+/* Chat: the conversation's pause note (UXA-13) above its skeleton. */
+#mod-chat .pause-note { list-style: none; padding: var(--sp-3) var(--sp-5) 0; }
+#mod-chat .pause-note .status-strip .ss-box { border: 1px solid var(--line); border-radius: var(--r-md); }
+
+/* ---- toast region: bottom centre of the window, top layer where the Popover API exists ---- */
+.undo-toasts { --ut-bg: var(--ink); --ut-fg: var(--surface); --ut-line: transparent; position: fixed; inset: auto auto 16px 50%; translate: -50% 0; margin: 0; padding: 0; border: 0; background: transparent; overflow: visible; z-index: 40; width: min(28rem, calc(100vw - 32px)); color: var(--ink); font-size: var(--fs-sm); }
+.undo-toasts[hidden] { display: none; }
+.undo-toasts:popover-open { display: block; }
+.undo-toasts .ut-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.undo-toasts .ut { display: flex; align-items: center; gap: var(--sp-2); min-height: 44px; box-sizing: border-box; padding: 6px 6px 6px var(--sp-4); background: var(--ut-bg); color: var(--ut-fg); border: 1px solid var(--ut-line); border-radius: var(--r-md); box-shadow: var(--shadow-lg); animation: ut-in 180ms var(--ease); }
+.undo-toasts .ut-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.undo-toasts .ut-undo { flex: none; min-height: 0; height: 30px; padding: 0 12px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--focus-chrome); font: inherit; font-weight: 700; cursor: pointer; }
+.undo-toasts .ut-undo:hover { background: color-mix(in srgb, var(--ut-fg) 12%, transparent); }
+.undo-toasts .ut-close { flex: none; display: grid; place-items: center; width: 30px; height: 30px; min-height: 0; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: inherit; cursor: pointer; }
+.undo-toasts .ut-close svg { width: 16px; height: 16px; }
+.undo-toasts .ut-close:hover { background: color-mix(in srgb, var(--ut-fg) 12%, transparent); }
+.undo-toasts :focus-visible { outline: 2px solid var(--focus-chrome); outline-offset: 2px; }
+@keyframes ut-in { from { opacity: 0; translate: 0 8px; } }
+/* Dark: a raised dark surface (the light-on-dark toast stays readable, Undo keeps its AA contrast). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .undo-toasts { --ut-bg: var(--surface-3); --ut-fg: var(--ink); --ut-line: var(--line-strong); }
+}
+:root[data-theme='dark'] .undo-toasts { --ut-bg: var(--surface-3); --ut-fg: var(--ink); --ut-line: var(--line-strong); }
+/* Narrow window: above the bottom rail. */
+@media (max-width: 720px) { .undo-toasts { bottom: calc(56px + 16px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .undo-toasts .ut { animation: none; }
+}

@@ -48,8 +48,16 @@ for (const scheme of ['light', 'dark'] as const) {
     await signIn(page);
     await control('config', { update: UPDATE });
     await app(page).check();
+    // UX batch 7 (UXA-22): the offer is a pill in the title bar; the card opens from it, nothing above the task list.
+    await expect(page.locator('#app #update')).toHaveCount(0);
+    const pill = page.locator('#tb-update');
+    await expect(pill).toHaveAccessibleName('Update to version 99.0.0');
+    await expect(pill).toHaveAttribute('aria-expanded', 'false');
+    await pill.click();
+    await expect(pill).toHaveAttribute('aria-expanded', 'true');
     const card = page.locator('#update');
     await expect(card).toBeVisible();
+    await expect(page.locator('#update-now')).toBeFocused();
     await expect(card.getByRole('heading', { name: 'Version 99.0.0 is available' })).toBeVisible();
     await expect(card.locator('img.mascot')).toBeVisible();
     // Non-blocking: the task list stays usable.
@@ -75,6 +83,7 @@ test('a running timer is never interrupted without asking: "After I stop"', asyn
   await expect(page.locator('#timer-task')).toHaveText('Fix invoice rounding bug');
   await control('config', { update: UPDATE });
   await app(page).check();
+  await page.locator('#tb-update').click();
   await page.locator('#update-now').click();
   await expect(page.locator('#update-running')).toContainText('A timer is running on Fix invoice rounding bug.');
   await expect(page.locator('#update-after-stop')).toBeFocused();
@@ -82,6 +91,11 @@ test('a running timer is never interrupted without asking: "After I stop"', asyn
   await page.keyboard.press('Enter');
   await expect(page.locator('#update-waiting')).toHaveText('Beacon Desktop will update when you stop the timer.');
   expect(await app(page).installed()).toBe(0);
+  await expect(page.locator('#tb-update')).toHaveText('Update after stop');
+  // Light dismiss: the panel closes, the pill keeps the pending update.
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#update-pop')).toBeHidden();
+  await expect(page.locator('#tb-update')).toBeFocused();
   await page.locator('#stop').click();
   await expect(page.locator('#timer')).toContainText('Not tracking');
   await expect.poll(() => app(page).installed()).toBe(1);

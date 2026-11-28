@@ -10,7 +10,7 @@ import { Composer, insertListItem, wrapSelection } from '../../src/chat/composer
 import { inlineTokens, markdownBlocks, safeLinkUrl } from '../../src/chat/markdown';
 import { placeActions } from '../../src/chat/module';
 import { chatText } from '../../src/chat/i18n';
-import { AUTO_RETRIES, ChatOutbox, type OutboxEvents, refusalOf, toggled, waitFor } from '../../src/chat/outbox';
+import { AUTO_RETRIES, ChatOutbox, type OutboxEvents, QUEUE_PROBE_MIN_MS, refusalOf, toggled, unreachable, waitFor } from '../../src/chat/outbox';
 import { ChatSync, RateLimited, type SyncClock, type SyncEvents } from '../../src/chat/sync';
 import { DEFAULT_QUICK, isEmoji, type Message, parseConversation, parseMe, parseReactions, parseWritten, writeAccess } from '../../src/chat/types';
 import { runDeviceFlow } from '../../src/lib/deviceFlow';
@@ -333,7 +333,7 @@ function outboxFor() {
   const fake = stub();
   const syncEvents: SyncEvents = { changed: vi.fn(), arrived: vi.fn(), unauthorized: vi.fn(), status: vi.fn() };
   const sync = new ChatSync(fake.api as unknown as ChatApi, syncEvents, clock);
-  const events = { changed: vi.fn(), sent: vi.fn(), failed: vi.fn(), reactionFailed: vi.fn() } satisfies OutboxEvents;
+  const events = { changed: vi.fn(), sent: vi.fn(), failed: vi.fn(), queued: vi.fn(), reactionFailed: vi.fn() } satisfies OutboxEvents;
   const outbox = new ChatOutbox(sync, events, clock);
   return { clock, sync, outbox, events, syncEvents, ...fake };
 }
@@ -365,21 +365,123 @@ describe('outbox', () => {
     expect(ChatOutbox.view(pending, person).id).toBe(101);
   });
 
-  it('retries a lost send with the same key, and only when it may', async () => {
-    ctx.failures.push(new ApiError(0, 'network_error', 'offline'));
+  it('queues a lost send (offline queue, UXA-6) and sends it once on reconnect with the same key', async () => {
+    const offline = new ApiError(0, 'network_error', 'offline');
+    ctx.failures.push(offline);
     const pending = ctx.outbox.send(ENVELOPE, null, 'Hi');
     await settle();
-    expect(pending).toMatchObject({ state: 'failed', error: 'network_error', canRetry: true });
-    expect(ctx.events.failed).toHaveBeenCalledOnce();
+    expect(pending).toMatchObject({ state: 'queued', error: 'network_error' });
+    expect(ctx.events.failed).not.toHaveBeenCalled();
+    expect(ctx.events.queued).toHaveBeenCalledOnce();
+    expect(ctx.outbox.queuedCount()).toBe(1);
     expect(ctx.outbox.discard('unknown')).toBeNull();
+    // The sync says offline: nothing is attempted until the connection is back (or the probe, or Try now).
+    ctx.outbox.setOnline(false);
+    ctx.failures.push(offline);
     ctx.outbox.retry(pending.key);
+    // A probe in flight keeps "Waiting for connection" and cannot be cancelled (it may be written).
+    expect(pending.state).toBe('queued');
+    expect(ctx.outbox.discard(pending.key)).toBeNull();
+    await settle();
+    expect(pending).toMatchObject({ state: 'queued', error: 'network_error' });
+    ctx.outbox.setOnline(true);
     await settle();
     await settle();
-    expect(ctx.calls.map((call) => call.key)).toEqual([pending.key, pending.key]);
+    expect(ctx.calls.map((call) => call.key)).toEqual([pending.key, pending.key, pending.key]);
     expect(ctx.outbox.pending(ENVELOPE, null)).toEqual([]);
-    // Retrying something that is not failed does nothing.
+    expect(ctx.events.queued).toHaveBeenCalledOnce();
+    // Retrying something that is not queued or failed does nothing.
     ctx.outbox.retry(pending.key);
+    expect(ctx.calls).toHaveLength(3);
+  });
+
+  it('keeps the order: a message never overtakes an older one, offline or not, timeline and thread alike', async () => {
+    ctx.outbox.setOnline(false);
+    const first = ctx.outbox.send(ENVELOPE, null, 'One');
+    const reply = ctx.outbox.send(ENVELOPE, UUID(2), 'Two in a thread');
+    const third = ctx.outbox.send(ENVELOPE, null, 'Three');
+    await settle();
+    // Offline: queued at once, no request, one announcement each.
+    expect(ctx.calls).toHaveLength(0);
+    expect([first.state, reply.state, third.state]).toEqual(['queued', 'queued', 'queued']);
+    expect(ctx.events.queued).toHaveBeenCalledTimes(3);
+    ctx.outbox.setOnline(true);
+    for (let i = 0; i < 8; i += 1) await settle();
+    expect(ctx.calls.map((call) => call.text)).toEqual(['One', 'Two in a thread', 'Three']);
+    expect(new Set(ctx.calls.map((call) => call.key)).size).toBe(3);
+  });
+
+  it('a lost message holds the next one back until it goes; the probe retries on its own with a growing wait', async () => {
+    ctx.failures.push(new ApiError(0, 'network_error', 'offline'), new ApiError(503, 'server_error', 'down'));
+    const first = ctx.outbox.send(ENVELOPE, null, 'One');
+    await settle();
+    // The sync reports the lost connection (its status event) before the person writes again.
+    ctx.outbox.setOnline(false);
+    const second = ctx.outbox.send(ENVELOPE, null, 'Two');
+    await settle();
+    expect(first.state).toBe('queued');
+    // Written offline: waits for the connection behind the first one, no request of its own.
+    expect(second).toMatchObject({ state: 'queued', error: 'network_error' });
+    expect(ctx.outbox.waitingCount()).toBe(2);
+    expect(ctx.calls.map((call) => call.text)).toEqual(['One']);
+    ctx.clock.advance(QUEUE_PROBE_MIN_MS);
+    await settle();
+    // The probe tried again (a 503 this time): still queued, now as a server error, never "failed".
+    expect(ctx.calls.map((call) => call.text)).toEqual(['One', 'One']);
+    expect(first).toMatchObject({ state: 'queued', error: 'server_error' });
+    ctx.clock.advance(QUEUE_PROBE_MIN_MS);
+    await settle();
     expect(ctx.calls).toHaveLength(2);
+    ctx.clock.advance(QUEUE_PROBE_MIN_MS);
+    for (let i = 0; i < 8; i += 1) await settle();
+    expect(ctx.calls.map((call) => call.text)).toEqual(['One', 'One', 'One', 'Two']);
+    expect(ctx.calls[0].key).toBe(ctx.calls[2].key);
+    expect(ctx.outbox.queuedCount()).toBe(0);
+  });
+
+  it('never has two attempts of one message in flight: a reconnect during a send does not send it again', async () => {
+    let release: () => void = () => undefined;
+    const send = ctx.api.send;
+    ctx.api.send = async (uuid: string, text: string, key: string) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return send(uuid, text, key);
+    };
+    const pending = ctx.outbox.send(ENVELOPE, null, 'Slow');
+    expect(pending.state).toBe('sending');
+    ctx.outbox.setOnline(false);
+    ctx.outbox.setOnline(true);
+    ctx.outbox.retry(pending.key);
+    release();
+    for (let i = 0; i < 6; i += 1) await settle();
+    expect(ctx.calls).toHaveLength(1);
+  });
+
+  it('cancels a queued message (the next one goes), and a refusal at the head does not block the others', async () => {
+    ctx.outbox.setOnline(false);
+    const first = ctx.outbox.send(ENVELOPE, null, 'Cancel me');
+    const second = ctx.outbox.send(ENVELOPE, null, 'Refused');
+    const third = ctx.outbox.send(ENVELOPE, null, 'Fine');
+    expect(ctx.outbox.discard(first.key)?.text).toBe('Cancel me');
+    ctx.failures.push(new ApiError(422, 'text_too_long', 'long'));
+    ctx.outbox.setOnline(true);
+    for (let i = 0; i < 8; i += 1) await settle();
+    expect(second).toMatchObject({ state: 'failed', canRetry: false, error: 'text_too_long' });
+    expect(ctx.calls.map((call) => call.text)).toEqual(['Refused', 'Fine']);
+    expect(third.state).not.toBe('queued');
+    // A context switch (clear) forgets the queue: memory only, never on disk.
+    ctx.outbox.setOnline(false);
+    ctx.outbox.send(ENVELOPE, null, 'Gone');
+    ctx.outbox.clear();
+    expect(ctx.outbox.queuedCount()).toBe(0);
+  });
+
+  it('classifies what waits for the connection', () => {
+    expect(unreachable(new ApiError(0, 'network_error', 'x'))).toBe('network_error');
+    expect(unreachable(new ApiError(502, 'server_error', 'x'))).toBe('server_error');
+    expect(unreachable(new ApiError(0, 'invalid_uuid', 'x'))).toBeNull();
+    expect(unreachable(new ApiError(422, 'text_too_long', 'x'))).toBeNull();
+    expect(unreachable(new RateLimited(1))).toBeNull();
+    expect(unreachable(new Error('boom'))).toBeNull();
   });
 
   it('waits after a 429 or a 409 and retries on its own with the same key, then gives up', async () => {
@@ -608,5 +710,87 @@ describe('composer', () => {
     wrapSelection(field, '**', '**', 'x');
     expect(field.value).toBe('a**b**c');
     expect([field.selectionStart, field.selectionEnd]).toEqual([3, 4]);
+  });
+});
+
+describe('outbox: undo of a discard (UX batch 4, UXA-8)', () => {
+  let ctx: ReturnType<typeof outboxFor>;
+  beforeEach(async () => {
+    ctx = outboxFor();
+    await ctx.sync.start();
+    await ctx.sync.open(ENVELOPE);
+  });
+
+  it('a cancelled queued message comes back where it stood, with its key, and goes out once in order', async () => {
+    ctx.outbox.setOnline(false);
+    const first = ctx.outbox.send(ENVELOPE, null, 'One');
+    const second = ctx.outbox.send(ENVELOPE, null, 'Two');
+    const point = ctx.outbox.undoPoint(first);
+    expect(ctx.outbox.discard(first.key)).toBe(first);
+    expect(ctx.outbox.pending(ENVELOPE, null)).toEqual([second]);
+    expect(ctx.outbox.restore(first, point)).toBe(true);
+    expect(ctx.outbox.pending(ENVELOPE, null)).toEqual([first, second]);
+    expect(first).toMatchObject({ state: 'queued', error: 'network_error' });
+    // Restoring twice does nothing.
+    expect(ctx.outbox.restore(first, point)).toBe(false);
+    ctx.outbox.setOnline(true);
+    for (let i = 0; i < 8; i += 1) await settle();
+    expect(ctx.calls.map((call) => [call.text, call.key])).toEqual([
+      ['One', first.key],
+      ['Two', second.key],
+    ]);
+  });
+
+  it('BDA14-L2: comes back before a newer message of its conversation even when an earlier item left meanwhile', async () => {
+    ctx.outbox.setOnline(false);
+    const other = ctx.outbox.send(INCIDENTS, null, 'Elsewhere');
+    const first = ctx.outbox.send(ENVELOPE, null, 'One');
+    const second = ctx.outbox.send(ENVELOPE, null, 'Two');
+    const point = ctx.outbox.undoPoint(first);
+    expect(ctx.outbox.discard(first.key)).toBe(first);
+    // The item before it goes too: a position-based restore would now put it behind "Two".
+    expect(ctx.outbox.discard(other.key)).toBe(other);
+    expect(ctx.outbox.restore(first, point)).toBe(true);
+    expect(ctx.outbox.pending(ENVELOPE, null)).toEqual([first, second]);
+    expect(first.state).toBe('queued');
+    ctx.outbox.setOnline(true);
+    for (let i = 0; i < 8; i += 1) await settle();
+    expect(ctx.calls.map((call) => [call.text, call.key])).toEqual([
+      ['One', first.key],
+      ['Two', second.key],
+    ]);
+  });
+
+  it('never overtakes: a newer message sent meanwhile brings it back as not sent, with Retry', async () => {
+    ctx.outbox.setOnline(false);
+    const first = ctx.outbox.send(ENVELOPE, null, 'One');
+    const second = ctx.outbox.send(ENVELOPE, null, 'Two');
+    const point = ctx.outbox.undoPoint(first);
+    ctx.outbox.discard(first.key);
+    ctx.outbox.setOnline(true);
+    for (let i = 0; i < 6; i += 1) await settle();
+    expect(second.state).toBe('sent');
+    expect(ctx.outbox.restore(first, point)).toBe(true);
+    expect(first).toMatchObject({ state: 'failed', canRetry: true });
+    await settle();
+    expect(ctx.calls.map((call) => call.text)).toEqual(['Two']);
+  });
+
+  it('a failed message comes back failed (nothing sent); nothing comes back after a context switch', async () => {
+    ctx.failures.push(new ApiError(422, 'text_too_long', 'too long'));
+    const refused = ctx.outbox.send(ENVELOPE, null, 'Too long');
+    await settle();
+    await settle();
+    expect(refused).toMatchObject({ state: 'failed', canRetry: false });
+    const point = ctx.outbox.undoPoint(refused);
+    ctx.outbox.discard(refused.key);
+    expect(ctx.outbox.restore(refused, point)).toBe(true);
+    expect(refused).toMatchObject({ state: 'failed', canRetry: false, error: 'text_too_long' });
+    expect(ctx.calls).toHaveLength(1);
+    const again = ctx.outbox.undoPoint(refused);
+    ctx.outbox.discard(refused.key);
+    ctx.outbox.clear();
+    expect(ctx.outbox.restore(refused, again)).toBe(false);
+    expect(ctx.outbox.pending(ENVELOPE, null)).toEqual([]);
   });
 });

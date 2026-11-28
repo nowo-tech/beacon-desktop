@@ -27,6 +27,7 @@ mod tray_clock;
 
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::image::Image;
@@ -105,6 +106,9 @@ struct TrayMenuSpec {
     /// "Resume chat notifications" (`pause-chat` / `resume-chat`); absent from older UIs and while chat is off.
     #[serde(default)]
     chat: Vec<TrayMenuItem>,
+    /// Tasks (UX batch 7, UXA-41): "Quick add task…" (`quick-add-task`); absent from older UIs and while tasks are off.
+    #[serde(default)]
+    tasks: Vec<TrayMenuItem>,
     open_beacon: Option<String>,
     my_time: Option<String>,
     /// "Check for updates" (absent in the Microsoft Store build, where the Store updates the app).
@@ -177,6 +181,7 @@ fn tray_action_allowed(id: &str) -> bool {
             | "open-chat"
             | "pause-chat"
             | "resume-chat"
+            | "quick-add-task"
     ) || (id.starts_with("switch:") && id.len() > 7 && id.len() <= 200)
         || tray_meeting_id(id)
 }
@@ -265,6 +270,31 @@ fn unread_variant(base: &Image<'_>) -> Image<'static> {
         }
     }
     Image::new_owned(rgba, width, height)
+}
+
+/// Messages waiting in the chat's offline send queue (BDA14-L3), as the UI last reported them with `set_quit_guard`.
+/// The tray's *Quit* asks first while any wait (closing the window only hides it to the tray, so *Quit* is the real end).
+static UNSENT_MESSAGES: AtomicU32 = AtomicU32::new(0);
+
+/// Whether *Quit* asks before it ends the app (BDA14-L3).
+fn quit_needs_question(unsent: u32) -> bool {
+    unsent > 0
+}
+
+/// The number of messages still waiting to send (BDA14-L3): only a count, never their text.
+#[tauri::command]
+fn set_quit_guard(window: tauri::Window, count: u32) -> Result<(), String> {
+    only_from(&window, "main")?;
+    UNSENT_MESSAGES.store(count, Ordering::Relaxed);
+    Ok(())
+}
+
+/// *Quit* confirmed in the UI (BDA14-L3: the person chose to discard the waiting messages).
+#[tauri::command]
+fn quit_app(app: AppHandle, window: tauri::Window) -> Result<(), String> {
+    only_from(&window, "main")?;
+    app.exit(0);
+    Ok(())
 }
 
 /// Clamps the unread count the UI sends to what a badge shows (`None` hides it).
@@ -366,7 +396,7 @@ fn set_tray_status(
 }
 
 /// Rebuilds the tray menu with the UI's translated labels and quick tasks:
-/// status · Stop / Resume · Switch to ▸ · Search task… · — · Open Beacon Desktop · Full / Compact view · Open Beacon · My time · — · Pause friendly
+/// status · Stop / Resume · Switch to ▸ · Search task… · — · Open Beacon Desktop · Open chat · Quick add task… · Full / Compact view · Open Beacon · My time · — · Pause friendly
 /// messages 1 h · Check for updates… · Settings… · Quit.
 #[tauri::command]
 fn set_tray_menu(app: AppHandle, window: tauri::Window, menu: TrayMenuSpec) -> Result<(), String> {
@@ -433,6 +463,18 @@ fn set_tray_menu(app: AppHandle, window: tauri::Window, menu: TrayMenuSpec) -> R
         .into_iter()
         .filter(|item| matches!(item.id.as_str(), "open-chat" | "pause-chat" | "resume-chat"))
         .take(2)
+    {
+        built
+            .append(
+                &MenuItem::with_id(&app, item.id, menu_label(&item.label), true, None::<&str>)
+                    .map_err(err)?,
+            )
+            .map_err(err)?;
+    }
+    if let Some(item) = menu
+        .tasks
+        .into_iter()
+        .find(|item| item.id == "quick-add-task")
     {
         built
             .append(
@@ -1085,7 +1127,16 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             let id = event.id.as_ref();
             match id {
                 "open" => show_main(app),
-                "quit" => app.exit(0),
+                "quit" => {
+                    // BDA14-L3: messages still waiting in the chat's offline queue (memory only) would be lost; the UI
+                    // asks first and quits with `quit_app`. Nothing waiting: quit at once, as before.
+                    if quit_needs_question(UNSENT_MESSAGES.load(Ordering::Relaxed)) {
+                        show_main(app);
+                        let _ = app.emit("quit-request", ());
+                    } else {
+                        app.exit(0);
+                    }
+                }
                 _ if tray_action_allowed(id) => {
                     // A meeting of *Today* opens the window too (its *Join* button and the list are there).
                     if matches!(
@@ -1096,6 +1147,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                             | "layout-full"
                             | "layout-compact"
                             | "open-chat"
+                            | "quick-add-task"
                     ) || tray_meeting_id(id)
                     {
                         show_main(app);
@@ -1157,6 +1209,43 @@ pub(crate) fn internal_navigation(url: &url::Url) -> bool {
     }
 }
 
+/// Environment variable that keeps the system title bar on Windows and Linux (`1`, `true` or `yes`). The fallback for
+/// desktops where an undecorated window misbehaves (some Wayland compositors without server-side decorations, tiling
+/// window managers that draw their own frames); see `docs/design/BEACON_DESKTOP.md` §5.1.
+pub(crate) const SYSTEM_TITLEBAR_ENV: &str = "BEACON_DESKTOP_SYSTEM_TITLEBAR";
+
+/// Who draws the main window's title bar (UX batch 7, UXA-45, owner approval 2026-11-27).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Chrome {
+    /// Windows / Linux: no system frame; the app's own title bar is the drag region and draws minimise, maximise and
+    /// close (`src/shell/windowControls.ts`).
+    Custom,
+    /// macOS: the system title bar overlays the app's (`TitleBarStyle::Overlay`), traffic lights inset.
+    Overlay,
+    /// The system title bar above the app's (the fallback, `BEACON_DESKTOP_SYSTEM_TITLEBAR=1`).
+    Native,
+}
+
+/// The chrome for an OS (`std::env::consts::OS`) and the fallback variable's value.
+pub(crate) fn chrome_for(os: &str, system_titlebar: Option<&str>) -> Chrome {
+    if os == "macos" {
+        return Chrome::Overlay;
+    }
+    let fallback = system_titlebar
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
+        .unwrap_or(false);
+    if fallback {
+        Chrome::Native
+    } else {
+        Chrome::Custom
+    }
+}
+
 /// The main window (tauri.conf.json, `create: false`), built here so that no link ever opens inside the app or in a
 /// browser the person did not choose: a navigation away from the app or a new window (`target=_blank`,
 /// `window.open`) is refused and its https URL is handed to the UI (`open-external`), which opens it through
@@ -1174,7 +1263,25 @@ fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
     };
     let to_ui = app.clone();
     let to_ui_new = app.clone();
-    tauri::WebviewWindowBuilder::from_config(app, &config)?
+    let chrome = chrome_for(
+        std::env::consts::OS,
+        std::env::var(SYSTEM_TITLEBAR_ENV).ok().as_deref(),
+    );
+    let builder = tauri::WebviewWindowBuilder::from_config(app, &config)?;
+    // The UI reads the result back (`isDecorated`, core:window:default) and draws its own buttons only when the window
+    // has no system frame.
+    #[cfg(target_os = "macos")]
+    let builder = match chrome {
+        Chrome::Overlay => builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            // Centred in the app's 44 px title bar (`.titlebar` keeps 76 px free on the left, src/chat/chat.css).
+            .traffic_light_position(tauri::LogicalPosition::new(16.0, 16.0)),
+        _ => builder,
+    };
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.decorations(chrome == Chrome::Native);
+    builder
         .on_navigation(move |url| {
             if internal_navigation(url) {
                 return true;
@@ -1355,6 +1462,8 @@ pub fn run() {
             realtime::chat_realtime_start,
             realtime::chat_realtime_stop,
             set_unread_badge,
+            set_quit_guard,
+            quit_app,
             idle_seconds,
             set_tray_status,
             set_tray_menu,
@@ -1453,7 +1562,7 @@ mod tests {
         declared.sort();
         assert_eq!(both, declared);
         // The same list as `generate_handler!`.
-        let source = include_str!("lib.rs");
+        let source = include_str!("lib.rs").replace("\r\n", "\n"); // Windows checkouts may have CRLF
         let start = source.find("generate_handler![").unwrap();
         let end = start + source[start..].find(']').unwrap();
         let mut registered: Vec<&str> = source[start + 18..end]
@@ -1504,7 +1613,7 @@ mod tests {
     /// One tray icon per process: built in one place, guarded, and the webview cannot create another one.
     #[test]
     fn the_tray_icon_is_created_once() {
-        let source = include_str!("lib.rs");
+        let source = include_str!("lib.rs").replace("\r\n", "\n"); // Windows checkouts may have CRLF
         let builder = ["TrayIcon", "Builder::"].concat();
         assert_eq!(source.matches(&builder).count(), 1, "one tray builder");
         let calls = ["build_tray", "(app)?"].concat();
@@ -1532,10 +1641,54 @@ mod tests {
     /// The single-instance plugin comes first, before any plugin that could start something.
     #[test]
     fn single_instance_is_the_first_plugin() {
-        let source = include_str!("lib.rs");
+        let source = include_str!("lib.rs").replace("\r\n", "\n"); // Windows checkouts may have CRLF
         let run = source.find("pub fn run()").unwrap();
         let first = run + source[run..].find(".plugin(").unwrap();
         assert!(source[first..].starts_with(".plugin(tauri_plugin_single_instance::init("));
+    }
+
+    #[test]
+    fn window_chrome_per_os_and_the_system_title_bar_fallback() {
+        assert_eq!(chrome_for("macos", None), Chrome::Overlay);
+        // macOS keeps the overlay: the traffic lights are the system's own.
+        assert_eq!(chrome_for("macos", Some("1")), Chrome::Overlay);
+        for os in ["windows", "linux"] {
+            assert_eq!(chrome_for(os, None), Chrome::Custom, "{os}");
+            assert_eq!(chrome_for(os, Some("")), Chrome::Custom, "{os}");
+            assert_eq!(chrome_for(os, Some("0")), Chrome::Custom, "{os}");
+            assert_eq!(chrome_for(os, Some("no")), Chrome::Custom, "{os}");
+            for on in ["1", "true", "TRUE", " yes "] {
+                assert_eq!(chrome_for(os, Some(on)), Chrome::Native, "{os} {on}");
+            }
+        }
+    }
+
+    /// The custom title bar needs exactly these window permissions, on the main window only (SECURITY.md).
+    #[test]
+    fn window_chrome_permissions_are_main_only() {
+        let main = granted(include_str!("../capabilities/default.json"));
+        for permission in [
+            "core:window:allow-start-dragging",
+            "core:window:allow-minimize",
+            "core:window:allow-toggle-maximize",
+            "core:window:allow-close",
+        ] {
+            assert!(main.contains(&permission.to_string()), "{permission}");
+        }
+        for capability in [
+            include_str!("../capabilities/prompt.json"),
+            include_str!("../capabilities/mini.json"),
+        ] {
+            assert!(granted(capability)
+                .iter()
+                .all(|p| !p.starts_with("core:window:")));
+        }
+        // Closing the main window still only hides it (the tray keeps the app); never destroy.
+        assert!(!main.contains(&"core:window:allow-destroy".to_string()));
+        let source = include_str!("lib.rs").replace("\r\n", "\n"); // Windows checkouts may have CRLF
+        assert!(source.contains(
+            "WindowEvent::CloseRequested { api, .. } if window.label() == \"main\" => {\n                api.prevent_close();"
+        ));
     }
 
     #[test]
@@ -1583,6 +1736,7 @@ mod tests {
             "open-chat",
             "pause-chat",
             "resume-chat",
+            "quick-add-task",
             "switch:T-1",
             "meeting:0123456789abcdef",
         ] {
@@ -1629,6 +1783,19 @@ mod tests {
         assert_eq!(badge_count(0), None);
         assert_eq!(badge_count(3), Some(3));
         assert_eq!(badge_count(u32::MAX), Some(9999));
+    }
+
+    #[test]
+    fn quit_asks_only_while_messages_wait_to_send() {
+        assert!(!quit_needs_question(0));
+        assert!(quit_needs_question(1));
+        assert!(quit_needs_question(u32::MAX));
+        // "quit" stays native (never a webview tray action): only the confirmed `quit_app` command ends the app.
+        assert!(!tray_action_allowed("quit"));
+        assert!(app_commands::MAIN_COMMANDS.contains(&"set_quit_guard"));
+        assert!(app_commands::MAIN_COMMANDS.contains(&"quit_app"));
+        assert!(!app_commands::MINI_COMMANDS.contains(&"quit_app"));
+        assert!(!app_commands::PROMPT_COMMANDS.contains(&"quit_app"));
     }
 
     #[test]

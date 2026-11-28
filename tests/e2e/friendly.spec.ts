@@ -53,7 +53,7 @@ for (const scheme of ['light', 'dark'] as const) {
     expect(violations.map((v) => `${v.id} ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
     await page.locator('#cheer-dismiss').click();
     await expect(card).toHaveCount(0);
-    await page.locator('#open-settings').click();
+    await page.locator('#rail-settings').click();
     await page.locator('#settings-tab-notifications').click();
     await expect(page.getByLabel('Fun messages from the robot')).toBeChecked();
     await expect(page.getByLabel('Wellbeing reminders')).toBeChecked();

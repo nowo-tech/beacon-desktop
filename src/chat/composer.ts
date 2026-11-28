@@ -107,6 +107,9 @@ export class Composer {
       this.submit();
     });
     this.field.addEventListener('input', () => this.update());
+    // A long text scrolls under the formatting toolbar: a top shadow says there is more above (UXA-39). A textarea has
+    // no pseudo-elements for a scroll-state query, so its own scroll position drives the class.
+    this.field.addEventListener('scroll', () => this.markScrolled(), { passive: true });
     this.field.addEventListener('keydown', (event) => this.onKey(event));
     this.root = h('div', { class: 'composer-wrap' }, this.form);
     this.update(false);
@@ -181,7 +184,12 @@ export class Composer {
       this.field.style.height = 'auto';
       this.field.style.height = `${Math.min(this.field.scrollHeight, 180)}px`;
     }
+    this.markScrolled();
     if (draft) this.options.onDraft(this.field.value);
+  }
+
+  private markScrolled(): void {
+    this.form.classList.toggle('scrolled', this.field.scrollTop > 0);
   }
 }
 

@@ -69,6 +69,8 @@ export class ChatSync {
   visible = false;
   live = false;
   private pausedUntil = 0;
+  /** A `429` was the last answer: the next answer says "ok" again (UX batch 4: a stale pause no longer stays). */
+  private limited = false;
   private failures = 0;
   private stamps: number[] = [];
   private pollTimer: unknown = null;
@@ -114,6 +116,11 @@ export class ChatSync {
     this.threadRoot = null;
   }
 
+  /** When a `Retry-After` pause ends (the clock's milliseconds; in the past when none runs). */
+  get resumeAt(): number {
+    return this.pausedUntil;
+  }
+
   setLive(live: boolean): void {
     if (this.live === live) return;
     this.live = live;
@@ -137,8 +144,9 @@ export class ChatSync {
     this.stamps.push(now);
     try {
       const result = await work();
-      if (this.failures > 0) this.events.status('ok');
+      if (this.failures > 0 || this.limited) this.events.status('ok');
       this.failures = 0;
+      this.limited = false;
       return result;
     } catch (error) {
       if (error instanceof ApiError) {
@@ -147,6 +155,7 @@ export class ChatSync {
           this.events.unauthorized();
         } else if (error.status === 429) {
           this.pausedUntil = this.clock.now() + (error.retryAfter ?? 60) * 1000;
+          this.limited = true;
           this.events.status('limited');
         } else if (error.isNetwork || error.status >= 500) {
           this.failures += 1;
@@ -217,6 +226,20 @@ export class ChatSync {
       if (!this.current(generation)) return;
       this.store.applyMessages(uuid, page, 'newest');
       if (this.openUuid === uuid) this.events.changed('messages');
+    });
+  }
+
+  /**
+   * Loads the newest page of a conversation that is not open, when nothing of it is loaded yet (chat home view: the
+   * mentions of unread conversations). No event: the caller redraws what it shows.
+   */
+  async peek(uuid: string): Promise<void> {
+    if (this.store.timeline(uuid) !== null) return;
+    const generation = this.generation;
+    await this.once(`open:${uuid}`, async () => {
+      const page = await this.call(() => this.api.messages(uuid, { limit: PAGE_SIZE }));
+      if (!this.current(generation) || this.store.conversation(uuid) === null) return;
+      this.store.applyMessages(uuid, page, 'newest');
     });
   }
 

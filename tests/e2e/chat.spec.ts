@@ -82,7 +82,11 @@ test('connect chat, read a conversation and its thread, keyboard-first, no a11y 
   // Esc marks read and leaves the conversation.
   await page.locator('#msg-scroll').focus();
   await page.keyboard.press('Escape');
-  await expect(page.locator('.empty')).toContainText('Pick a conversation');
+  // The home view replaces "Pick a conversation" (UX batch 5): unread, mentions, recent; one tab stop, ↑ ↓.
+  await expect(page.locator('#chat-home h1')).toHaveText('Home');
+  await expect(page.locator('#chat-home .hm-h')).toContainText(['Unread', 'Mentions', 'Recent']);
+  await expect(page.locator('#chat-home .hm-row.mention').first()).toContainText('Maya Okafor in envelope-v2');
+  expect(await axe(page)).toEqual([]);
   // The shortcut sheet.
   await page.keyboard.press('?');
   await expect(page.locator('#shell-keys')).toBeVisible();
@@ -105,7 +109,13 @@ test('disconnect chat keeps time signed in; sign-out ends both', async ({ page }
   await signIn(page);
   await connectChat(page);
   await page.locator('#rail-settings').click();
+  // UX batch 6: Disconnect lives in Account and asks first (Cancel is the default).
+  await page.locator('#settings-tab-account').click();
   await page.locator('#chat-disconnect').click();
+  await expect(page.locator('#confirm-cancel')).toBeFocused();
+  await page.locator('#confirm-ok').click();
+  await expect(page.locator('#account-chat-connect')).toBeVisible();
+  await page.locator('#settings-tab-chat').click();
   await expect(page.locator('#settings-chat-connect')).toHaveText('Connect chat');
   await page.keyboard.press('Escape');
   await expect(page.locator('#chat-connect')).toBeVisible();

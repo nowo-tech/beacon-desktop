@@ -22,9 +22,15 @@ Only the latest release receives fixes. The server can force an update with `min
     again), and Rust sets `Authorization` only on requests to that origin (`beacon_fetch`, the update check, the
     updater). A keychain that cannot be read refuses the binding. A 0.5.1 entry, which has no origin, adopts the server
     of the first start-up after the upgrade (trust on first use, the trust 0.5.1 already gave it).
-  - Rust keeps a token only from the `device/token` answer of a sign-in the person confirmed: `sign_in_begin` (signed
-    out only) shows a native dialog, "Sign in to <host>?" with the full host (IDN hosts as `xn--…`), that the webview
-    cannot answer. **Cancel** is the first, default button (Enter declines; Esc and closing decline too), any host
+  - **One server** (owner decision 2026-11-27): release builds bind https://beacon.nowo.tech only
+    (`net::validate_server_url` in `beacon_bind` and `sign_in_begin`; any other origin is refused with
+    `beacon_server_fixed`), and the UI has no address field. Its TLS keys are always pinned. A sign-in to it starts
+    without the native question below: the host is fixed, so the question added nothing. Debug builds may bind
+    another server (the mock, a staging host); only there is the question asked, and only for a host other than
+    beacon.nowo.tech.
+  - Rust keeps a token only from the `device/token` answer of a sign-in Rust started: for a debug build's override
+    host, `sign_in_begin` (signed out only) shows a native dialog, "Sign in to <host>?" with the full host (IDN hosts
+    as `xn--…`), that the webview cannot answer. **Cancel** is the first, default button (Enter declines; Esc and closing decline too), any host
     other than the official one gets the line "This is not beacon.nowo.tech", the dialog is only shown while the main
     window is focused and there was keyboard or mouse input in the last 30 seconds (otherwise it is refused unseen,
     `sign_in_not_present`, without starting a pause; where the OS cannot report idle time, as on some Wayland
@@ -52,9 +58,10 @@ Only the latest release receives fixes. The server can force an update with `min
     - make authenticated requests to the signed-in server while the app runs (any GET / POST the token's scopes
       allow, `export` included; with a chat token approved for sending, chat writes: messages, thread replies and reactions, never edits or deletes), and send the **data** it reads elsewhere, for example in an https URL given to
       `open_external`;
-    - sign you out (`secret_delete`) and start a sign-in to a server of its choice (`sign_in_begin`). That needs you
-      to press **Sign in** in the native "Sign in to <host>?" dialog showing that host, and any stored sign-in is
-      announced by an OS notification naming the server. If you see a dialog or a notification you did not expect,
+    - sign you out (`secret_delete`) and start a sign-in (`sign_in_begin`): in a release build only to
+      https://beacon.nowo.tech, and a sign-in still needs your approval of the code in Beacon in your browser; any
+      stored sign-in is announced by an OS notification naming the server. (In a debug build, another server also
+      needs **Sign in** in the native "Sign in to <host>?" dialog.) If you see a dialog or a notification you did not expect,
       press **Cancel**, or sign out and revoke the device in Beacon.
 
     It cannot read the token or get it sent to another server.
@@ -67,7 +74,8 @@ Only the latest release receives fixes. The server can force an update with `min
   `Authorization` header never leaves that origin, and switching to another server needs a sign-out first
   (`secret_delete` clears the binding). This is defence in depth: script injection into the main webview is already
   prevented by `script-src 'self'` and a text-only DOM.
-- **Trusted roots / self-hosted servers.** Only the Mozilla root store compiled into the app (`webpki-roots`,
+- **Trusted roots / other servers.** Release builds use https://beacon.nowo.tech only (pinned); what follows about
+  other servers applies to debug builds. Only the Mozilla root store compiled into the app (`webpki-roots`,
   CDLA-Permissive-2.0, [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)) is trusted; the OS trust store is not. Self-hosted
   Beacon servers with a certificate from a **private or corporate CA are not supported**, for the API and for the
   updater (which used the OS store before 0.5.1). Certificates must chain to the Mozilla root store. Adding or
@@ -143,6 +151,20 @@ Only the latest release receives fixes. The server can force an update with `min
   `open_chat_link` (`http(s)` / `mailto`, checked again in Rust; `mailto` keeps only `to`, `cc`, `bcc`, `subject`,
   `body`); a reference type becomes a CSS class only when it is a
   known one.
+
+### Window chrome (UX batch 7)
+
+- **Own title bar, four extra window permissions, main window only.** On Windows and Linux the main window has no
+  system frame (`decorations: false`, set in Rust, `chrome_for` in `src-tauri/src/lib.rs`) and the app draws its own
+  title bar; macOS keeps the system's traffic lights over it (`TitleBarStyle::Overlay`). `capabilities/default.json`
+  gains exactly what that bar needs: `core:window:allow-start-dragging` (the `data-tauri-drag-region` bar),
+  `allow-minimize`, `allow-toggle-maximize` (the buttons; the double click uses `allow-internal-toggle-maximize`,
+  already in `core:window:default`) and `allow-close`. Closing still only hides the window to the tray: Rust prevents
+  the close (`WindowEvent::CloseRequested`), and no destroy permission is granted. The prompt and mini windows get no
+  window permission at all (a Rust test checks all of this). The window cannot move or resize itself beyond what it
+  could before (`set_size` / `set_position` for Compact / Full view).
+- **Fallback.** `BEACON_DESKTOP_SYSTEM_TITLEBAR=1` keeps the system title bar on Windows and Linux (an environment
+  variable read once at start-up by Rust; the webview cannot change it).
 
 ## Known limitations
 

@@ -504,6 +504,13 @@ fn spanish(locale: Option<&str>) -> bool {
     locale.is_some_and(|lang| lang.to_ascii_lowercase().starts_with("es"))
 }
 
+/// Whether a sign-in to `server` asks first in the native "Sign in to <host>?" dialog. Owner decision 2026-11-27:
+/// Beacon Desktop always uses the official server, fixed and pinned, so it never asks for it; only a debug build signing
+/// in to another (override) server still asks. A release build binds nothing else (`net::validate_server_url`).
+pub fn sign_in_needs_confirm(server: &url::Url, debug_build: bool) -> bool {
+    debug_build && !crate::net::is_official(server)
+}
+
 /// The dialog texts for `server`. `official` is the official Beacon host of this build (the first host of the shipped
 /// pin set): any other host gets a "This is not <official>" line (GM-D2-2), against look-alikes such as
 /// `beacon.nowo.tech.example`.
@@ -1487,10 +1494,11 @@ pub async fn sign_in_begin(
     use tauri::Manager;
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
     crate::only_from(&window, "main")?;
-    let url = crate::net::validate_url(&server)?;
+    let url = crate::net::validate_server_url(&server)?;
     let session = Arc::clone(&session);
     let pins = crate::pinning::PinSet::shipped();
     let texts = confirm_texts(&url, locale.as_deref(), pins.official_host());
+    let ask = sign_in_needs_confirm(&url, cfg!(debug_assertions));
     // Only for a person at the app (GM-D2-1): read here, in Rust, never from the webview.
     let present = person_at_the_app(
         window.is_focused().unwrap_or(false),
@@ -1498,6 +1506,10 @@ pub async fn sign_in_begin(
     );
     blocking(move || {
         session.begin_sign_in(&url, locale.as_deref(), present, || {
+            // The official server (fixed, pinned): no question, on every sign-in and reconnect alike.
+            if !ask {
+                return true;
+            }
             let mut dialog = app
                 .dialog()
                 .message(texts.body.clone())
@@ -2450,6 +2462,33 @@ pub mod tests {
     }
 
     // GM-D2-2
+    #[test]
+    fn the_official_server_is_never_asked_for() {
+        // Release builds: the official server only, never a dialog.
+        assert!(!sign_in_needs_confirm(
+            &url("https://beacon.nowo.tech"),
+            false
+        ));
+        assert!(!sign_in_needs_confirm(
+            &url("https://beacon.example.com"),
+            false
+        ));
+        // Debug builds: the official server signs in straight away; an override host still asks.
+        assert!(!sign_in_needs_confirm(
+            &url("https://beacon.nowo.tech/"),
+            true
+        ));
+        assert!(sign_in_needs_confirm(&url("http://127.0.0.1:8787"), true));
+        assert!(sign_in_needs_confirm(
+            &url("https://beacon.nowo.tech.example"),
+            true
+        ));
+        assert!(sign_in_needs_confirm(
+            &url("https://beacon.nowo.tech:8443"),
+            true
+        ));
+    }
+
     #[test]
     fn another_host_than_the_official_one_is_named_as_such() {
         let official = PinSetHost::shipped();

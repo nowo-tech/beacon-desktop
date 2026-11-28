@@ -237,6 +237,24 @@ export class ChatStore {
     for (const key of [...this.threads.keys()]) if (key !== root) this.threads.delete(key);
   }
 
+  /**
+   * Recent messages that mention the reader (chat home view, UX batch 5), newest first: from the timelines loaded in
+   * this session only (memory, at most {@link MAX_CACHED} conversations); never the reader's own or deleted ones.
+   * `unread`: after the conversation's read cursor.
+   */
+  mentions(limit = 5): { conversation: Conversation; message: Message; unread: boolean }[] {
+    const found: { conversation: Conversation; message: Message; unread: boolean }[] = [];
+    for (const [uuid, timeline] of this.timelines) {
+      const conversation = this.rows.get(uuid);
+      if (conversation === undefined) continue;
+      for (const message of timeline.messages) {
+        if (!message.mentionsMe || message.mine || message.deleted || message.blocks === null) continue;
+        found.push({ conversation, message, unread: timeline.readUpTo !== null ? message.id > timeline.readUpTo : conversation.unread > 0 });
+      }
+    }
+    return found.sort((a, b) => (a.message.createdAt < b.message.createdAt ? 1 : a.message.createdAt > b.message.createdAt ? -1 : b.message.id - a.message.id)).slice(0, limit);
+  }
+
   dropThreads(): void {
     this.threads.clear();
   }

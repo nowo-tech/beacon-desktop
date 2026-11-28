@@ -3,7 +3,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ApiError, TimeTrackApi } from '../../src/api/client';
 import { isModuleForbidden, TasksApi, TasksApiError } from '../../src/tasks/api';
-import { apiToDateInput, dateInputToApi, dayDiff, dueInfo, duration, groupMine, localDate, parseQuickAdd, priorityLabel, taskRef } from '../../src/tasks/format';
+import { apiToDateInput, dateInputToApi, dayAfter, dayDiff, daysToNextWeek, dueInfo, duration, groupMine, localDate, parseDuration, parseQuickAdd, priorityLabel, taskRef } from '../../src/tasks/format';
 import { tasksText } from '../../src/tasks/i18n';
 import { parseBoard, parseCard, parseChanges, parseColumn, parseComments, parseDetail, parseMe, parsePerson, parseTaskPage, parseText, type TaskCard } from '../../src/tasks/types';
 import { runDeviceFlow } from '../../src/lib/deviceFlow';
@@ -201,6 +201,35 @@ describe('tasks helpers', () => {
     expect(parseQuickAdd('Call @today ~45m !LOW', '2026-11-27')).toEqual({ title: 'Call', priority: 'low', tags: [], dueAt: '2026-11-27T00:00:00Z', estimateMinutes: 45 });
     expect(parseQuickAdd('Email bob@example.com about #1', '2026-11-27')).toMatchObject({ title: 'Email bob@example.com about', tags: ['1'] });
     expect(parseQuickAdd('   ', '2026-11-27').title).toBe('');
+  });
+
+  it('accepts the Spanish quick-add words in both locales (UXA-18)', () => {
+    expect(parseQuickAdd('Preparar demo !alta #demo @mañana ~1h30', '2026-11-27')).toEqual({ title: 'Preparar demo', priority: 'high', tags: ['demo'], dueAt: '2026-11-28T00:00:00Z', estimateMinutes: 90 });
+    expect(parseQuickAdd('Llamar @hoy !URGENTE', '2026-11-27')).toMatchObject({ title: 'Llamar', priority: 'urgent', dueAt: '2026-11-27T00:00:00Z' });
+    expect(parseQuickAdd('Revisar !baja @manana', '2026-11-30')).toMatchObject({ title: 'Revisar', priority: 'low', dueAt: '2026-12-01T00:00:00Z' });
+    expect(parseQuickAdd('Plan !normal', '2026-11-27').priority).toBe('normal');
+    // Unknown words, units-less estimates and e-mail addresses stay in the title.
+    expect(parseQuickAdd('Ship it !soon @someday ~5 people', '2026-11-27')).toEqual({ title: 'Ship it !soon @someday ~5 people', priority: null, tags: [], dueAt: null, estimateMinutes: null });
+    expect(parseQuickAdd('Fix it ~0h', '2026-11-27')).toMatchObject({ title: 'Fix it ~0h', estimateMinutes: null });
+  });
+
+  it('parses durations as people type them (UXA-17)', () => {
+    const cases: [string, number | null][] = [
+      ['4h', 240], ['4 h', 240], ['90m', 90], ['90 min', 90], ['1h30', 90], ['1h 30m', 90], ['1 h 30 min', 90], ['1.5h', 90], ['1,5 h', 90], ['1:30', 90], ['240', 240], ['0', 0], ['45 MIN', 45],
+      ['', null], ['soon', null], ['1.5h30', null], ['h', null], ['1:75', null], ['-2h', null], ['2d', null], ['100001', null], ['99999h', null],
+    ];
+    for (const [text, minutes] of cases) expect([text, parseDuration(text)]).toEqual([text, minutes]);
+    // What the field shows parses back to the same minutes.
+    for (const minutes of [5, 45, 60, 95, 240, 1500]) expect(parseDuration(duration(minutes))).toBe(minutes);
+  });
+
+  it('due date shortcuts: a day from today, next week is next Monday', () => {
+    expect(dayAfter('2026-11-27', 0)).toBe('2026-11-27T00:00:00Z');
+    expect(dayAfter('2026-12-31', 1)).toBe('2027-01-01T00:00:00Z');
+    // 2026-11-27 is a Friday, 2026-11-30 a Monday, 2026-11-29 a Sunday.
+    expect(daysToNextWeek('2026-11-27')).toBe(3);
+    expect(daysToNextWeek('2026-11-30')).toBe(7);
+    expect(daysToNextWeek('2026-11-29')).toBe(1);
   });
 
   it('labels', () => {

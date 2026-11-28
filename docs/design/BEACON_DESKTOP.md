@@ -7,7 +7,9 @@ repository name, secret or release changes with it.
 (CHANGELOG `[0.10.0]`). BD-3a (time context, mini timer, required fields, §7.1) shipped in 0.11.0
 (CHANGELOG `[0.11.0]`). BD-3b part 1 (chat send, thread replies, reactions, §7.2) shipped in 0.12.0
 (CHANGELOG `[0.12.0]`). BD-3b parts 2 and 3 (the Tasks module §7.3; notifications at level None, tray, links §7.4)
-shipped in 0.13.0 (CHANGELOG `[0.13.0]`; Tasks need Beacon 1.183 or later). Where the build differs from this text: the
+shipped in 0.13.0 (CHANGELOG `[0.13.0]`; Tasks need Beacon 1.183 or later). The UX audit batches (one title bar
+§5.1, global shortcuts and the status strip §5.2, one Settings, guided first run) shipped in 0.14.0 (CHANGELOG
+`[0.14.0]`). Where the build differs from this text: the
 modules follow the approved prototype (Chat `Ctrl/Cmd+1`, Tasks `Ctrl/Cmd+2`, Time `Ctrl/Cmd+3`); `GET me` is asked with the last context or
 `personal` (ChatKit needs a context on every request under a context policy) and falls back to `personal` on
 `403 context_forbidden`; the realtime hub must be on the signed-in origin (Beacon's default; another host is refused and
@@ -67,7 +69,13 @@ release bucket.
   strict CSP: `default-src 'self'`, `connect-src ipc:` only).
 - **All network traffic goes through Rust** (`net.rs`, `beacon_fetch`) with **TLS public-key pinning** for the official
   Beacon host (`pinning.rs`, `pins.json`: CA keys, never the leaf; Mozilla roots compiled in, never the OS store).
-  Self-hosted servers keep standard validation ("Connection not pinned"). Release builds require `https://`.
+  Self-hosted servers kept standard validation ("Connection not pinned"). **Since 2026-11-27 (owner decision) release
+  builds use https://beacon.nowo.tech only**: no address field at sign-in or in the first run, Settings → Account
+  shows the server read-only, Rust refuses to bind any other origin (`net::validate_server_url`), pinning always
+  applies, and the native "Sign in to <host>?" question is no longer asked for it (the host is fixed). The question
+  and its "This is not beacon.nowo.tech" line stay **debug-only**, for an override host (the mock, staging:
+  `BEACON_SERVER_FIELD=1` or Vite's dev server, with a debug Rust build). An install bound to another host is signed
+  out at the next start with a message.
 - **Bound origin**: every request, including the updater, goes only to the origin the user signed in to
   (`beacon_bind`); switching servers means signing out first.
 - **ACL-scoped commands**: every app command is declared in `build.rs`, allowed per window label
@@ -308,8 +316,15 @@ Client behaviour (in Rust, not the web view, so the hub URL and JWT never touch 
    `Retry-After` on `429`; try SSE again every 10 min. Budget: well inside the 600 reads/min limit.
 6. **Offline / sleep**: on wake, network change or reconnect, one catch-up (`conversations`, then `messages?after=` for
    the open conversation); no duplicate notifications for messages older than the last seen id per conversation.
-   Sends while offline are **not queued** in BD-3 (shown as failed with *Retry*; the `Idempotency-Key` makes a retry
-   safe). An offline send queue is a later item.
+   **Offline send queue** (UX batch 5, owner approval 2026-11-27): a message that cannot reach the server (no network,
+   a `5xx`) is *queued* ("Waiting for connection"), never "Not sent". It goes out when the sync sees the connection
+   again, on its own backoff probe (2 s doubling to 30 s), or on *Try now*; *Cancel* takes it back into an empty
+   message box. Messages of one conversation (timeline and threads) go out one at a time in the order they were
+   written; each keeps its `Idempotency-Key`, and only one attempt per message is ever in flight, so a reconnect never
+   sends it twice (and the server dedupes a replay whose answer was lost). The queue lives in the chat module: it
+   survives switching to Time or Tasks, but **not** a context switch, *Disconnect chat*, sign-out or quitting the app;
+   the text is never written to disk (Q-BD-15 stays A). Only refusals (`4xx`) and a `429` that outlasts the automatic
+   retries end as *Not sent*.
 
 ### 3.4 Desktop notifications, privacy and badge
 
@@ -432,6 +447,19 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
 - **Landing module** (owner decision 2026-11-25, three modules: Time, Chat, Tasks): Chat on first launch, then the
   last-used module; Time when a timer is running at launch (details in
   [BEACON_DESKTOP_TASKS.md §9](BEACON_DESKTOP_TASKS.md#9-the-tasks-module-in-the-app)).
+- **One shell for every module** (UX batch 6, owner approval 2026-11-27, UXA-1 / UXA-2 / UXA-4 / UXA-30):
+  - The Time module is hosted in the shell's grammar: no header, *Compact view* toggle or Settings of its own; its
+    sections (*Track*, *Pinned and recent*, *My time*) sit in a module sidebar like Chat's; the detail pane shows from
+    1100 px. Task rows carry one quiet play icon (as Tasks' cards). The mini timer, the stop dialog with required
+    fields, the switch confirmation and the timer placement setting stay as approved in BD-3a.
+  - **One Settings** dialog (rail gear, `Ctrl/⌘+,` in every module, tray): General, Appearance, Timer, Shortcuts,
+    Schedule, Notifications, Meetings, Chat, Tasks, Updates, **Account** (identity, the three connections with
+    *Disconnect…* behind a confirmation, *What we collect*, *Sign out*). The "Settings stays in its own view" line
+    above is superseded.
+  - **Guided first run**: after the first sign-in a setup card chains the Chat and Tasks approvals (§4.2), each step
+    skippable, resumable (Settings → Account, or the next launch if the app quit mid-way); it ends on Chat. A fresh
+    sign-in no longer forces Time: the landing rule applies.
+  - **First window** about 1200 × 780, centred and clamped to the work area; the remembered size wins afterwards.
 - **Timer placement** (owner decision 2026-11-25): a setting, title bar only or title bar + sidebar; the mini timer
   stays a separate, always-available window.
 - **Sidebar** (owner decision 2026-11-25): density is a setting, comfortable or compact. In Chat, **project channels
@@ -449,12 +477,130 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
 - **UiKit**: reuse UiKit **design tokens** (colours, spacing, radius, typography, focus ring) so the app matches
   Beacon in light and dark; no UiKit runtime JS in the app (strict CSP, `script-src 'self'`). The chat list and bubbles
   follow ChatKit's dock look through the same tokens. Mascot stays out of the chat view except empty states.
+- **Chat home view** (UX batch 5, owner approval 2026-11-27; replaces "Pick a conversation"): shown while no
+  conversation is open, and from a *Home* entry at the top of the sidebar. **Unread** conversations (not muted, newest
+  first, up to 8, with their preview), **Mentions** (messages that mention the reader in the timelines loaded this
+  session, newest first, up to 5; the newest page of up to 3 unread conversations is loaded once per context so their
+  mentions show) and **Recent** conversations (opened this session, then the list order). One tab stop, `↑ ↓ Home End`
+  between rows, `Enter` opens (a mention opens its conversation with that message focused); `Esc` in a conversation
+  comes back here. "All caught up" and an empty organization show a small decorative mascot (UXA-47). Memory only, like
+  the rest of the chat.
 - **Accessibility** (WCAG 2.1 AA, as the app already does): new messages announced through a polite live region
   ("2 new messages from Ana"), never the full text by default; focus stays on the composer when a message arrives;
   every action reachable by keyboard; unread state not by colour alone; reduced motion respected; both locales (en, es)
   for every string.
 - **Branding**: product name "Beacon Desktop" in titles and About; app icon from the Beacon mascot family (owner
   approved the mascot head for TTD on 0.8.x); Q-BD-17 on the exact display name.
+
+### 5.1 Window chrome and the update pill (UX batch 7, owner approval 2026-11-27)
+
+- **One title bar** (UXA-45). The app's 44 px title bar is the window's only one:
+  - **Windows / Linux**: no system frame (`decorations: false`, decided in Rust, `chrome_for`). The bar is the drag
+    region (`data-tauri-drag-region="deep"`: buttons, links and fields inside it stay clickable); a double click
+    maximises / restores; dragging to a screen edge snaps as with any window, and `Win+←/→/↑/Z` work. The app draws
+    minimise · maximise / restore · close at the right edge in that order (`src/shell/windowControls.ts`): Windows 11
+    caption buttons (46 px, the bar's full height, close red `#c42b1c` with white text on hover), Linux round 24 px
+    buttons (Adwaita / Breeze). They are real buttons in a group named "Window", the last Tab stops of the bar, named
+    "Maximize" or "Restore" as the window is, with tooltips. Close hides the window to the tray, as the system button
+    did; the system's own resize borders, `Alt+F4`, `Alt+Space` and the taskbar menu keep working.
+  - **macOS**: the system title bar overlays the app's (`TitleBarStyle::Overlay`, hidden title), traffic lights
+    inset at 16 × 16 pt so they sit centred in the 44 px bar; the bar keeps 76 px free on the left and drags the window.
+  - **Signed out**, the bar stays (brand and the window buttons only) so the sign-in window can still be moved and
+    closed. With the system's frame (fallback) the signed-out screen has no app bar, as before.
+  - **Not possible with Tauri 2.12**: the Windows 11 Snap Layouts flyout when hovering maximise (it needs the system's
+    `HTMAXBUTTON` hit test on a native caption button; tauri-apps/tauri#4531). Snapping by dragging and `Win+Z`
+    still work.
+  - **Linux fallback**: some desktops may handle an undecorated window badly (for example a Wayland compositor that
+    gives it no resize border or shadow, or a tiling window manager that draws its own frame; not yet tried on a real
+    GNOME / KDE Wayland session, only in the browser build). Start the app with
+    `BEACON_DESKTOP_SYSTEM_TITLEBAR=1` (for example in the `.desktop` file's `Exec=env BEACON_DESKTOP_SYSTEM_TITLEBAR=1
+    …`) to keep the system title bar; the app then draws no buttons of its own. The same variable works on Windows.
+  - The **mini timer** and the "Still there?" windows keep their own chrome.
+- **Update pill** (UXA-22). An installable update shows as a pill at the left of the title bar's tools ("Update",
+  named "Update to version X"), never as a card above the task list. It opens the same update card in a popover
+  panel under it (What's new, Update now, Later; light dismiss and `Esc` give the focus back to the pill). The pill
+  follows the install: "Update after stop" while it waits for the timer, "Updating 45%", then "Restarting…". A manual
+  "Check for updates…" that finds one opens the panel. "Later" hides pill and panel until a manual check or the next
+  launch. The forced update keeps its full screen, with its way out (Remind me later), unchanged.
+- **Title bar at 900 px** (UXA-9). Below 1100 px the search collapses to its icon (same name and `Ctrl+K`, the global
+  switcher of §5.2) and the brand to its mark before anything else; the organization keeps at least 12 characters and
+  the running task at least a few before an ellipsis.
+- **Tray** (UXA-41). *Quick add task…* (while tasks are connected) opens the window on Tasks with quick add focused.
+  Empty submenus (Switch to, Today's meetings) are not shown.
+
+### 5.2 Keyboard, status strip and Undo (UX batches 2, 3 and 4, owner approval 2026-11-27)
+
+#### Keyboard: global shortcuts in every module (UX batches 2 + 3)
+
+- **App-wide keys**, handled by the shell before the module in view, the same in Chat, Tasks and Time:
+
+  | Key | Does |
+  |---|---|
+  | `Ctrl/⌘+K` | Quick switcher (also from a text field) |
+  | `Ctrl/⌘+1` `2` `3` | Chat / Tasks / Time |
+  | `F6` / `Shift+F6` | Next / previous area: title bar, rail, the module's panes |
+  | `Ctrl/⌘+,` | Settings |
+  | `Ctrl/⌘+Shift+L` | Light / dark theme (its only meaning) |
+  | `Ctrl/⌘+Shift+S` | Stop the timer, or resume the last task |
+  | `Ctrl/⌘+Shift+M` | Mini timer (where the platform has it) |
+  | `Ctrl/⌘+Z` | Undo the newest action of an Undo toast (outside a text field, no dialog open; see below) |
+  | `?` | The shortcut sheet |
+
+  `Ctrl/⌘+Shift+L` used to be the compact / full view in the standalone Time window; that view keeps its header button
+  and tray item, and the hosted Time module never had it (§5, UX batch 6).
+- **Quick switcher**: one list over the modules that are connected. Chat: conversations (recent first, unread in
+  bold). Tasks: the boards, then the tasks loaded (My tasks first); a board opens the board view on it, a task opens
+  its panel. Time: *Stop the timer* while one runs, *Start timer* / *Switch timer here* on pinned and recent tasks (and
+  on any task of the list once you type), *My time* and *Pinned and recent* (full layout). With no query the module in
+  view leads with up to 8 of its own, the others follow with 3 each; with a query every match is ranked together by
+  the same fuzzy score, the module in view winning ties. In Time, `/` searches the task list.
+- **The sheet** (`?`) shows *Anywhere* (with `Ctrl/⌘+Z`) and the section of the module in view only (Chat, Tasks or
+  Time). Chat's section lists `Ctrl/⌘+J`: jump to the unread messages, or to the new messages below in the open
+  conversation.
+- **Areas** (`F6`): title bar (the search), rail (the selected module), then Chat's sidebar (the conversation that
+  takes Tab), conversation (the message box; the home view's first row) and thread; Tasks' page (the row or card that
+  takes Tab, else quick add) and task panel; Time's sidebar (the current section), list (the search field) and details.
+  From outside any area `F6` starts at the module's first pane, `Shift+F6` at its last.
+- **`Alt+↑` / `Alt+↓`**: previous / next conversation (Chat), board (Tasks, board and list views), section (Time, full
+  layout).
+- **Long lists are one Tab stop** (roving tabindex, `src/ui/roving.ts`): the chat sidebar, My tasks and the list view
+  (`↑ ↓ Home End`; in a task row `← →` reach its checkbox, status menu and play button, which are not Tab stops), the
+  Time list (UX batch 6) and the chat home view (UX batch 5). Tab follows the visual order: title bar, rail, sidebar,
+  content.
+- **Landmarks**: one `header` (the title bar), the rail and the module sidebars are `nav`, each module's content is
+  its `main` (only the shown module's is visible), detail panels are `aside`.
+
+#### Status strip and Undo toasts (UX batch 4)
+
+- **One status strip per module** (UXA-7, `src/ui/statusStrip.ts`) for transient states: Chat under its header, Tasks
+  under its toolbar, Time at the top of its column. One line, 36 px, **its height kept whether it says something or
+  not**, so a message never pushes the list (layout shift ≈ 0). One message at a time, the most severe first:
+  `danger` (a load error, with *Retry*), `warn` (offline, messages waiting to send, a refused write or context), `info`
+  (a `429` pause, reconnecting, Time's "You're in"). A `429` is a calm countdown, "Paused for a moment. Back in 0:25.",
+  never an error card; it ends at `Retry-After`, or earlier at the next answer, and Time then tries the action again
+  once (not when something else was done meanwhile). Each message is announced once, politely, by its text; the
+  countdown is not re-announced. A close button hides it until the message changes. No mascot art for transient
+  states (Time's red `429` card and its "Working offline" card are gone; errors that need a decision keep their card).
+- **Chat, a conversation that cannot load yet** (UXA-13): its skeleton says "Taking a short pause. Loading again in
+  0:25." after 1.5 s, with *Retry* usable once the pause ends; it loads again by itself then too.
+- **One unread truth** (UXA-11): when the only unread messages are below in the open conversation (they count in the
+  rail badge), the sidebar's jump button says "2 new messages below" and `Ctrl+J` goes there.
+- **Undo toasts** (UXA-8, `src/ui/toastRegion.ts`): completing a task, moving a card (drag, `Alt+←/→`, the list's
+  status) and discarding or cancelling a chat message not sent offer *Undo* for 7 s. One region named
+  "Notifications" (`role="region"`, `popover="manual"` in the top layer where the webview has it), bottom centre,
+  at most three toasts; announced with "Undo with Ctrl+Z.", never focused; the timer pauses while the pointer or the
+  focus is in it. `Ctrl/⌘+Z` outside a text field (and no dialog open) undoes the newest; in the message box it does
+  so only while the box holds exactly the cancelled message put back there. Two moves of one card in a row are one
+  toast back to where it started. An undo goes through the same paths as the action: a task's per-task write queue
+  with the revision the move returned (BDA13-L4), a chat message back in line with its `Idempotency-Key` (a message
+  never overtakes a newer one: if one went out meanwhile, it comes back as not sent, with *Retry*). An organization
+  switch, a disconnect or sign-out drops the module's toasts, and an undo that still fires sends nothing (BDA13).
+  Reduced motion: no slide, no fade. *Disconnect…* keeps its confirm dialog (UX batch 6).
+- **First run** (UXA-23): the time step of the setup card names the person and the organization ("Signed in as
+  <name> · <organization>"), not the server address; a later sign-in says "You're in" in Time's status strip instead of a card
+  above the list.
+- **Tray** (UXA-22): with an update to install, *Check for updates…* reads "Install update 0.14.0…" and opens the
+  title bar's update panel.
 
 ## 6. Monitoring screenshots and the update feed: two different S3 paths
 
@@ -535,8 +681,8 @@ notifications and mute part of BD-3 waits for them (ChatKit + Beacon work); see 
 
 Behaviour: feature detection (`me.scopes` has `chat:write`, `me.features.send / threadReply / reactions`, the row's
 `canSend`), one key per write kept until the write is sent or discarded, automatic retries after `429` / `409` (same
-key, at most three), *Retry* (same key) after a network error or a `5xx`, *Edit* / *Discard* after a refusal, no
-offline queue (§3.3), the sent message shown from the write's answer until the catch-up brings it (the timeline is
+key, at most three), the offline send queue after a network error or a `5xx` (§3.3, UX batch 5: *Try now* / *Cancel*,
+same key, order kept), *Edit* / *Discard* after a refusal, the sent message shown from the write's answer until the catch-up brings it (the timeline is
 never patched directly, so `after=` never skips a message). Drafts and unsent messages are memory only (Q-BD-15).
 
 | File | New / changed | Role |
@@ -604,7 +750,7 @@ Q-BD-20 onwards (tasks module) are in [BEACON_DESKTOP_TASKS.md §10](BEACON_DESK
 | **Q-BD-12** **[Beacon]** | Does the hub accept the subscriber JWT in the `Authorization` header from a native client (no cookie, no query string)? | A: header · B: `authorization` query parameter (Mercure supports it, leaks into logs) | **A**; B only if the hub cannot, and then with log redaction |
 | **Q-BD-13** **[Beacon]** | Realtime payloads on private topics | A: keep viewer-neutral presented messages; the desktop treats them as hints · B: ChatKit option for ids-only events (no bodies, no rendered references) | **B** (opt-in per profile, desktop requires nothing from the payload either way); confirms R2 by construction |
 | **Q-BD-14** **[Beacon]** | Web Push and desktop notifications for the same person | A: both · B: desktop owns notifications while its realtime subscription is active; Web Push skipped · C: user chooses per device | **B** with C as a setting later |
-| **Q-BD-15** | Store chat messages on disk for offline reading? | A: memory only · B: encrypted cache (key in keychain), cleared on sign-out | **A** for BD-2/BD-3; reconsider with the offline queue |
+| **Q-BD-15** | Store chat messages on disk for offline reading? | A: memory only · B: encrypted cache (key in keychain), cleared on sign-out | **A** for BD-2/BD-3; kept **A** with the offline queue (UX batch 5: queued text is memory only, gone on quit) |
 | **Q-BD-16** **[Beacon]** | Message rendering format for the client API | A: server Markdown → sanitized HTML (client injects HTML) · B: structured tokens (text, mention, reference, link, code) rendered by the client as text nodes | **B**: keeps the app's text-only DOM and makes the "not visible" reference placeholder explicit |
 | **Q-BD-17** | Display name | A: "Beacon Desktop" · B: "Beacon" | **A** (avoids confusion with the web app and the PWA) |
 | **Q-BD-18** | The parked extension's shared code (`src/api/` is shared with it) | A: freeze the shared module, fork freely · B: keep compatibility | **A** while parked |

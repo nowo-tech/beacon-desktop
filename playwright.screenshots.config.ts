@@ -12,7 +12,16 @@ export default defineConfig({
   retries: 2,
   workers: 1,
   reporter: 'list',
-  use: { viewport: { width: 400, height: 640 }, locale: 'en-US', timezoneId: 'UTC' },
+  use: {
+    viewport: { width: 400, height: 640 },
+    locale: 'en-US',
+    timezoneId: 'UTC',
+    // As the e2e config: the guided first run (UX batch 6) is done, Time is the module shown, so the screens are Time's.
+    storageState: {
+      cookies: [],
+      origins: ['http://127.0.0.1:1420', 'http://127.0.0.1:1421'].map((origin) => ({ origin, localStorage: [{ name: 'beacon-desktop-shell', value: '{"setup":"done","module":"time"}' }] })),
+    },
+  },
   projects: [
     { name: 'direct', testMatch: ['direct.spec.ts', 'moments.spec.ts', 'friendly.spec.ts', 'native.spec.ts', 'schedule.spec.ts', 'layout.spec.ts', 'links.spec.ts', 'quickwins.spec.ts', 'meetings.spec.ts', 'manual.spec.ts'], use: { baseURL: 'http://127.0.0.1:1420' } },
     { name: 'store', testMatch: 'store.spec.ts', use: { baseURL: 'http://127.0.0.1:1421' } },
@@ -25,14 +34,14 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      command: './node_modules/.bin/vite build && ./node_modules/.bin/vite preview --port 1420 --strictPort --host 127.0.0.1',
+      command: 'BEACON_SERVER_FIELD=1 ./node_modules/.bin/vite build && ./node_modules/.bin/vite preview --port 1420 --strictPort --host 127.0.0.1',
       url: 'http://127.0.0.1:1420',
       reuseExistingServer: false,
       timeout: 120_000,
     },
     {
       command:
-        './node_modules/.bin/vite build --outDir out/screenshots-store --emptyOutDir && ./node_modules/.bin/vite preview --outDir out/screenshots-store --port 1421 --strictPort --host 127.0.0.1',
+        'BEACON_SERVER_FIELD=1 ./node_modules/.bin/vite build --outDir out/screenshots-store --emptyOutDir && ./node_modules/.bin/vite preview --outDir out/screenshots-store --port 1421 --strictPort --host 127.0.0.1',
       url: 'http://127.0.0.1:1421',
       env: { TIMETRACK_CHANNEL: 'store' },
       reuseExistingServer: false,

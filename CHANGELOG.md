@@ -5,6 +5,147 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-28
+
+The UX release (UX audit of 2026-11-27, batches 1–7 with the owner's approvals, the spacing pass and the pre-release
+audit BDA14): one title bar, one Settings, a guided first run, one status strip with *Undo*, global shortcuts and a
+quick switcher in every module, an offline send queue and a home view in Chat, and a polished Tasks module. Same
+server requirements as 0.13.0 (Tasks need Beacon 1.183 or later). Release builds now always use
+**https://beacon.nowo.tech** (see *Changed*).
+
+### Added
+
+- **Guided first run** (UXA-4): after the first sign-in, one card walks through the Chat and Tasks approvals (each
+  started from the card, its code shown there), every step skippable; *Finish later* or a rail tab leaves it, and
+  Settings → Account → *Finish setup* resumes it. A setup the app quit in the middle of comes back at the next launch.
+  It ends on Chat; afterwards the landing rule applies (Chat on the first launch, then the last module, Time while a
+  timer runs), also after a later sign-in. Its time step names you and the organization, not the server address
+  (UXA-23); a later sign-in's "You're in" is a line in Time's strip, not a card above the list (under 900 px the short
+  line "You're in · {org}", BDA14-L5).
+- **One status strip** (UXA-7, design §5.2) in Chat, Tasks and Time for offline, a `429`, load errors and refused
+  writes: one line whose height is always kept (nothing below moves), one message at a time, the most severe first,
+  announced once, with *Retry* where it helps and a close button. A `429` is "Paused for a moment. Back in 0:25."
+  counting down; Time tries the action again when the pause ends, at most 3 times per action, each waiting the
+  server's `Retry-After` and at least 1, 2, 4 … s, then "Beacon is still busy" with *Retry* (BDA14-I2). A refused
+  write clears on the next write that goes through, a load error on the next answer, a notice after 8 s; offline no
+  longer adds "Something went wrong" on top (UXA-15).
+- **Undo** (UXA-8): completing a task, moving a card and discarding or cancelling a chat message not sent show a toast
+  with *Undo* for 7 s (`Ctrl/⌘+Z` outside a text field, listed in the `?` sheet), in one "Notifications" region at
+  the bottom of the window. An undo goes through the task's write queue with the fresh revision, and a chat message
+  comes back by its write order, never behind a newer one of the same conversation (BDA14-L2). An organization switch,
+  a disconnect or sign-out drops the toasts; an undo from before sends nothing.
+- **Global shortcuts in every module** (UXA-3, design `BEACON_DESKTOP.md` §5.2): `Ctrl/⌘+K`, `Ctrl/⌘+1…3`,
+  `F6` / `Shift+F6`, `Ctrl/⌘+,`, `Ctrl/⌘+Shift+L`, `Ctrl/⌘+Shift+S`, `Ctrl/⌘+Shift+M` and `?` work the same in Chat,
+  Tasks and Time.
+  - **`Ctrl/⌘+K` is one quick switcher** over the three modules: conversations; boards and the tasks loaded in Tasks;
+    Time's *Stop the timer*, *Start timer* / *Switch timer here* on pinned, recent and found tasks of the current
+    organization, and the *My time* / *Pinned and recent* views. With no query the module in view leads; a query ranks
+    every match together. The title bar's search is there as soon as you are signed in, chat or not. In Time, `/`
+    searches the task list.
+  - **`?`** shows *Anywhere* and the keys of the module in view, and only those.
+  - **`F6` / `Shift+F6`** walk the window's areas in every module: title bar, rail, then the module's panes.
+  - **`Alt+↑` / `Alt+↓`**: previous / next conversation (Chat), board (Tasks board and list views) or section (Time).
+- **Chat offline send queue** (UXA-6): a message that cannot reach the server (no network, a `5xx`) waits as "Waiting
+  for connection" with *Try now* and *Cancel* instead of failing; it goes out when the connection is back (or on a
+  backoff probe), in the order it was written, once (same `Idempotency-Key`, one attempt in flight). The strip counts
+  the waiting messages. The queue is memory only (Q-BD-15): it survives switching modules, and switching organization,
+  *Disconnect chat*, signing out or *Quit* from the tray while messages wait asks first ("N messages are waiting to
+  send. Discard them?", Cancel by default, BDA14-L3); a drop with no question (chat authorization lost, an organization
+  refused) is announced ("N unsent messages were discarded.").
+- **Chat home view** instead of "Pick a conversation": unread conversations, recent mentions and recent conversations,
+  a *Home* entry in the sidebar, keyboard first (one tab stop, arrows, Enter).
+- **Update pill** (UXA-22): an available update is a pill in the title bar ("Update", then "Update after stop",
+  "Updating 45%", "Restarting…") that opens the update card in a popover; a manual check that finds one opens it. The
+  tray's *Check for updates…* reads "Install update X…" when one is waiting. The forced-update screen is unchanged.
+- **Tray**: *Quick add task…* opens Tasks with quick add focused (while tasks are connected, UXA-41).
+- **Tasks panel**: the estimate is one duration field that reads like the cards ("4 h") and takes `4h`, `90m`,
+  `1h30`, `1:30` or minutes, refusing anything else in place; the due date has *Today*, *Tomorrow*, *Next week*
+  (Monday) and *Clear* (UXA-17). Quick add understands `!urgente`, `!alta`, `!normal`, `!baja`, `@hoy`, `@mañana` and
+  `~1h30` in both languages (UXA-18).
+
+### Changed
+
+- **One Beacon server** (owner decision 2026-11-27): release builds always use https://beacon.nowo.tech. Sign-in and
+  the first run have no address field (*Sign in with Beacon* starts the approval straight away), Settings → Account
+  shows the server read-only, Rust refuses to bind any other origin, and the native *Sign in to <host>?* question is no
+  longer asked (the host is fixed and its TLS keys pinned). **An install signed in to another server is signed out at
+  the next start** with a message saying so. Development builds keep the address field (`BEACON_SERVER_FIELD=1`,
+  accepted by debug Rust builds only).
+- **One title bar** (UXA-45, design `BEACON_DESKTOP.md` §5.1). Windows and Linux: no system frame; the app's title bar
+  drags the window (double click maximises, edge snapping works) and draws minimise, maximise / restore and close
+  (Windows caption buttons, Linux round buttons), keyboard and screen-reader accessible; close still hides to the
+  tray. macOS: overlay title bar with the traffic lights inset into the app's bar. The signed-out screen keeps a bare
+  bar (brand and buttons). The mini timer keeps its own chrome. Below 1100 px the search becomes its icon and the brand
+  its mark, so the organization and the running task keep their names (UXA-9).
+- **One Settings** (UXA-2): the rail's gear, `Ctrl/⌘+,` in every module, the tray and the Time module all open one
+  dialog with a tab list: General, Appearance, Timer, Shortcuts, Schedule, Notifications, Meetings, Chat, Tasks,
+  Updates and **Account** (who is signed in, the three connections with *Connect* or *Disconnect…*, *What we collect*
+  and *Sign out*). *Disconnect…* asks first, with Cancel as the default.
+- **Time in the shell** (UXA-1): the Time module no longer draws its own header, *Compact view* toggle or Settings; its
+  sections sit in a module sidebar like Chat's (*Track* first, UXA-25; *Open Beacon* at its foot) and it uses the
+  shell's colours. From 900 px the sidebar and the list show; the detail pane waits for 1100 px. One quiet play icon
+  per task row, shown on hover and focus (always on the running row), one Tab stop for all rows (UXA-24). The mini
+  timer, the stop dialog, the switch confirmation and the timer placement setting are unchanged.
+- **`Ctrl/⌘+Shift+L` is light / dark theme everywhere**, including the standalone Time window, where it used to switch
+  the compact / full view (that view keeps its header button and tray item).
+- **First window** (UXA-30): about 1200 × 780, centred and clamped to the work area; the size the window was left at
+  still wins at the next launch. The minimum stays 380 × 560.
+- **Tasks** (UXA-16, 38, 40): the task panel pushes the board instead of covering it (the board scrolls sideways with
+  edge fades, keeps its scroll on refresh, and the opened card stays in view); status, priority and assignee are menu
+  buttons ("You" marked); the board picker is a switcher grouped by folder; in a narrow window the header keeps two rows
+  with *Only mine* / *Open in Beacon* in a "More actions" menu; the list's status is a pill with a menu. Menus use the
+  top layer where the webview has it, with full keyboard support (↑ ↓ Home End, type-ahead, Esc back to the button
+  without closing the panel).
+- **Chat** (UXA-11, 12, 13, 26, 33, 34, 35, 39, 46, 47): the timeline keeps unchanged rows (a poll no longer clears a
+  text selection; long histories skip rendering rows far off screen); direct messages use the person's initials and
+  colour; the reaction picker takes the toolbar's place; menus open in the top layer with anchor positioning where
+  available; "(edited)" stays on the last line; a conversation waiting for a `429` pause says so after 1.5 s; the jump
+  button says "N new messages below" and fits one line at 900 px (BDA14-I7); small mascot art in empty states.
+- **Keyboard and accessibility** (UXA-10, UXA-27): one Tab stop per long list (chat sidebar, My tasks, the list view)
+  with arrow keys inside; Tab follows the visual order; Chat's conversation and the Tasks page are each the module's
+  `main`, groups and columns are `h2` under the page's `h1`, the task panel has a heading.
+- **Copy** (UXA-5, 14, 19, 20, 21, 32, 43): Chat's sidebar is quiet while the connection is healthy (Settings → Chat
+  shows the connection line); Spanish says *temporizador* everywhere; a stop under a minute says "Saved a short entry
+  (0:00)…", never "Nice work"; real plurals in both languages (`Intl.PluralRules`); the Tasks and Chat connect cards are
+  plain (no "Read-only in this version" or "no notifications yet"); a direct message starts with "This is the start of
+  your conversation with …".
+- **Type and spacing** (UXA-36, UXA-37): no text under 11 px; spacing tokens `--sp-1…6` (4–32 px) on `:root`, and the
+  off-grid `10px` / `14px` paddings, margins and gaps snap one step down to the 4 / 8 px grid, so nothing grows and no
+  label wraps where it fitted before.
+
+### Fixed
+
+- **Quick switcher, previous organization's Time tasks (BDA14-L1).** `Ctrl/⌘+K` lists only Time tasks of the current
+  organization; a Time list or search answered after an organization switch is dropped instead of replacing the new
+  organization's tasks; an open switcher is rebuilt when the organization changes. The stale Time list after a switch
+  also affected 0.12.0 and earlier (display of your own tasks of another of your organizations only, nothing on the
+  server; no advisory).
+- **Tasks board re-render (BDA14-I6, BDA14-L4)**: a refocus after a re-render no longer scrolls the board.
+- The task panel's logged time ("1 h 35 min") never wraps inside its box; the 400 px Time list gets a soft edge under
+  the search field; the stop dialog has no empty line under the activity type.
+- Documentation screenshots follow the shell (the 16 README images show the shell's Time module).
+
+### Security
+
+- The main window's capability adds `core:window:allow-start-dragging`, `allow-minimize`, `allow-toggle-maximize` and
+  `allow-close` for the app's own title bar (main window only; see `SECURITY.md`).
+- Release builds bind only `https://beacon.nowo.tech` (pinned) and never ask to sign in to another host; the release
+  workflow no longer exports `BEACON_URL` and fails when `BEACON_SERVER_FIELD` is set or the built UI is not bound to
+  `https://beacon.nowo.tech` (BDA14-I3). *Quit* sends Rust only the number of waiting messages, never their text.
+
+### Known limitations
+
+- **Tasks needs Beacon 1.183 or later**; until then the Tasks module says it is not available on this server (as in
+  0.13.0).
+- **Frameless window not yet verified on every Linux window manager / Wayland compositor** (some may give an
+  undecorated window no resize border or shadow, or draw their own frame). Start the app with
+  `BEACON_DESKTOP_SYSTEM_TITLEBAR=1` (for example `Exec=env BEACON_DESKTOP_SYSTEM_TITLEBAR=1 …` in the `.desktop`
+  file) to keep the system title bar; the app then draws no window buttons of its own. The same variable works on
+  Windows. The Windows 11 Snap Layouts flyout on maximise is not available with Tauri 2.12 (snapping by dragging and
+  `Win+Z` work).
+- BDA13-L2 still applies: the tasks token is deleted locally on sign-out and *Disconnect tasks* but not revoked on the
+  server (revoke the device in Beacon, Account → Security).
+
 ## [0.13.0] - 2026-11-28
 
 BD-3b, second and third parts (design `docs/design/BEACON_DESKTOP_TASKS.md` §9, `BEACON_DESKTOP.md` §7.3 and §7.4):

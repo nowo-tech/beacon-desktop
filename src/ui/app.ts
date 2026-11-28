@@ -114,6 +114,7 @@ import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
 import { art, emptyArt, ERROR_POSES, moment, poseArt, variant, type Moment } from './mascot';
 import { toastAction, toastActions } from './toast';
+import { formatCountdown, pickMessage, StatusStrip, type StripMessage } from './statusStrip';
 import { PromptMount, type PromptAnswer, type PromptBlock, type PromptButton, type PromptPicker, type PromptTaskOption, type PromptText, type PromptView } from './prompt';
 
 export type View = 'loading' | 'login' | 'device' | 'main' | 'settings' | 'privacy' | 'update-required';
@@ -140,11 +141,31 @@ const SETTINGS_TAB_LABELS: Record<SettingsTab, MessageKey> = {
 /** Sections of the full layout's sidebar (the compact layout shows the tasks section). */
 export type Section = 'tasks' | 'quick' | 'time';
 
+/**
+ * The shell hosting the Time module (UX batch 6, UXA-1 / UXA-2): it owns the window chrome (title bar, rail) and the
+ * one Settings, so the hosted Time module drops its own header, Compact view toggle and Settings view.
+ */
+export interface TimeHost {
+  /** Opens the one Settings (optionally on a tab). */
+  openSettings(tab?: string): void;
+  /** The host's own local-storage keys: "Clear local data" removes them too. */
+  localKeys?: readonly string[];
+}
+
+/** Hosted in the shell: the detail pane shows from this window width (CSS px); narrower, sidebar · list only. */
+export const DETAIL_MIN_WIDTH = 1100;
+
 export interface AppDeps {
   storage?: Storage;
   now?: () => Date;
   locale?: Locale;
   beaconUrl?: string;
+  /**
+   * The one Beacon server of this build (owner decision 2026-11-27, release builds: https://beacon.nowo.tech): the
+   * sign-in has no address field, and a session stored for another server is signed out. Absent: the address field
+   * (development and the mock server only).
+   */
+  fixedServer?: string;
   /** Device-flow sleep (tests shorten it). */
   sleep?: (ms: number) => Promise<void>;
   searchDelayMs?: number;
@@ -177,6 +198,15 @@ export interface AppDeps {
   onContextRefused?: (context: string) => void;
   /** The shell's chat items of the tray menu ("Open chat", pause / resume chat notifications; BD-3b). */
   trayChat?: () => TrayMenuItem[];
+  /** The shell's tasks items of the tray menu ("Quick add task…"; UX batch 7, UXA-41). */
+  trayTasks?: () => TrayMenuItem[];
+  /**
+   * The shell shows the update offer as a pill in the title bar (UX batch 7): the update card is then drawn by the
+   * shell (`updatePanel`) instead of above the task list. The update-required screen stays here.
+   */
+  updateInShell?: boolean;
+  /** A manual check ("Check for updates…") found an update to install: the shell opens its update panel. */
+  showUpdate?: () => void;
 }
 
 /** What `stop()` did: stopped (or queued offline), cancelled in the fields dialog, failed, or nothing was running. */
@@ -216,11 +246,40 @@ const NOTE_MAX = 500;
 const MAX_ENTRY_PAGES = 5;
 /** A timer running this long gets a calm "still going?" nudge (once per entry, dismissible). */
 export const LONG_RUNNING_HOURS = 8;
+
+/** Automatic retries of one action after a `429` (BDA14-I2, as Chat's `AUTO_RETRIES`): then the person retries. */
+export const TIME_AUTO_RETRIES = 3;
+
+/**
+ * Seconds to wait before automatic retry `attempt` (0 for the first `429`): the server's `Retry-After` (30 s without
+ * one), never less than a backoff of 1, 2, 4 … s, so a server that keeps answering `Retry-After: 0` is not hammered.
+ */
+export function rateRetryWait(retryAfter: number | null | undefined, attempt: number): number {
+  return Math.max(retryAfter ?? 30, 2 ** Math.max(0, attempt), 1);
+}
+
+/** A `429` pause (UXA-7): when it ends, the action that met it (`retry`); `attempt` automatic retries already used. */
+export interface RatePause {
+  until: number;
+  retry: (() => Promise<void>) | null;
+  attempt: number;
+  /** BDA14-I2: the retries are spent; when the pause ends the strip offers *Retry* instead of trying on its own. */
+  held?: boolean;
+}
 /** Success copy after a stop: the n-th stop of the session gets variant n mod 3. */
 const SAVED_VARIANTS: MessageKey[] = ['savedA', 'savedB', 'savedC'];
 const THEME_LABELS: Record<ThemePreference, MessageKey> = { system: 'themeSystem', light: 'themeLight', dark: 'themeDark' };
 
 /** `m:ss` for the device-code countdown. */
+/** Same scheme, host and port (an address that does not parse is never the same). */
+export function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
 function countdown(seconds: number): string {
   const s = Math.max(0, Math.ceil(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -321,6 +380,13 @@ export class DesktopApp {
   noticeMoment: Moment | null = null;
   /** "You're in" card after a sign-in, until dismissed or a timer starts. */
   welcome = false;
+  /**
+   * A `429` while signed in (UX batch 4, UXA-7): a calm countdown in the status strip instead of an error card, and the
+   * action tried again once it ends.
+   */
+  rateLimit: RatePause | null = null;
+  /** The automatic retry number the next guarded action is (set just before {@link rateLimitEnded} runs it). */
+  private autoRetry = 0;
   /** Entry (task + start) whose long-running nudge was answered "Keep going". */
   longRunningOk: string | null = null;
   /** Stops of this session (picks the success copy variant). */
@@ -353,6 +419,8 @@ export class DesktopApp {
   private deviceStarted = 0;
   private deviceAnnounced = false;
   private retryAction: (() => Promise<void>) | null = null;
+  /** The status strip (UX batch 4, UXA-7): offline, a `429` pause and the sign-in welcome, one at a time, no shift. */
+  private readonly strip: StatusStrip;
   private ticker: ReturnType<typeof setInterval> | null = null;
   private deviceTicker: ReturnType<typeof setInterval> | null = null;
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -430,6 +498,10 @@ export class DesktopApp {
   private readonly menuRegion: HTMLElement;
   private lastTrayMenu = '';
   private main: MainRegions | null = null;
+  /** The shell hosting this module (`null`: the standalone window, as in 0.8). */
+  private host: TimeHost | null = null;
+  /** Hosted: the detail pane was drawn at the last render (it follows the window width). */
+  private detailShown = false;
   /** Settings: the tablist and its panels, built once per session; each panel is patched in place. */
   private settingsView: { root: HTMLElement; tabs: Tabs<SettingsTab> } | null = null;
   /** Follows the Settings content's width (vertical or horizontal tablist). */
@@ -480,7 +552,7 @@ export class DesktopApp {
     this.timeFormat = new Intl.DateTimeFormat(formatLocale, { hour: 'numeric', minute: '2-digit' });
     this.dateFormat = new Intl.DateTimeFormat(formatLocale, { dateStyle: 'medium', timeStyle: 'short' });
     this.state = loadLocal(this.storage);
-    this.serverDraft = this.state.lastServer ?? deps.beaconUrl ?? '';
+    this.serverDraft = deps.fixedServer ?? this.state.lastServer ?? deps.beaconUrl ?? '';
     this.queue = new OfflineQueue(this.storage);
     this.meetingStore = new MeetingStore(this.storage);
     document.documentElement.lang = this.locale;
@@ -495,7 +567,16 @@ export class DesktopApp {
     this.windowMemory = loadWindowMemory(this.storage);
     this.layout = layoutFor(this.viewportWidth());
     this.sidebar = h('nav', { class: 'sidebar pane', id: 'sidebar', attrs: { hidden: true, tabindex: '-1' } });
-    this.center = h('div', { class: 'main-pane pane', id: 'main-pane', attrs: { tabindex: '-1' } }, this.status, this.alert, this.body);
+    this.strip = new StatusStrip({
+      id: 'time-strip',
+      dismissLabel: this.t('dismiss'),
+      announce: (text) => this.announce(text),
+      onDismiss: (message) => {
+        if (message.key === 'welcome') this.dismissWelcome();
+      },
+      focusAway: () => this.main?.search.focus(),
+    });
+    this.center = h('div', { class: 'main-pane pane', id: 'main-pane', attrs: { tabindex: '-1' } }, this.strip.root, this.status, this.alert, this.body);
     this.detail = h('aside', { class: 'detail pane', id: 'detail', attrs: { hidden: true, tabindex: '-1', 'aria-labelledby': 'detail-title' } });
     this.menuRegion = h('div', { class: 'link-menu-region', id: 'link-menu-region' });
     this.root.replaceChildren(this.header, h('div', { class: 'frame', id: 'frame' }, this.sidebar, this.center, this.detail), this.liveRegion, this.toastRegion, this.menuRegion);
@@ -513,6 +594,18 @@ export class DesktopApp {
 
   private viewportWidth(): number {
     return this.deps.viewportWidth?.() ?? globalThis.innerWidth ?? 0;
+  }
+
+  /** Hosted in the shell (UX batch 6): no header of its own, one Settings, no Compact view toggle. */
+  embed(host: TimeHost): void {
+    this.host = host;
+    this.root.classList.add('hosted');
+    if (this.view !== 'loading') this.render();
+  }
+
+  /** Hosted in the shell (see `embed`). */
+  get hosted(): boolean {
+    return this.host !== null;
   }
 
   async init(): Promise<void> {
@@ -541,6 +634,17 @@ export class DesktopApp {
     await this.applyShortcut(this.state.settings.resumeShortcut, false, 'resume');
     await this.loadBrowserChoice();
     this.token = await this.platform.secretGet();
+    // A session of another server than this build's one (should not exist in production): signed out, and told why.
+    const moved = this.state.session !== null && this.deps.fixedServer !== undefined && !sameOrigin(this.state.session.server, this.deps.fixedServer) ? this.state.session.server : null;
+    if (moved !== null) {
+      await this.forgetToken();
+      await this.prepareMeetingAccount();
+      this.clearAccountData();
+      this.show('login');
+      this.setNotice(this.t('serverFixedSignedOut', { host: hostOf(this.deps.fixedServer), old: hostOf(moved) }));
+      await this.updateTray();
+      return;
+    }
     if (this.state.session === null || this.token === null) {
       // A token without a saved session (local data cleared) cannot be used or replaced: sign in again.
       if (this.token !== null) await this.forgetToken();
@@ -801,6 +905,10 @@ export class DesktopApp {
   }
 
   show(view: View): void {
+    if (view === 'settings' && this.host !== null) {
+      this.openHostSettings();
+      return;
+    }
     if (view !== this.view) {
       this.showWhere = false;
       this.announce('');
@@ -813,6 +921,21 @@ export class DesktopApp {
     if (view === 'settings') void this.loadConnectionSecurity();
   }
 
+  /** Hosted: Settings is the shell's dialog; "What we collect" goes back to the main screen behind it. */
+  private openHostSettings(tab?: SettingsTab | 'account'): void {
+    if (this.view === 'settings' || this.view === 'privacy') {
+      this.view = 'main';
+      this.render();
+    }
+    this.host?.openSettings(tab);
+  }
+
+  /** Settings is opening: the browsers found here and the connection's protection are asked for (shown when known). */
+  prepareSettings(): void {
+    if (this.browsers === null) void this.loadBrowsers();
+    void this.loadConnectionSecurity();
+  }
+
   /** Asks the host how the connection to the server is protected (TLS pinning, docs/PINNING.md). */
   private async loadConnectionSecurity(): Promise<void> {
     const server = this.state.session?.server ?? null;
@@ -823,7 +946,7 @@ export class DesktopApp {
       // Unknown: nothing is shown.
     }
     this.connectionSecurity = security;
-    if (this.view === 'settings') this.render();
+    if (this.view === 'settings' || this.host !== null) this.render();
   }
 
   /**
@@ -866,6 +989,8 @@ export class DesktopApp {
    * opens the verification page and polls until approved. Expired / denied codes stay on the device screen.
    */
   async connect(input: string = this.serverDraft): Promise<void> {
+    // A fixed server: whatever the caller passed, only this build's one (the address is never asked for).
+    if (this.deps.fixedServer !== undefined) input = this.deps.fixedServer;
     this.serverDraft = input;
     const prepared = prepareServerUrl(input);
     if (!prepared.ok) {
@@ -1101,13 +1226,17 @@ export class DesktopApp {
     }
     const [timer, tasks, me, entries] = await Promise.all([api.timer(), api.tasks({ search: this.query }), api.me(), this.loadEntries(api)]);
     this.offline = false;
-    this.tasks = tasks;
+    const served = api.currentContext ?? 'personal';
+    // BDA14-L1: an answer for an organization left meanwhile (a switch while it loaded) never replaces the current
+    // one's tasks and entries; the switch's own refresh brings those.
+    const current = served === this.timeContext;
+    if (current) this.tasks = tasks;
     // From task lists only (`GET timer` is per person, not per organization, audit ZCD-v-L1), in the context the list
     // was actually served in (a refused read falls back to Personal, ZCD-v-I1).
-    this.rememberTaskContexts(tasks, api.currentContext ?? 'personal');
+    this.rememberTaskContexts(tasks, served);
     if (blocked !== undefined) void this.answerQueued(blocked);
     this.setMe(me);
-    this.entries = entries;
+    if (current) this.entries = entries;
     await this.setTimer(timer);
     // Start (or a refresh): today's meetings now, not at the next regular poll.
     await this.pollMeetings(true);
@@ -1186,9 +1315,12 @@ export class DesktopApp {
   async search(query: string): Promise<void> {
     this.query = query;
     await this.guard(async () => {
-      const context = this.timeContext;
-      this.tasks = await this.api().tasks({ search: query });
-      this.rememberTaskContexts(this.tasks, context);
+      const api = this.api();
+      const tasks = await api.tasks({ search: query });
+      const served = api.currentContext ?? 'personal';
+      this.rememberTaskContexts(tasks, served);
+      // BDA14-L1: the answer of an organization left meanwhile (or of an older search) is dropped.
+      if (served === this.timeContext && this.query === query) this.tasks = tasks;
     });
     if (this.view === 'main' && query.trim() !== '' && this.query === query) this.announce(this.t('resultsCount', { count: this.visibleTasks().length }));
   }
@@ -1329,8 +1461,10 @@ export class DesktopApp {
 
   /** Success moment after a stop: what was saved, in one of a few friendly wordings (queued: kept here for now). */
   private saved(timer: Timer, queued: boolean): void {
-    const params = { time: formatHoursMinutes(elapsedSeconds(timer.startedAt, this.now())), task: timer.taskTitle };
-    this.setNotice(queued ? this.t('savedOffline', params) : this.t(variant(SAVED_VARIANTS, this.saves++), params), 'saved');
+    const seconds = elapsedSeconds(timer.startedAt, this.now());
+    const params = { time: formatHoursMinutes(seconds), task: timer.taskTitle };
+    // UXA-20: under a minute is likely a slip: plain words, never praise ("Saved 0:00 … Nice work").
+    this.setNotice(queued ? this.t('savedOffline', params) : seconds < 60 ? this.t('savedShort', params) : this.t(variant(SAVED_VARIANTS, this.saves++), params), 'saved');
     const kind = this.timerKind(timer);
     const messages = afterStop(this.state.messages, kind, timer.startedAt, this.now());
     const locale = this.messageLocale();
@@ -2519,10 +2653,11 @@ export class DesktopApp {
       switchTo: signedIn ? this.quickTasks().slice(0, MAX_TRAY_TASKS).map((task) => ({ id: `switch:${task.id}`, label: task.title })) : [],
       search: t('traySearch'),
       open: t('trayOpen'),
-      layout: signedIn ? { id: `layout-${otherMode(this.layout)}`, label: t(this.layout === 'full' ? 'layoutCompact' : 'layoutFull') } : null,
+      layout: signedIn && this.host === null ? { id: `layout-${otherMode(this.layout)}`, label: t(this.layout === 'full' ? 'layoutCompact' : 'layoutFull') } : null,
       openBeacon: dashboardUrl(server) !== null ? t('openBeacon') : null,
       myTime: myTimeUrl(server) !== null ? t('myTime') : null,
-      checkUpdates: signedIn && this.channel === 'direct' ? t('trayCheckUpdates') : null,
+      // An update to install is named here too (UX batch 4, UXA-22): the same item opens the title bar's update panel.
+      checkUpdates: signedIn && this.channel === 'direct' ? (this.update !== null && this.update.installable && this.updateMessage === null ? t('trayUpdateAvailable', { version: this.update.version }) : t('trayCheckUpdates')) : null,
       pauseFriendly: !signedIn || (!this.state.settings.funMessages && !this.state.settings.wellbeingReminders)
         ? null
         : pausedAt(this.state.messages, this.now())
@@ -2530,6 +2665,7 @@ export class DesktopApp {
           : { id: 'pause-friendly', label: t('trayPauseFriendly') },
       ...this.trayMeetings(),
       ...(signedIn && this.deps.trayChat !== undefined ? { chat: this.deps.trayChat() } : {}),
+      ...(signedIn && this.deps.trayTasks !== undefined ? { tasks: this.deps.trayTasks() } : {}),
       settings: t('traySettings'),
       quit: t('trayQuit'),
     };
@@ -2944,6 +3080,7 @@ export class DesktopApp {
       if (manual) this.reportCheck(unavailable ?? this.t('updateUpToDate', { version: this.version }));
       if (this.view === 'update-required') this.view = 'main';
       this.render();
+      void this.updateTray();
       return;
     }
     const installable = result.installable !== false && isVersion(result.version);
@@ -2960,12 +3097,18 @@ export class DesktopApp {
         ? this.t('updateUnavailable', { min })
         : null;
     if (manual) this.reportCheck(this.updateMessage ?? this.t('updateAvailable', { version: result.version }));
+    if (manual && this.updateMessage === null && this.deps.showUpdate !== undefined) {
+      // The person asked: the shell's pill opens its panel (a "Later" from before no longer hides it).
+      this.updateLater = null;
+      this.deps.showUpdate();
+    }
     if (below && satisfiable && installable && !this.updateDismissed) {
       this.show('update-required');
     } else {
       if (this.view === 'update-required') this.view = 'main';
       this.render();
     }
+    void this.updateTray();
   }
 
   /** The higher of the updater's minimum and GET me's (`null` when neither is set). */
@@ -3002,7 +3145,7 @@ export class DesktopApp {
     if (this.state.activeTimer !== null) {
       this.updateStage = 'confirm-running';
       this.render();
-      this.body.querySelector<HTMLButtonElement>('#update-after-stop')?.focus();
+      this.updateButton('update-after-stop')?.focus();
       return;
     }
     void this.installUpdate();
@@ -3019,7 +3162,12 @@ export class DesktopApp {
   cancelUpdateChoice(): void {
     this.updateStage = 'offer';
     this.render();
-    this.body.querySelector<HTMLButtonElement>('#update-now')?.focus();
+    this.updateButton('update-now')?.focus();
+  }
+
+  /** A button of the update card, wherever it is drawn (above the task list, or the shell's update panel). */
+  private updateButton(id: string): HTMLButtonElement | null {
+    return this.root.ownerDocument.getElementById(id) as HTMLButtonElement | null;
   }
 
   /** "Later": hides this version until a manual check or the next launch (the 6-hour check keeps it hidden). */
@@ -3282,7 +3430,7 @@ export class DesktopApp {
       this.browserChoice = SYSTEM_BROWSER;
     }
     this.clearMeetings();
-    for (const key of [...LOCAL_KEYS, WINDOW_KEY]) this.storage.removeItem(key);
+    for (const key of [...LOCAL_KEYS, WINDOW_KEY, ...(this.host?.localKeys ?? [])]) this.storage.removeItem(key);
     this.windowMemory = loadWindowMemory(this.storage);
     this.section = 'tasks';
     this.selectedTaskId = null;
@@ -3324,7 +3472,11 @@ export class DesktopApp {
   relayout(): void {
     if (!this.root.isConnected) return;
     const layout = layoutFor(this.viewportWidth());
-    if (layout === this.layout) return;
+    const detail = this.host !== null && layout === 'full' && this.viewportWidth() >= DETAIL_MIN_WIDTH;
+    if (layout === this.layout) {
+      if (this.host !== null && detail !== this.detailShown && this.fullLayout()) this.render();
+      return;
+    }
     this.layout = layout;
     this.render();
     void this.updateTray();
@@ -3415,12 +3567,31 @@ export class DesktopApp {
 
   /** F6 / Shift+F6: sidebar → main pane → detail pane (full layout). */
   private cyclePane(step: number): void {
-    const panes = [this.sidebar, this.center, this.detail].filter((pane) => !pane.hidden);
+    const panes = this.panes();
     const at = panes.findIndex((pane) => pane.contains(document.activeElement));
-    const next = panes[at === -1 ? 0 : (at + step + panes.length) % panes.length];
-    const preferred = next === this.sidebar ? next.querySelector<HTMLElement>('[aria-current="page"]') : next === this.center && this.view === 'main' && this.currentSection() === 'tasks' ? this.main?.search : null;
-    const target = preferred ?? next.querySelector<HTMLElement>('button:not([disabled]), a[href], input, select, [tabindex="0"]') ?? next;
+    this.focusPane(panes[at === -1 ? 0 : (at + step + panes.length) % panes.length]);
+  }
+
+  /** The panes shown (sidebar, main pane, detail pane), for F6 here and in the shell (UX batch 3). */
+  panes(): HTMLElement[] {
+    return [this.sidebar, this.center, this.detail].filter((pane) => !pane.hidden);
+  }
+
+  /** F6 into a pane: the current section, the search field (Track), else its first control. */
+  focusPane(pane: HTMLElement): void {
+    const preferred = pane === this.sidebar ? pane.querySelector<HTMLElement>('[aria-current="page"]') : pane === this.center && this.view === 'main' && this.currentSection() === 'tasks' ? this.main?.search : null;
+    const target = preferred ?? pane.querySelector<HTMLElement>('button:not([disabled]), a[href], input, select, [tabindex="0"]') ?? pane;
     target.focus();
+  }
+
+  /** Alt+↑ / Alt+↓ (UX batch 3): the previous / next sidebar section, as Chat's conversations. Full layout only. */
+  stepSection(step: 1 | -1): boolean {
+    if (!this.fullLayout() || this.view !== 'main') return false;
+    const order: Section[] = ['tasks', 'quick', 'time'];
+    const next = order[(order.indexOf(this.section) + step + order.length) % order.length];
+    this.showSection(next);
+    this.sidebar.querySelector<HTMLElement>('[aria-current="page"]')?.focus();
+    return true;
   }
 
   // ---- keyboard ---------------------------------------------------------------------------------------------------
@@ -3434,11 +3605,13 @@ export class DesktopApp {
 
   /**
    * In-app shortcuts: Ctrl/⌘+K or "/" search, Alt+1…9 quick tasks, Ctrl/⌘+Shift+S stop / resume, Ctrl/⌘+, settings,
-   * Ctrl/⌘+Shift+L compact / full view, F6 / Shift+F6 next / previous pane (full view).
+   * Ctrl/⌘+Shift+L light / dark theme (one meaning app-wide, UX batch 3; the compact / full view keeps its button and
+   * tray item), F6 / Shift+F6 next / previous pane (full view). Hosted, the shell takes the app-wide keys first (it
+   * marks them handled): Ctrl/⌘+K is then the global switcher, F6 walks the whole window.
    */
   private onKey(event: KeyboardEvent): void {
-    // Another module of the shell is shown (chat): its own keys apply.
-    if (!this.root.isConnected || this.root.closest('[hidden]') !== null) return;
+    // Another module of the shell is shown (chat): its own keys apply. A key the shell already handled is not ours.
+    if (event.defaultPrevented || !this.root.isConnected || this.root.closest('[hidden]') !== null) return;
     if (this.view !== 'main' && this.view !== 'settings' && this.view !== 'privacy') return;
     const mod = event.ctrlKey || event.metaKey;
     const target = event.target as HTMLElement | null;
@@ -3449,9 +3622,10 @@ export class DesktopApp {
     } else if (event.key === '/' && !typing && !mod) {
       event.preventDefault();
       this.focusSearch();
-    } else if (mod && event.shiftKey && event.key.toLowerCase() === 'l') {
+    } else if (mod && event.shiftKey && event.key.toLowerCase() === 'l' && this.host === null) {
       event.preventDefault();
-      void this.setLayoutMode(otherMode(this.layout));
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      void this.setTheme(dark ? 'light' : 'dark');
     } else if (event.key === 'F6' && this.fullLayout()) {
       event.preventDefault();
       this.cyclePane(event.shiftKey ? -1 : 1);
@@ -3475,7 +3649,8 @@ export class DesktopApp {
   /** Arrow keys between the search field and the rows' main buttons (roving focus, no extra tab stops). */
   private onListKey(event: KeyboardEvent): void {
     const main = this.main;
-    if (main === null) return;
+    // Alt+↑ / ↓ (sections) and the app-wide chords are not list moves.
+    if (main === null || event.altKey || event.ctrlKey || event.metaKey) return;
     const buttons = [...main.root.querySelectorAll<HTMLButtonElement>('button.row-action')];
     const index = buttons.indexOf(event.target as HTMLButtonElement);
     let next: HTMLElement | undefined;
@@ -3485,10 +3660,16 @@ export class DesktopApp {
     else if (event.key === 'End' && index >= 0) next = buttons.at(-1);
     else if (event.key === 'Escape' && index >= 0) next = main.search;
     else if (event.key === 'Enter' && event.target === main.search) next = buttons[0];
+    else if (this.host !== null && index >= 0 && event.key.toLowerCase() === 's' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault();
+      buttons[index].click();
+      return;
+    }
     if (next !== undefined) {
       event.preventDefault();
       if (event.key === 'Enter' && next instanceof HTMLButtonElement) next.click();
       else next.focus();
+      this.syncRowStops();
     }
   }
 
@@ -3512,11 +3693,17 @@ export class DesktopApp {
     context: () => { stage?: ErrorStage; task?: string; server?: string } = () => ({}),
     retry?: () => Promise<void>,
   ): Promise<void> {
+    const attempt = this.autoRetry;
+    this.autoRetry = 0;
     this.busy = true;
     this.error = null;
+    // Something else is being done: the action that met a `429` is not repeated on its own afterwards (UXA-7).
+    if (this.rateLimit !== null) this.rateLimit.retry = null;
     this.render();
     try {
       await action();
+      // Beacon answered: a pause from an earlier `429` is over (UXA-7, as Chat and Tasks).
+      this.rateLimit = null;
     } catch (error) {
       if (error instanceof ApiError && error.isUnauthorized && this.state.session !== null) {
         await this.signedOut(this.t('sessionExpired'));
@@ -3525,7 +3712,7 @@ export class DesktopApp {
         if (offline !== undefined) await offline();
       } else {
         const ctx = context();
-        this.fail(error, ctx.stage ?? 'action', ctx.task, ctx.server, retry ?? (() => this.guard(action, offline, context)));
+        this.fail(error, ctx.stage ?? 'action', ctx.task, ctx.server, retry ?? (() => this.guard(action, offline, context)), attempt);
       }
     } finally {
       this.busy = false;
@@ -3533,7 +3720,15 @@ export class DesktopApp {
     }
   }
 
-  private fail(error: unknown, stage: ErrorStage, task?: string, server?: string, retry?: () => Promise<void>): void {
+  private fail(error: unknown, stage: ErrorStage, task?: string, server?: string, retry?: () => Promise<void>, attempt = 0): void {
+    if (error instanceof ApiError && error.status === 429 && stage === 'action' && this.state.session !== null) {
+      // A background pause, not a failure (UXA-7): "Paused for a moment. Back in 0:25." in the strip, then once more,
+      // at most TIME_AUTO_RETRIES times with a growing wait (BDA14-I2); then *Retry* in the strip.
+      this.error = null;
+      this.rateLimit = { until: Date.now() + rateRetryWait(error.retryAfter, attempt) * 1000, retry: retry ?? null, attempt, held: attempt >= TIME_AUTO_RETRIES };
+      this.render();
+      return;
+    }
     this.error = describeError(error, {
       stage,
       task,
@@ -3656,6 +3851,15 @@ export class DesktopApp {
     const signedIn = this.state.session !== null;
     const sub = this.view === 'settings' || this.view === 'privacy';
     const dashboard = signedIn ? dashboardUrl(this.state.session?.server) : null;
+    // Hosted (UXA-1): the shell's title bar is the only header of the main screen; "What we collect" keeps its row
+    // for the way back.
+    const bare = this.host !== null && signedIn && this.view === 'main';
+    this.header.hidden = bare;
+    this.root.classList.toggle('no-bar', bare);
+    if (bare) {
+      patch(this.headerRow, []);
+      return;
+    }
     patch(this.headerRow, [
       sub
         ? this.iconButton('back', t('back'), {
@@ -3669,7 +3873,7 @@ export class DesktopApp {
         { class: 'actions', attrs: { 'aria-label': t('beaconLinks') } },
         this.offline && signedIn && this.queue.size > 0 && h('span', { class: 'badge', id: 'queue-badge', attrs: { title: t('offline', { count: this.queue.size }) } }, String(this.queue.size)),
         dashboard !== null && this.beaconLink(dashboard, t('openBeacon'), { id: 'open-beacon', icon: true }),
-        signedIn && (this.view === 'main' || sub) && this.layoutToggle(),
+        this.host === null && signedIn && (this.view === 'main' || sub) && this.layoutToggle(),
         this.view === 'main' && this.iconButton('settings', t('settings'), { id: 'open-settings', onClick: () => this.show('settings'), shortcut: 'Control+,' }),
         this.view === 'login' && this.iconButton('help', t('whereFind'), { id: 'help', onClick: () => this.toggleWhere() }),
       ),
@@ -3680,7 +3884,7 @@ export class DesktopApp {
   private layoutToggle(): HTMLButtonElement {
     const to = otherMode(this.layout);
     const label = this.t(to === 'full' ? 'layoutToFull' : 'layoutToCompact');
-    const props = { id: 'layout-toggle', onClick: () => void this.setLayoutMode(to), shortcut: 'Control+Shift+L' };
+    const props = { id: 'layout-toggle', onClick: () => void this.setLayoutMode(to), shortcut: undefined };
     if (to === 'full') return this.iconButton('columns', label, props);
     return h(
       'button',
@@ -3696,7 +3900,9 @@ export class DesktopApp {
    */
   private renderPanes(): void {
     const full = this.fullLayout();
-    const detail = full;
+    // Hosted (UXA-1): the shell's rail takes room, so the detail pane waits for a wider window.
+    const detail = full && (this.host === null || this.viewportWidth() >= DETAIL_MIN_WIDTH);
+    this.detailShown = detail;
     this.root.setAttribute('data-layout', full ? 'full' : 'compact');
     this.root.classList.toggle('with-detail', detail);
     this.sidebar.hidden = !full;
@@ -3715,6 +3921,21 @@ export class DesktopApp {
         {},
         h('button', { class: 'nav-item', id, key: id, attrs: { type: 'button', 'aria-current': current ? 'page' : undefined, 'aria-keyshortcuts': shortcut }, on: { click: onClick } }, icon(name), h('span', {}, label)),
       );
+    if (this.host !== null) {
+      // Hosted (UXA-1, UXA-25): a module sidebar like Chat's; Settings is the rail's gear, Beacon's page at the foot.
+      const dashboard = dashboardUrl(this.state.session?.server);
+      return [
+        h('div', { class: 'side-head' }, h('h2', { id: 'time-side-title' }, t('navTitle'))),
+        h(
+          'ul',
+          { class: 'nav-list', attrs: { 'aria-labelledby': 'time-side-title' } },
+          item('nav-tasks', 'play', t('navTasks'), main && this.section === 'tasks', () => this.showSection('tasks')),
+          item('nav-quick', 'pin', t('pinnedRecent'), main && this.section === 'quick', () => this.showSection('quick')),
+          item('nav-time', 'clock', t('myTime'), main && this.section === 'time', () => this.showSection('time')),
+        ),
+        dashboard !== null && h('div', { class: 'side-foot' }, this.beaconLink(dashboard, t('openBeacon'), { id: 'open-beacon', key: 'open-beacon', className: 'side-link' }, icon('external'), h('span', {}, t('openBeacon')))),
+      ];
+    }
     return [
       h(
         'ul',
@@ -3847,9 +4068,81 @@ export class DesktopApp {
     patch(this.status, [
       this.notice !== null &&
         h('p', { class: this.noticeMoment !== null ? 'notice with-art' : 'notice', id: 'notice' }, this.noticeMoment !== null && moment(this.noticeMoment, 'mascot tiny', t), h('span', {}, this.notice)),
-      this.offline && signedIn && h('p', { class: 'notice warn', id: 'offline' }, t('offline', { count: this.queue.size })),
     ]);
     patch(this.alert, [this.error !== null ? this.renderError(this.error) : null]);
+    this.renderStrip(signedIn);
+  }
+
+  /**
+   * The status strip (UX batch 4, UXA-7): offline (with the actions waiting), a `429` pause counting down, and, hosted in
+   * the shell, "You're in" after a sign-in (UXA-23: the organization, not the server address). Its height is kept on the
+   * main screen whether it says something or not, so the list never moves.
+   */
+  private renderStrip(signedIn: boolean): void {
+    const t = this.t;
+    this.strip.root.hidden = !(signedIn && this.view === 'main');
+    const rate = this.rateLimit;
+    // BDA14-I2: the automatic retries are spent and the pause is over: *Retry* is the person's.
+    const held = rate !== null && rate.held === true && rate.retry !== null && rate.until <= Date.now();
+    const name = this.state.session?.displayName ?? this.state.session?.identifier ?? '';
+    const org = this.deps.contextLabel?.() ?? null;
+    const message: StripMessage | null = !signedIn
+      ? null
+      : pickMessage([
+          this.offline && { key: 'offline', text: t('offline', { count: this.queue.size }), tone: 'warn', textId: 'offline' },
+          held && {
+            key: 'rate-held',
+            text: t('pausedRetry'),
+            tone: 'info',
+            action: { id: 'time-strip-retry', label: t('actionRetry'), onClick: () => void this.retryHeld(rate) },
+          },
+          rate !== null &&
+            !held && {
+            key: 'rate',
+            text: (left: number) => t('pausedFor', { time: formatCountdown(left) }),
+            tone: 'info',
+            until: rate.until,
+            onElapsed: () => this.rateLimitEnded(rate),
+          },
+          this.welcome && this.host !== null && this.error === null && { key: 'welcome', text: this.welcomeText(name, org), tone: 'info' },
+        ]);
+    this.strip.show(message);
+  }
+
+  /**
+   * "You're in" in the strip (UXA-23). BDA14-L5: in the compact layout (under 900 px) the short variant, so the one line
+   * is never cut; the *Not tracking* card below already says to pick a task and press Start.
+   */
+  private welcomeText(name: string, org: string | null): string {
+    const t = this.t;
+    if (this.layout === 'compact') return org !== null ? t('welcomeStripShortOrg', { org }) : t('welcomeStripShort', { name });
+    return org !== null ? t('welcomeStripOrg', { name, org }) : t('welcomeStrip', { name });
+  }
+
+  /** The `429` pause ended: the action that met it is tried again (once), unless something else happened meanwhile. */
+  private rateLimitEnded(rate: RatePause): void {
+    if (this.rateLimit !== rate) return;
+    // BDA14-I2: the automatic retries are spent: the strip offers Retry and nothing is sent on its own.
+    if (rate.held === true && rate.retry !== null) {
+      this.render();
+      return;
+    }
+    this.rateLimit = null;
+    this.render();
+    if (rate.retry !== null && this.state.session !== null && !this.busy) {
+      this.autoRetry = rate.attempt + 1;
+      void rate.retry();
+      // Read synchronously by the guard the retry starts; never left for an unrelated action.
+      this.autoRetry = 0;
+    }
+  }
+
+  /** *Retry* after the automatic retries were spent (BDA14-I2): the person's own attempt starts a new count. */
+  private async retryHeld(rate: RatePause): Promise<void> {
+    if (this.rateLimit !== rate) return;
+    this.rateLimit = null;
+    this.render();
+    if (rate.retry !== null && this.state.session !== null) await rate.retry();
   }
 
   private renderError(error: ErrorView): HTMLElement {
@@ -3920,6 +4213,28 @@ export class DesktopApp {
 
   private renderLogin(): HTMLElement {
     const t = this.t;
+    const fixed = this.deps.fixedServer;
+    if (fixed !== undefined) {
+      // Release builds (owner decision 2026-11-27): no address to type; one button starts the approval in Beacon.
+      return h(
+        'form',
+        {
+          id: 'login-form',
+          attrs: { novalidate: true },
+          on: {
+            submit: (event) => {
+              event.preventDefault();
+              void this.connect();
+            },
+          },
+        },
+        moment('firstRun', 'mascot', t),
+        h('h2', {}, t('loginTitle')),
+        h('p', { class: 'help', id: 'server-fixed' }, t('loginFixedHelp', { host: hostOf(fixed) })),
+        h('button', { class: 'primary', id: 'connect', attrs: { type: 'submit', disabled: this.busy } }, this.busy ? t('connecting') : t('connectFixed')),
+        h('button', { class: 'link', id: 'open-privacy', attrs: { type: 'button' }, on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
+      );
+    }
     const problem = this.serverProblem;
     const server = h('input', {
       id: 'server',
@@ -4051,7 +4366,12 @@ export class DesktopApp {
     main.list.hidden = section !== 'tasks';
     main.time.hidden = section !== 'time';
     patch(main.time, section === 'time' ? this.renderMyTime() : []);
-    patch(main.footer, [h('span', {}, this.t('signedInAs', { name: this.state.session?.displayName ?? this.state.session?.identifier ?? '' }))]);
+    // Hosted in a narrow window (no sidebar): Beacon's page at the footer instead of the header it no longer has.
+    const dashboard = this.host !== null && !this.fullLayout() ? dashboardUrl(this.state.session?.server) : null;
+    patch(main.footer, [
+      h('span', {}, this.t('signedInAs', { name: this.state.session?.displayName ?? this.state.session?.identifier ?? '' })),
+      dashboard !== null && this.beaconLink(dashboard, this.t('openBeacon'), { id: 'open-beacon', key: 'open-beacon' }),
+    ]);
     this.renderModal(main);
     this.syncScrollerFocus(main.scroller);
   }
@@ -4162,7 +4482,8 @@ export class DesktopApp {
     const modal = h('div', { class: 'idle-modal', id: 'idle-modal', attrs: { hidden: true } });
     const search = h('input', {
       id: 'search',
-      attrs: { type: 'search', placeholder: t('searchTasks'), 'aria-label': t('searchLabel'), 'aria-describedby': 'search-hint', 'aria-keyshortcuts': 'Control+K /', autocomplete: 'off' },
+      // Hosted, Ctrl/⌘+K is the shell's global switcher (UX batch 3): "/" searches the tasks.
+      attrs: { type: 'search', placeholder: t(this.host !== null ? 'searchTasksHosted' : 'searchTasks'), 'aria-label': t('searchLabel'), 'aria-describedby': 'search-hint', 'aria-keyshortcuts': this.host !== null ? '/' : 'Control+K /', autocomplete: 'off' },
     });
     search.value = this.query;
     search.addEventListener('input', () => {
@@ -4200,6 +4521,8 @@ export class DesktopApp {
       prompt: new PromptMount(modal, { onAnswer: (answer) => void this.answerPrompt(answer), onExpired: () => void this.tick(), now: this.now }),
     };
     regions.scroller.append(regions.banners, regions.quick, regions.list, regions.time);
+    // Scrolled: a soft edge under the search field, so rows never look tucked under it (400 px window, UX batch 3).
+    regions.scroller.addEventListener('scroll', () => regions.root.classList.toggle('list-scrolled', regions.scroller.scrollTop > 0), { passive: true });
     // A window resized: the scroller may start or stop overflowing.
     if (typeof ResizeObserver === 'function') new ResizeObserver(() => this.syncScrollerFocus(regions.scroller)).observe(regions.scroller);
     regions.root.addEventListener('keydown', (event) => {
@@ -4233,9 +4556,10 @@ export class DesktopApp {
       this.promptInWindow() && this.state.idleCheck.phase !== 'watching' && this.renderPromptElsewhere(),
       this.nativeNotice !== null && this.renderNativeNotice(),
       this.pinExpired && this.renderPinExpired(),
-      this.renderUpdateCard(),
+      this.deps.updateInShell !== true && this.renderUpdateCard(),
       ...this.renderMeetingBanners(),
-      this.welcome && this.error === null && this.renderWelcome(),
+      // Hosted in the shell, "You're in" is a line in the status strip (UXA-23).
+      this.welcome && this.error === null && this.host === null && this.renderWelcome(),
       this.longRunning() && this.renderLongRunning(),
       this.updateMessage !== null &&
         h(
@@ -4245,13 +4569,7 @@ export class DesktopApp {
           h('button', { class: 'secondary small', id: 'download-beacon', on: { click: () => this.openApps() } }, t('downloadFromBeacon')),
         ),
       this.clampNotes.length > 0 && this.renderClamps(),
-      this.offline &&
-        h(
-          'section',
-          { class: 'card still-there offline-card', id: 'offline-card', attrs: { role: 'region', 'aria-labelledby': 'offline-title' } },
-          moment('offline', 'mascot tiny', t),
-          h('div', { class: 'still-there-body' }, h('h2', { id: 'offline-title' }, t('offlineTitle')), h('p', { class: 'muted' }, t('offlineStartNote'))),
-        ),
+      // Offline is the status strip's line now (UXA-7): no second "Working offline" card above the list.
     ]);
   }
 
@@ -4376,12 +4694,23 @@ export class DesktopApp {
    * "Version X is available": calm card with the small mascot (moss / mist, never alert colours), non-blocking, a named
    * region; progress in a native <progress>; announcements through the persistent polite live region.
    */
+  /** Whether the update card has something to show (an installable update not put off with "Later"). */
+  updateVisible(): boolean {
+    const update = this.update;
+    if (update === null || !update.installable || this.updateMessage !== null || this.channel === 'store') return false;
+    return !(this.updateStage === 'offer' && this.updateLater === update.version);
+  }
+
+  /** The update card for the shell's update panel (UX batch 7), `null` when there is nothing to show. */
+  updatePanel(): HTMLElement | null {
+    return this.renderUpdateCard();
+  }
+
   private renderUpdateCard(): HTMLElement | null {
     const t = this.t;
     const update = this.update;
-    if (update === null || !update.installable || this.updateMessage !== null || this.channel === 'store') return null;
+    if (update === null || !this.updateVisible()) return null;
     const stage = this.updateStage;
-    if (stage === 'offer' && this.updateLater === update.version) return null;
     const button = (id: string, kind: string, label: string, onClick: () => void, extra: Record<string, string> = {}) =>
       h('button', { class: `${kind} small`, id, key: id, attrs: { type: 'button', ...extra }, on: { click: onClick } }, label);
     let body: Child[];
@@ -4571,6 +4900,7 @@ export class DesktopApp {
       ],
       this.state.activeTimer !== null ? 'stop' : '#search',
     );
+    this.syncRowStops();
   }
 
   /**
@@ -4621,7 +4951,7 @@ export class DesktopApp {
       h('span', { class: 'task' }, h('span', { class: 'title', attrs: { title: task.title } }, task.title), meta !== '' ? h('small', {}, meta) : null),
       number !== undefined && h('kbd', { class: 'shortcut', attrs: { 'aria-hidden': 'true' } }, String(number)),
       link !== null && this.beaconLink(link, t('openTaskInBeacon', { title: task.title }), { icon: true, key: `link-${task.id}` }),
-      h(
+      this.host !== null ? this.playButton(task, label, number) : h(
         'button',
         {
           class: 'primary small row-action',
@@ -4633,6 +4963,34 @@ export class DesktopApp {
         h('span', { class: 'button-text' }, running ? t('switch') : t('start')),
       ),
     );
+  }
+
+  /**
+   * Hosted (UXA-24): one quiet play icon per row, as Tasks' `.k-play`: shown on hover and focus, always on the running
+   * row (where it stops the timer). Only one row button is a Tab stop (arrows, Home / End move; Enter or S start).
+   */
+  private playButton(task: Task, label: string, number?: number): HTMLButtonElement {
+    const t = this.t;
+    const running = this.state.activeTimer?.taskId === task.id;
+    const text = running ? t('stopTask', { task: task.title }) : label;
+    return h(
+      'button',
+      {
+        class: running ? 'row-action play on' : 'row-action play',
+        key: `start-${task.id}`,
+        attrs: { type: 'button', tabindex: '-1', 'aria-disabled': this.busy ? 'true' : undefined, 'aria-label': text, title: `${text} (S)`, 'aria-keyshortcuts': number !== undefined ? `Alt+${number} S` : 'S' },
+        on: { click: () => this.whenIdle(running ? async () => void (await this.stop()) : () => this.start(task)) },
+      },
+      icon(running ? 'stop' : 'play'),
+    );
+  }
+
+  /** Hosted: the row buttons form one Tab stop (the focused one, else the first). */
+  private syncRowStops(): void {
+    if (this.host === null || this.main === null) return;
+    const buttons = [...this.main.root.querySelectorAll<HTMLButtonElement>('button.row-action')];
+    const current = buttons.find((button) => button === document.activeElement) ?? buttons[0];
+    for (const button of buttons) button.tabIndex = button === current ? 0 : -1;
   }
 
   private time(iso: string | Date): string {
@@ -5065,6 +5423,10 @@ export class DesktopApp {
 
   /** Opens Settings on one tab. */
   showSettings(tab: SettingsTab): void {
+    if (this.host !== null) {
+      this.openHostSettings(tab);
+      return;
+    }
     this.show('settings');
     this.settingsView?.tabs.select(tab);
   }
@@ -5093,27 +5455,55 @@ export class DesktopApp {
     tabs.setLabels(t('settingsSections'), labels);
     if (root.parentElement !== this.body) this.body.replaceChildren(root);
     tabs.setOrientation(this.settingsOrientation());
-    const panel = (id: SettingsTab) => tabs.panels.get(id) as HTMLElement;
-    patch(panel('general'), [
-      this.renderAppearance(),
-      this.renderBrowserSetting(),
-      // Store (MSIX) builds cannot register the login item the autostart plugin writes: no switch there.
-      this.channel === 'direct' && this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
-      h('p', { class: 'muted', id: 'background-note' }, t('backgroundNote')),
-      this.renderConnectionSecurity(),
-      h(
-        'div',
-        { class: 'row-actions account-actions' },
-        h('button', { class: 'link', id: 'open-privacy', attrs: { type: 'button' }, on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
-        h('button', { class: 'danger', id: 'logout', attrs: { type: 'button' }, on: { click: () => void this.logout() } }, t('logout')),
-      ),
-    ]);
-    patch(panel('shortcuts'), [this.renderShortcut(), this.renderResumeShortcut()]);
-    patch(panel('timer'), [this.renderIdleSettings(), this.renderHelpers()]);
-    patch(panel('schedule'), [this.renderSchedule()]);
-    patch(panel('notifications'), [this.renderFriendlySettings(), this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText')]);
-    patch(panel('meetings'), [this.renderMeetingSettings(), this.renderReminderSettings()]);
-    patch(panel('updates'), [this.renderAbout()]);
+    for (const id of SETTINGS_TABS) patch(tabs.panels.get(id) as HTMLElement, this.settingsContent(id));
+  }
+
+  /**
+   * What one Settings tab holds. Hosted in the shell (UX batch 6) its one Settings shows these panels next to its own;
+   * Theme moves to its Appearance tab and Sign out / "What we collect" to its Account tab, so General has neither.
+   */
+  settingsContent(tab: SettingsTab): Child[] {
+    const t = this.t;
+    switch (tab) {
+      case 'general':
+        return [
+          this.host === null && this.renderAppearance(),
+          this.renderBrowserSetting(),
+          // Store (MSIX) builds cannot register the login item the autostart plugin writes: no switch there.
+          this.channel === 'direct' && this.renderFeature('autostart', 'featureAutostart', 'featureAutostartText'),
+          h('p', { class: 'muted', id: 'background-note' }, t('backgroundNote')),
+          this.renderConnectionSecurity(),
+          this.host === null &&
+            h(
+              'div',
+              { class: 'row-actions account-actions' },
+              h('button', { class: 'link', id: 'open-privacy', attrs: { type: 'button' }, on: { click: () => this.show('privacy') } }, t('whatWeCollect')),
+              h('button', { class: 'danger', id: 'logout', attrs: { type: 'button' }, on: { click: () => void this.logout() } }, t('logout')),
+            ),
+        ];
+      case 'shortcuts':
+        return [this.renderShortcut(), this.renderResumeShortcut()];
+      case 'timer':
+        return [this.renderIdleSettings(), this.renderHelpers()];
+      case 'schedule':
+        return [this.renderSchedule()];
+      case 'notifications':
+        return [this.renderFriendlySettings(), this.renderFeature('notifications', 'featureNotifications', 'featureNotificationsText')];
+      case 'meetings':
+        return [this.renderMeetingSettings(), this.renderReminderSettings()];
+      case 'updates':
+        return [this.renderAbout()];
+    }
+  }
+
+  /** Settings → Theme (System / Light / Dark); hosted, the shell's Appearance tab shows it. */
+  themeSetting(): HTMLElement {
+    return this.renderAppearance();
+  }
+
+  /** The label of a Settings tab (the shell's one Settings names the Time module's tabs the same way). */
+  settingsTabLabel(tab: SettingsTab): string {
+    return this.t(SETTINGS_TAB_LABELS[tab]);
   }
 
   /** Settings → Shortcuts: the global shortcut that shows the window. */
@@ -5509,7 +5899,7 @@ export class DesktopApp {
       this.browsers = [];
     }
     await this.loadBrowserChoice();
-    if (this.view === 'settings') this.render();
+    if (this.view === 'settings' || this.host !== null) this.render();
   }
 
   /** The "Open Beacon in" choice the host keeps (the system default when the host cannot say). */

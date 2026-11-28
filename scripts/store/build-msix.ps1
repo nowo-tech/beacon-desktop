@@ -17,7 +17,7 @@
     $env:MSIX_PUBLISHER                Package/Identity/Publisher (CN=…)
     $env:MSIX_PUBLISHER_DISPLAY_NAME   Package/Properties/PublisherDisplayName
   Optional: $env:TIMETRACK_STORE_URL = https://apps.microsoft.com/detail/<Store ID> (the "Open Microsoft Store" button;
-  without it the button opens Beacon's Apps page), $env:BEACON_URL (prefilled server).
+  without it the button opens Beacon's Apps page). The server is always https://beacon.nowo.tech (no BEACON_URL).
 
 .EXAMPLE
   pwsh scripts/store/build-msix.ps1

@@ -1,0 +1,124 @@
+/*
+ * UX batch 6: the Time module in the shell's grammar (UXA-1, UXA-24), the one Settings (UXA-2) and the guided first run
+ * (UXA-4). Loaded after styles.css and chat.css. The Time module and the setup card take the shell's tokens (chat.css);
+ * the Time module's own token names (styles.css) are mapped onto them here, so one palette paints every module. The
+ * input outline (--control-border) keeps the Time module's value: it is the one that holds 3:1 in both themes.
+ */
+:where(#mod-time, #mod-setup, .sh-dialog) {
+  --paper: var(--surface-2);
+  --ink-soft: var(--ink-2);
+  --sand: var(--line);
+  --mist: var(--moss-soft);
+  --surface-muted: var(--surface-2);
+  --moss-deep: var(--moss-strong);
+  --alert: var(--danger);
+  --alert-bg: var(--danger-soft);
+  --warn-bg: var(--warn-soft);
+}
+
+/* ---------- Time module, hosted (UXA-1) ---------- */
+#mod-time { background: var(--surface); }
+/* No second header inside the shell: the title bar is the only one. */
+.shell #app.no-bar { grid-template-rows: minmax(0, 1fr); }
+.shell #app.no-bar > .bar { display: none; }
+/* A module sidebar like Chat's: same width, chrome colours, 30 px rows (24 px in the compact density). */
+#mod-time #app.hosted[data-layout='full'] .frame { grid-template-columns: 260px minmax(0, 1fr); }
+#mod-time #app.hosted[data-layout='full'].with-detail .frame { grid-template-columns: 260px minmax(0, 1fr) clamp(17rem, 100vw - 64px - 260px - 40rem, 22rem); }
+#mod-time #app.hosted[data-layout='full'] .sidebar { gap: 0; padding: 0 var(--sp-2) var(--sp-2); background: var(--chrome-2); color: var(--chrome-ink); border-right: 1px solid var(--chrome-line); }
+#mod-time .sidebar .side-head { padding: var(--sp-3) var(--sp-1) var(--sp-2) 6px; }
+#mod-time .sidebar .side-head h2 { margin: 0; font: 700 var(--fs-lg)/1.2 var(--font-display); color: var(--chrome-ink); }
+#mod-time .sidebar .nav-list { gap: 2px; }
+#mod-time .sidebar .nav-item { height: var(--row-h); min-height: 0; padding: 0 var(--sp-2); gap: var(--sp-2); border: 0; border-radius: var(--r-sm); color: var(--chrome-ink-2); font-size: var(--fs-md); font-weight: 500; }
+#mod-time .sidebar .nav-item svg { width: 16px; height: 16px; }
+#mod-time .sidebar .nav-item:hover { background: var(--chrome-hover); color: var(--chrome-ink); }
+#mod-time .sidebar .nav-item[aria-current='page'] { background: var(--chrome-active); color: #fff; box-shadow: none; font-weight: 600; }
+.shell[data-density='compact'] #mod-time .sidebar .nav-item { --row-h: 24px; font-size: var(--fs-sm); }
+#mod-time .sidebar :focus-visible { outline: 2px solid var(--focus-chrome); outline-offset: -2px; }
+#mod-time .sidebar .side-foot { margin-top: auto; padding: var(--sp-2) var(--sp-1) 0; }
+#mod-time .sidebar .side-link { display: flex; align-items: center; gap: var(--sp-2); min-height: 28px; padding: 0 var(--sp-1); border-radius: var(--r-sm); color: var(--chrome-ink-2); font-size: var(--fs-sm); text-decoration: none; }
+#mod-time .sidebar .side-link:hover { background: var(--chrome-hover); color: var(--chrome-ink); }
+#mod-time .sidebar .side-link svg { width: 14px; height: 14px; }
+#mod-time #app.hosted[data-layout='full'] .detail { background: var(--surface-2); border-left-color: var(--line); }
+
+/* One quiet play icon per row (UXA-24), as Tasks' .k-play: on hover and focus, always on the running row. */
+#mod-time .row-action.play {
+  width: 28px; min-width: 28px; height: 28px; min-height: 0; padding: 0; flex: none;
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); color: var(--moss);
+  opacity: 0; transition: opacity var(--dur) var(--ease);
+}
+#mod-time .row-action.play svg { width: 16px; height: 16px; }
+#mod-time .tasks li:hover .row-action.play, #mod-time .tasks li:focus-within .row-action.play, #mod-time .tasks li.selected .row-action.play, #mod-time .row-action.play.on { opacity: 1; }
+#mod-time .row-action.play:hover { background: var(--moss-soft); border-color: var(--moss-line); }
+#mod-time .row-action.play.on { color: var(--signal); background: var(--signal-soft); border-color: color-mix(in srgb, var(--signal-dot) 40%, transparent); }
+/* A narrow window puts the rail at the bottom (chat.css): the Time module's toasts sit above it, never over its tabs
+   and the Settings gear. */
+@media (max-width: 760px) {
+  .shell #app .toasts { bottom: calc(56px + 1rem); }
+}
+@media (hover: none) {
+  #mod-time .row-action.play { opacity: 1; }
+}
+
+/* ---------- The one Settings (UXA-2) ---------- */
+.sh-dialog.one-settings { margin-block: auto; max-height: calc(100dvh - 16px); }
+.one-settings .settings { width: min(880px, calc(100vw - 32px)); height: min(640px, calc(100dvh - 24px)); display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.one-settings .dlg-h { border-bottom: 1px solid var(--line); padding-bottom: var(--sp-3); }
+.one-settings .one-settings-b { display: block; max-height: none; overflow: hidden; padding: 0; min-height: 0; color: var(--ink); }
+.one-settings-b > .tabs { height: 100%; min-height: 0; }
+.one-settings-b[data-orientation='vertical'] > .tabs { display: grid; grid-template-columns: 200px minmax(0, 1fr); }
+.one-settings-b[data-orientation='vertical'] .tablist { grid-column: 1; grid-row: 1; overflow-y: auto; padding: var(--sp-2); gap: 2px; background: var(--surface-2); border-inline-end: 1px solid var(--line); }
+.one-settings-b[data-orientation='vertical'] .tablist .tab { min-height: 32px; padding: 0 var(--sp-3); font-size: var(--fs-sm); }
+/* Panels not shown take no room and no clicks (they share one grid cell; find-in-page does not reach a modal). */
+.one-settings-b > .tabs > .tabpanel[hidden] { display: none; }
+.one-settings-b[data-orientation='vertical'] > .tabs > .tabpanel:not([hidden]) { grid-column: 2; grid-row: 1; min-width: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-4) var(--sp-5) var(--sp-5); }
+.one-settings-b[data-orientation='horizontal'] > .tabs { display: flex; flex-direction: column; }
+.one-settings-b[data-orientation='horizontal'] .tablist { flex: none; margin: 0; padding: 0 var(--sp-3); background: var(--surface); }
+.one-settings-b[data-orientation='horizontal'] > .tabs > .tabpanel:not([hidden]) { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-3) var(--sp-4) var(--sp-4); }
+/* The Time module's panels keep their own buttons (the shell's dialogs start buttons from nothing). */
+:where(.one-settings .tabpanel) button { display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem; min-height: 2rem; padding: 0.4375rem 0.75rem; border: 1px solid transparent; border-radius: var(--radius-control); }
+.one-settings .tabpanel h2 { font-size: var(--fs-md); }
+.set-stack { display: grid; gap: var(--sp-4); }
+.set-stack > .theme-choice { margin: 0; }
+.conn-state { display: inline-flex; align-items: center; gap: var(--sp-1); margin-inline-start: var(--sp-2); font-size: var(--fs-xs); font-weight: 500; color: var(--ink-3); }
+.conn-state .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); }
+.conn-state.on { color: var(--moss); }
+.conn-state.on .conn-dot { background: var(--presence-on); }
+.conn-state .conn-dot.warn { background: var(--signal-dot, var(--warn)); }
+.account-actions { justify-content: space-between; }
+.sh-dialog .btn.danger-fill { background: var(--danger); border-color: var(--danger); color: var(--surface); }
+.sh-dialog .btn.danger-fill:hover { background: var(--danger); border-color: var(--danger); filter: brightness(0.94); }
+
+/* ---------- Guided first run (UXA-4) ---------- */
+.shell .module.setup { overflow-y: auto; display: grid; justify-items: center; align-content: start; padding: var(--sp-6) var(--sp-5); background: var(--surface-2); color: var(--ink); }
+.shell .module.setup[hidden] { display: none; }
+.setup-card { width: min(560px, 100%); display: grid; gap: var(--sp-3); padding: 28px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-md); }
+.setup-card h1 { margin: 0; font: 700 1.25rem/1.25 var(--font-display); color: var(--ink); }
+.setup-steps { list-style: none; margin: var(--sp-2) 0 0; padding: 0; border-top: 1px solid var(--line); }
+.setup-step { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: var(--sp-3); padding: var(--sp-4) 0; border-bottom: 1px solid var(--line); }
+.st-mark { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font: 600 var(--fs-sm)/1 var(--font-ui); background: var(--surface-3); color: var(--ink-2); }
+.setup-step.done .st-mark { background: var(--moss); color: var(--on-moss); }
+.setup-step.active .st-mark { background: var(--moss-soft); color: var(--moss-strong); box-shadow: inset 0 0 0 2px var(--moss); }
+.st-body { display: grid; gap: var(--sp-2); min-width: 0; align-content: start; }
+.st-title { margin: 0; padding-top: 5px; font-size: var(--fs-md); font-weight: 600; color: var(--ink); }
+.st-text { margin: 0; color: var(--ink-2); font-size: var(--fs-sm); }
+.setup-step.skipped .st-text { color: var(--ink-3); }
+.setup-foot { display: flex; justify-content: flex-end; }
+#mod-setup button { font: inherit; cursor: pointer; }
+#mod-setup .btn { height: 32px; padding: 0 var(--sp-3); border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface); color: var(--ink); display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; }
+#mod-setup .btn:hover { background: var(--hover); border-color: var(--ink-3); }
+#mod-setup .btn.primary { background: var(--moss); border-color: var(--moss); color: var(--on-moss); }
+#mod-setup .btn.primary:hover { background: var(--moss-strong); border-color: var(--moss-strong); }
+#mod-setup .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+#mod-setup .btn-ghost { height: 32px; padding: 0 var(--sp-2); border: 0; border-radius: var(--r-sm); background: transparent; color: var(--ink-2); font-size: var(--fs-sm); font-weight: 500; }
+#mod-setup .btn-ghost:hover { background: var(--hover); color: var(--ink); }
+#mod-setup :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 760px) {
+  .shell .module.setup { padding: var(--sp-4) var(--sp-3); }
+  .setup-card { padding: var(--sp-5) var(--sp-4); }
+}
+
+/* UX batch 3: the task list scrolled under the search field gets a soft edge (as the composer's, UXA-39), so its first
+   row never looks tucked under the field (400 px window). */
+#main .search { position: relative; z-index: 1; transition: box-shadow var(--dur, 120ms) ease; }
+#main.list-scrolled .search { box-shadow: 0 6px 10px -4px rgb(0 0 0 / 0.3); }
+@media (prefers-reduced-motion: reduce) { #main .search { transition: none; } }
