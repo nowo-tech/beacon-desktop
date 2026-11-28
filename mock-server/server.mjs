@@ -17,6 +17,7 @@ import { createServer } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { CHAT_PREFIX, CHAT_SCOPES, createChatMock } from './chat.mjs';
+import { TASKS_PREFIX, TASKS_SCOPES, createTasksMock } from './tasks.mjs';
 
 const PREFIX = '/api/time-track';
 const ALL_SCOPES = ['timer:read', 'timer:write', 'tasks:read', 'entries:read'];
@@ -153,6 +154,7 @@ function readBody(req) {
 export function createMockServer(options = {}) {
   let state = freshState();
   const chat = createChatMock({ send: (...args) => send(...args), error: (...args) => error(...args) });
+  const tasksMock = createTasksMock({ send: (...args) => send(...args), error: (...args) => error(...args) });
   const allowedOrigins = options.allowedOrigins ?? null; // null = echo any origin (dev / tests)
 
   function cors(req, res) {
@@ -160,9 +162,9 @@ export function createMockServer(options = {}) {
     if (origin && (allowedOrigins === null || allowedOrigins.includes(origin))) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept, X-Beacon-Context, Idempotency-Key');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Expose-Headers', 'Retry-After, Content-Disposition, X-Min-Supported-Version');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept, X-Beacon-Context, Idempotency-Key, If-Match');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Expose-Headers', 'Retry-After, Content-Disposition, X-Min-Supported-Version, ETag');
       res.setHeader('Access-Control-Max-Age', '600');
     }
   }
@@ -209,6 +211,11 @@ export function createMockServer(options = {}) {
     return { token: value, expiresAt: new Date(expiresAt).toISOString(), scopes: [...scopes], scopeFamily: family };
   }
 
+  /** A task a timer may start on: the time API's list, plus the TaskBoard mock's (a timer from the Tasks module, BD-3b). */
+  function trackable() {
+    return [...allTasks(), ...tasksMock.timeTasks()];
+  }
+
   function allTasks() {
     const extra = Math.max(0, Math.min(Number(state.config.extraTasks) || 0, 200));
     return [...TASKS, ...Array.from({ length: extra }, (_, i) => ({ id: `T-${201 + i}`, title: `Sample task ${i + 1}`, boardId: 'misc', boardTitle: 'Miscellaneous' }))];
@@ -221,7 +228,7 @@ export function createMockServer(options = {}) {
   }
 
   function startTimer(userId, taskId, note, source, origin = null) {
-    const task = allTasks().find((t) => t.id === taskId);
+    const task = trackable().find((t) => t.id === taskId);
     const timer = withUrl(
       {
         id: randomUUID(),
@@ -316,7 +323,7 @@ export function createMockServer(options = {}) {
   }
 
   function validTask(body) {
-    return typeof body.taskId === 'string' && allTasks().some((t) => t.id === body.taskId);
+    return typeof body.taskId === 'string' && trackable().some((t) => t.id === body.taskId);
   }
 
   function validSource(body, res) {
@@ -648,9 +655,9 @@ export function createMockServer(options = {}) {
         // Contract v0.5: `family` (time by default; `chat` with chat scopes); a Bearer of a token the device holds
         // chains the request (only that token's owner may approve it).
         const family = body.family ?? 'time';
-        const known = family === 'chat' ? (state.config.chatReadOnlyFamily ? ['chat:read'] : CHAT_SCOPES) : state.config.meetingsScope ? [...ALL_SCOPES, MEETINGS_SCOPE] : ALL_SCOPES;
+        const known = family === 'tasks' ? TASKS_SCOPES : family === 'chat' ? (state.config.chatReadOnlyFamily ? ['chat:read'] : CHAT_SCOPES) : state.config.meetingsScope ? [...ALL_SCOPES, MEETINGS_SCOPE] : ALL_SCOPES;
         const scopes = body.scopes ?? [...ALL_SCOPES];
-        if (!['time', 'chat'].includes(family) || !Array.isArray(scopes) || scopes.length === 0 || scopes.some((scope) => !known.includes(scope))) {
+        if (!['time', 'chat', 'tasks'].includes(family) || !Array.isArray(scopes) || scopes.length === 0 || scopes.some((scope) => !known.includes(scope))) {
           return error(res, 400, 'invalid_scope', 'Unknown or empty scope list.');
         }
         let chainedTo = null;
@@ -744,7 +751,12 @@ export function createMockServer(options = {}) {
       case 'POST reset':
         state = freshState();
         chat.reset();
+        tasksMock.reset();
         return send(res, 204);
+      case 'GET tasks/state':
+        return send(res, 200, tasksMock.state());
+      case 'POST tasks/touch':
+        return send(res, 200, tasksMock.touch(body));
       case 'POST chat/post':
         return send(res, 200, chat.post(body));
       case 'GET chat/state':
@@ -838,6 +850,11 @@ export function createMockServer(options = {}) {
 
     if (url.pathname.startsWith('/__mock/')) {
       return control(req, res, url.pathname.slice('/__mock/'.length), body);
+    }
+
+    if (url.pathname.startsWith(`${TASKS_PREFIX}/`)) {
+      state.requests.push({ method: req.method, path: url.pathname, query: url.search, body: raw, origin: req.headers.origin ?? null, context: req.headers['x-beacon-context'] ?? null, ifMatch: req.headers['if-match'] ?? null });
+      return tasksMock.handle(req, res, url, body, state);
     }
 
     if (url.pathname.startsWith(`${CHAT_PREFIX}/`)) {

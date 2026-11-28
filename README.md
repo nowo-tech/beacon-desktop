@@ -123,7 +123,7 @@ a ghost Windows removes when the mouse passes over it.
 
 ## Chat (0.10.0; sending from 0.12.0)
 
-Beacon chat sits next to the timer: **Chat** and **Time** on the left rail (`Ctrl/Cmd+1`, `Ctrl/Cmd+2`).
+Beacon chat sits next to the timer: **Chat**, **Tasks** and **Time** on the left rail (`Ctrl/Cmd+1..3`).
 
 1. Open Chat and press **Connect chat**. Beacon asks you to approve a second, separate device request (it only works
    for the person signed in to time tracking). Approve it in the browser page that opens, or use **Copy link** and
@@ -136,7 +136,7 @@ Beacon chat sits next to the timer: **Chat** and **Time** on the left rail (`Ctr
    approval made with 0.10 / 0.11 reads only: the box offers **Allow sending**, a new approval for reading and
    sending (the read approval is given up first: declining the new one leaves chat disconnected, connect again to
    read). A message that could not be sent shows *Retry* (it is never posted twice) or why the server refused it.
-   Notifications come later: use "Open in Beacon" meanwhile.
+   Notifications (0.13.0) are off until you turn them on: see *Notifications and links* below.
 
 <img src="docs/images/desktop-chat-list-light.webp" alt="Chat: the organization's conversations in the sidebar, light theme" width="400"> <img src="docs/images/desktop-chat-list-dark.webp" alt="Chat: conversation list, dark theme" width="400">
 
@@ -150,6 +150,27 @@ Messages, drafts and unsent messages stay in memory only. "Disconnect chat" (Set
 servers: revoke the device in Beacon, Account → Security) and removes it from this computer, keeping time tracking
 signed in. Needs Beacon with
 TimeTrackBundle 2.2 and ChatKitBundle 2.4. Shortcuts: `?` in Chat.
+
+## Tasks (0.13.0)
+
+Your Beacon tasks next to chat and the timer: **Chat**, **Tasks** and **Time** on the left rail (`Ctrl/Cmd+1..3`).
+
+1. Open Tasks and press **Connect tasks**: Beacon asks you to approve a third, separate device request (tasks only).
+2. **My tasks** lists what is assigned to you (overdue, today, upcoming, no date) and what waits for your review.
+   **Board** and **List** show one board of the organization; *Only mine* narrows it.
+3. Move a card by dragging it, with `Alt+←/→`, or with its status. Open a task (`Enter`) to change its fields, tick its
+   checklist, read its description and comments, or start the timer on it (`S` on a card). `N` adds a task
+   (`!high #tag @tomorrow ~2h`).
+
+**Notifications and links.** Chat notifications are off until you turn them on (Chat asks once; Settings → Chat).
+They only say "New message in Beacon", never who wrote or what; a click opens the conversation. Pause them for an hour
+or until tomorrow from Settings or the tray, where *Open chat* is too. `beacon-desktop://chat/<id>` and
+`beacon-desktop://tasks/<id>` links open the app on that conversation or task.
+
+Tasks stay in memory only; a change made elsewhere shows within a minute. Needs **Beacon 1.183 or later**
+(TaskBoardBundle 3.4 and the tasks approval turned on); with an older Beacon, **Connect tasks** says that tasks are not
+available on this Beacon server yet. If Beacon turns the module off for you, the tab disappears and comes back when it is on
+again (the approval is kept).
 
 ## Organizations, required fields and the mini timer (0.11.0)
 
@@ -432,6 +453,8 @@ required" screen send you to the Store listing instead.
 - **Chat token apart** (0.10.0). The chat approval has its own token in the OS keychain (`chat-token`), attached by
   Rust to chat routes only; the time token never goes there and the chat token never goes anywhere else. The realtime
   stream runs in Rust and hands the window ids only.
+- **Tasks token apart** (0.13.0). The tasks approval is a third keychain entry (`tasks-token`), attached by Rust to
+  `/api/task-board/v1/` routes only; no other token goes there and it goes nowhere else.
 - Reporting and design notes: [SECURITY.md](SECURITY.md).
 
 ## Tauri capabilities

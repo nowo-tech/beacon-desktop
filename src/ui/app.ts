@@ -109,7 +109,7 @@ import { type DaySpan, todaySpans, weekByTask, weekDays } from '../lib/week';
 import { askNote, callMinutes, endedNote, finishMeeting, ignoreCall, inCall, MEETING_ACTION_IDS, meetingActionOfId, meetingCandidates, type MeetingNote, type MicSignal, MIC_POLL_SECONDS, NO_MEETING, observeMic, parseMicSignal, searchTasks, type TaskRef, tracking, withinWorkingDay } from '../lib/meetings';
 import type { MeetingAction } from '../lib/messages/types';
 import { meetingStatus, type PickerMode, renderMeetingSettings, renderMeetingToast } from './meetings';
-import type { ConnectionSecurity, FriendlyNotification, Platform, SessionEvent, ShortcutSlot, TrayMenu, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
+import type { ConnectionSecurity, FriendlyNotification, Platform, SessionEvent, ShortcutSlot, TrayMenu, TrayMenuItem, UpdateCheck, UpdateProgress, WakePlan } from '../platform';
 import { h, patch, type Child } from './dom';
 import { icon, type IconName } from './icons';
 import { art, emptyArt, ERROR_POSES, moment, poseArt, variant, type Moment } from './mascot';
@@ -175,6 +175,8 @@ export interface AppDeps {
   askAllocation?: (request: AllocationRequest) => Promise<Allocation | null>;
   /** The time API answered `403 context_forbidden` for this context (it now uses Personal): the shell follows. */
   onContextRefused?: (context: string) => void;
+  /** The shell's chat items of the tray menu ("Open chat", pause / resume chat notifications; BD-3b). */
+  trayChat?: () => TrayMenuItem[];
 }
 
 /** What `stop()` did: stopped (or queued offline), cancelled in the fields dialog, failed, or nothing was running. */
@@ -204,6 +206,8 @@ const URL_PROBLEMS: Record<ServerUrlProblem, MessageKey> = {
 };
 
 const MAX_TRAY_TASKS = 7;
+/** What the keyboard can reach by Tab (for the task scroller's own focusability). */
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 /** Two checks further apart than this mean the computer slept in between (checks run every 30 s). */
 const SUSPEND_GAP_MS = 90_000;
 /** Server limit of a note (`NOTE_MAX_LENGTH`). */
@@ -2525,6 +2529,7 @@ export class DesktopApp {
           ? { id: 'resume-friendly', label: t('trayFriendlyPaused', { time: this.time(this.state.messages.pausedUntil as string) }) }
           : { id: 'pause-friendly', label: t('trayPauseFriendly') },
       ...this.trayMeetings(),
+      ...(signedIn && this.deps.trayChat !== undefined ? { chat: this.deps.trayChat() } : {}),
       settings: t('traySettings'),
       quit: t('trayQuit'),
     };
@@ -4048,6 +4053,25 @@ export class DesktopApp {
     patch(main.time, section === 'time' ? this.renderMyTime() : []);
     patch(main.footer, [h('span', {}, this.t('signedInAs', { name: this.state.session?.displayName ?? this.state.session?.identifier ?? '' }))]);
     this.renderModal(main);
+    this.syncScrollerFocus(main.scroller);
+  }
+
+  /**
+   * The task scroller usually holds rows the keyboard reaches. When it scrolls with nothing focusable in it (only
+   * "Nothing matches…", say, in a short window or with a toast's room below), it becomes a focusable, labelled region
+   * so the keyboard can still scroll it (WCAG 2.1.1, axe scrollable-region-focusable); otherwise no extra tab stop.
+   */
+  private syncScrollerFocus(scroller: HTMLElement): void {
+    const reachable = Array.from(scroller.querySelectorAll<HTMLElement>(FOCUSABLE)).some((element) => element.getClientRects().length > 0);
+    const needed = scroller.scrollHeight > scroller.clientHeight && !reachable;
+    if (needed === scroller.hasAttribute('tabindex')) return;
+    if (needed) {
+      scroller.setAttribute('tabindex', '0');
+      scroller.setAttribute('role', 'region');
+      scroller.setAttribute('aria-label', this.t('taskScrollLabel'));
+    } else {
+      for (const name of ['tabindex', 'role', 'aria-label']) scroller.removeAttribute(name);
+    }
   }
 
   /**
@@ -4176,6 +4200,8 @@ export class DesktopApp {
       prompt: new PromptMount(modal, { onAnswer: (answer) => void this.answerPrompt(answer), onExpired: () => void this.tick(), now: this.now }),
     };
     regions.scroller.append(regions.banners, regions.quick, regions.list, regions.time);
+    // A window resized: the scroller may start or stop overflowing.
+    if (typeof ResizeObserver === 'function') new ResizeObserver(() => this.syncScrollerFocus(regions.scroller)).observe(regions.scroller);
     regions.root.addEventListener('keydown', (event) => {
       if (event.target !== search && !regions.modal.contains(event.target as Node)) this.onListKey(event);
     });

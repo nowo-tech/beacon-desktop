@@ -58,6 +58,7 @@ function conversation(n: number, extra: Partial<Conversation> = {}): Conversatio
     lastMessageAt: '',
     lastMessageId: null,
     preview: null,
+    lastMine: false,
     ticketStatus: null,
     canSend: true,
     ...extra,

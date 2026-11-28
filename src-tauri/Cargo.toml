@@ -1,6 +1,6 @@
 [package]
 name = "time-track-desktop"
-version = "0.12.1"
+version = "0.13.0"
 description = "Beacon Desktop (formerly TimeTrack desktop) for symfony-beacon"
 authors = ["nowo.tech"]
 license = "MIT"
@@ -43,7 +43,9 @@ tokio = { version = "1", features = ["time", "sync", "macros"] }
 tauri-plugin-autostart = "2"
 # One process per user: a second launch (Start menu, a duplicate start-at-login entry) hands over to the running app
 # and exits, so there is never a second tray icon (lib.rs `single_instance`).
-tauri-plugin-single-instance = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+# `beacon-desktop://` links (deeplink.rs): macOS Apple events, Windows / Linux arguments via the single instance.
+tauri-plugin-deep-link = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
 # Native friendly-message notifications with the pose picture and click handling (notify.rs); already used by

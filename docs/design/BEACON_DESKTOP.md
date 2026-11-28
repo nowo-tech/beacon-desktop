@@ -6,8 +6,9 @@ repository name, secret or release changes with it.
 **Implementation status:** BD-1 shipped in 0.9.0. BD-2 (chat read-only) shipped in 0.10.0
 (CHANGELOG `[0.10.0]`). BD-3a (time context, mini timer, required fields, §7.1) shipped in 0.11.0
 (CHANGELOG `[0.11.0]`). BD-3b part 1 (chat send, thread replies, reactions, §7.2) shipped in 0.12.0
-(CHANGELOG `[0.12.0]`); notifications, mute and the tasks module follow. Where the build differs from this text: the
-modules follow the approved prototype (Chat `Ctrl/Cmd+1`, Time `Ctrl/Cmd+2`, Tasks off); `GET me` is asked with the last context or
+(CHANGELOG `[0.12.0]`). BD-3b parts 2 and 3 (the Tasks module §7.3; notifications at level None, tray, links §7.4)
+shipped in 0.13.0 (CHANGELOG `[0.13.0]`; Tasks need Beacon 1.183 or later). Where the build differs from this text: the
+modules follow the approved prototype (Chat `Ctrl/Cmd+1`, Tasks `Ctrl/Cmd+2`, Time `Ctrl/Cmd+3`); `GET me` is asked with the last context or
 `personal` (ChatKit needs a context on every request under a context policy) and falls back to `personal` on
 `403 context_forbidden`; the realtime hub must be on the signed-in origin (Beacon's default; another host is refused and
 the app polls); "Disconnect chat" and sign-out call ChatKit 2.4.1 `POST /api/chat/v1/logout` best effort before the
@@ -549,6 +550,38 @@ never patched directly, so `after=` never skips a message). Drafts and unsent me
 | `src-tauri/src/net.rs`, `src-tauri/src/secret.rs` | changed | `PUT` / `DELETE` only on the anchored reaction route (`is_reaction_path`, audit ZDG-L1); `idempotency-key` request header allowed |
 | `mock-server/chat.mjs`, `mock-server/server.mjs` | changed | Write routes with key replay / mismatch, `read_only`, writes off, read-only chat family |
 | `tests/unit/chat-writes.test.ts`, `tests/unit/shell-writes.test.ts`, `tests/e2e/chat-writes.spec.ts`, `tests/screenshots/bd3b.spec.ts` | new | API, outbox, composer, module, e2e with axe, owner screenshots |
+
+### 7.3 BD-3b, part 2: the Tasks module (app 0.13.0)
+
+Built against the released **TaskBoardBundle 3.4.1** client API (`docs/CLIENT-API.md`,
+`docs/openapi/task-board-client-v1.yaml`), behaviour as [BEACON_DESKTOP_TASKS.md §9](BEACON_DESKTOP_TASKS.md#9-the-tasks-module-in-the-app).
+Differences from the TASKS design, from the released contract: the description is answered as `tokens/1` only (no
+Markdown source), so the panel shows it and offers "Edit in Beacon"; comments, questions and subtask writes are 3.5;
+a single-assignee picker removes the other assignees (`DELETE members/{user}` drops every role of that person).
+Beacon still has to register the `tasks` family and the TaskBoard `client_api` (B-T1..B-T4, B-T8, B-T9).
+
+| File | New / changed | Role |
+|---|---|---|
+| `src/tasks/api.ts`, `src/tasks/types.ts` | new | Client and parsers of `/api/task-board/v1` (If-Match, Idempotency-Key, `module_forbidden`) |
+| `src/tasks/module.ts`, `src/tasks/format.ts`, `src/tasks/i18n.ts`, `src/tasks/tasks.css` | new | The module: connect, My tasks, kanban, list, panel, quick add, polling through `changes` |
+| `src/shell/shell.ts`, `src/platform*.ts`, `src/api/client.ts` | changed | Third tab (Chat, Tasks, Time), markers setting, `TasksHost`, `tasksDeviceCode` |
+| `src-tauri/src/secret.rs`, `src-tauri/src/net.rs`, `src-tauri/src/lib.rs`, `src-tauri/app-commands.rs`, `src-tauri/capabilities/default.json` | changed | `tasks-token`, `Route::Tasks`, `tasks_status` / `tasks_connect_begin` / `tasks_disconnect`, task write routes, `if-match` / `etag` |
+| `mock-server/tasks.mjs`, `mock-server/server.mjs` | new / changed | TaskBoard client API mock (revisions, conflicts, policy refusal, `module_forbidden`) |
+| `tests/unit/tasks.test.ts`, `tests/unit/tasks-module.test.ts`, `tests/e2e/tasks.spec.ts`, `tests/screenshots/tasks.spec.ts` | new | API, parsers, module, e2e with axe, owner screenshots |
+
+### 7.4 BD-3b, part 3: notifications (level None), tray, links (app 0.13.0)
+
+Owner decision 2026-11-27: notifications ship opt-in at level **None** with pause; Sender / Text wait for a ChatKit
+minor (mute, `notifications/preview`, members and reference search) and the organization's maximum (Q-BD-9). Web Push
+dedupe (Q-BD-14) is Beacon work. Links: `beacon-desktop://chat/<uuid>` / `beacon-desktop://tasks/<id>`
+(`?context=`), navigation only.
+
+| File | New / changed | Role |
+|---|---|---|
+| `src/chat/notifications.ts` | new | Opt-in, level None, pause, prime / dedupe / gap rules |
+| `src/shell/shell.ts`, `src/chat/module.ts`, `src/ui/app.ts`, `src/platform*.ts`, `src/main.ts` | changed | Opt-in card, Settings → Chat, tray items, `openTarget` for clicks and links |
+| `src-tauri/src/deeplink.rs`, `src-tauri/src/notify.rs`, `src-tauri/src/lib.rs`, `Cargo.toml`, `tauri.conf.json` | new / changed | Link parsing and hand-over, notification click target, tray chat items, deep-link plugin |
+| `tests/unit/chat-notify.test.ts`, `tests/screenshots/notify.spec.ts` | new | Rules, shell flows, owner screenshots |
 
 ## 8. Open questions
 

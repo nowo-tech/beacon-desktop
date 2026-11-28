@@ -5,6 +5,108 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-28
+
+BD-3b, second and third parts (design `docs/design/BEACON_DESKTOP_TASKS.md` §9, `BEACON_DESKTOP.md` §7.3 and §7.4):
+the Tasks module, chat notifications, the tray's chat items and `beacon-desktop://` links. Tasks need Beacon **1.183**
+or later (TaskBoardBundle **3.4** `client_api`, `/api/task-board/v1`, and Beacon's `tasks` scope family
+`task-board:read task-board:write`); with an older Beacon the Tasks tab shows its "Connect tasks" card and pressing
+**Connect tasks** says that tasks are not available on this Beacon server yet. Time tracking, chat and the new
+notifications, tray items and chat links do not need it (Beacon 1.181 is enough).
+
+### Added
+
+- **Tasks module** (approved prototype), a third rail tab: Chat, Tasks, Time (`Ctrl/⌘+1..3` follow the tabs, so Time
+  moves from `Ctrl/⌘+2` to `Ctrl/⌘+3`).
+  - **Connect tasks**: a chained device flow of the `tasks` family; the token is a third OS keychain entry
+    (`tasks-token`), attached by Rust to `/api/task-board/v1/` only. *Disconnect tasks* (Settings) keeps time and chat;
+    a `401` disconnects tasks only.
+  - **My tasks**: Overdue, Today, Upcoming, No date (assigned to you) and To review, by the local date; complete a task
+    (to the board's first done column), start its timer.
+  - **Boards**: a picker grouped by folder or space; **kanban** (30 cards per column, *Load more*) and **list** (status
+    select); *Only mine*; column markers as TaskBoard's emojis or colour dots (Settings, owner decision 2026-11-25).
+  - **Moves** with the card's revision (`If-Match`): drag and drop, `Alt+←/→` on a focused card, the list's status. The
+    card moves at once and goes back with "Changed by someone else" on `409 conflict`, or with the board's own message
+    on `403 transition_refused`.
+  - **Task panel**: title, status, priority, assignee, due date, estimate and tags (each saved with `If-Match`),
+    checklists (tick with the item's revision, add an item), the description, links and comments as `tokens/1` text,
+    parent and subtask counts, "Open in Beacon"; `Esc` closes it.
+  - **Quick add** (`N`, the prototype's syntax: `!priority`, `#tag`, `@today` / `@tomorrow`, `~2h`): Enter creates on
+    the board shown (My tasks: assigned to you, due today unless said), `Ctrl/⌘+Enter` also starts the timer; one
+    `Idempotency-Key` per task.
+  - **Timer from a task** (card, row, panel; `S` on a card): the time API starts or switches as from the Time module
+    (required fields and the organization rules of 0.11.0 apply); the running task is marked in every view.
+  - **Polling** through `GET changes` (design §7.3): 20 s for a board or task shown, 60 s for My tasks, 5 min in the
+    background, backoff on errors, `Retry-After` honoured.
+  - **`403 module_forbidden`** (TaskBoard 3.5): the Tasks tab is hidden and the token kept; it comes back when Beacon
+    turns the module on again.
+  - Landing module (owner Q1): a module the server hides falls back to Chat.
+  - English and Spanish, light and dark, axe WCAG 2.1 AA on every view.
+
+- **Chat notifications** (design §3.4, owner decision 2026-11-27: level None first). Off until turned on (a calm card
+  on the first Chat visit, or Settings → Chat). A notification only says "New message in Beacon": no sender, no
+  conversation, no text, whatever the message. A new message in a conversation you are not reading notifies once (not
+  your own, not a muted conversation, nothing older than what was already seen; several at once are one notification,
+  at most one per 10 s); a click opens the app on that conversation, in the organization it was notified for. *Pause* for 1 hour or until tomorrow 08:00
+  (Settings or the tray); the system's Do Not Disturb applies too. Sender and text previews wait for ChatKit's
+  `notifications/preview` and the organization's maximum level (Q-BD-9).
+- **Tray**: *Open chat* (with the unread count) and *Pause / Resume chat notifications*.
+- **Links** `beacon-desktop://chat/<conversation>` and `beacon-desktop://tasks/<task>` (optionally
+  `?context=personal|org:<uuid>`) open the app on that conversation or task: navigation only. A link never switches the
+  organization silently: the app asks first (with a running timer, the usual "Stop the timer and switch?" question is
+  the one asked); something the person may not see is just "not available here". Each link opens once, and links bring
+  the window forward at most once a second. Registered by the installers (and at run time for the AppImage).
+
+### Changed
+
+- Rust: `notify_friendly` takes an optional click target (`chat-open:[<context>:]<uuid>` only, the context `personal`
+  or `org:<uuid>`); the tray menu takes the chat items; `tauri-plugin-deep-link` 2.6 (the single-instance plugin
+  forwards links to the running app), command `deep_link_take`; the `deep-link` event carries no payload.
+- The main window sets `dragDropEnabled: false`, so the webview (WebView2 on Windows) leaves HTML5 drag and drop to
+  the page and kanban cards can be dragged; the app has no file drop.
+- Rust (`beacon_fetch`): `PATCH` reaches only `…/task-board/v1/tasks/{id}` and `…/checklist-items/{id}`, `PUT` /
+  `DELETE` only `…/tasks/{id}/members/{user}` (and the chat reaction route of 0.12.0); `If-Match` may be sent and the
+  `ETag` header is read back. Everything else stays deny by default.
+
+### Fixed
+
+Pre-release audit BDA13 of the 0.13.0 candidate (nothing here affects 0.12.0 or earlier):
+
+- **BDA13-M1**: an answer to a Tasks request sent before an organization switch (or a reconnect) is dropped: an open
+  task, its comments, a polling cursor or a *Load more* page of the previous organization no longer shows up in the
+  new one, and its `401` / `403 module_forbidden` / `403 context_forbidden` no longer disconnects tasks, hides the
+  module or refuses the new organization.
+- **BDA13-L1**: a `beacon-desktop://` link opens exactly once. It no longer opens again at the next sign-in or reload,
+  and sign-out forgets a link not opened yet.
+- **BDA13-L3**: a notification click opens the conversation in the organization it was notified for, switching back
+  through the usual flow (a running timer is asked about), instead of "not available here" after a switch.
+- **BDA13-L4**: quick edits of one task (two fields, two ticks of one checklist item) go out one after the other, each
+  with the revision the previous one returned (also when the panel was closed or shows another task meanwhile,
+  BDA13-V2), so your own first edit is no longer "Changed by someone else". An assignee change cut by an organization
+  switch sends nothing more (BDA13-V1). A
+  refused move puts the card back at once, even when the reload after it fails (offline).
+- **BDA13-I1**: a link never switches the organization without asking, and a burst of links brings the window
+  forward at most once a second.
+- **BDA13-I2**: `http://` and `mailto:` links in task text and comments open (through the chat's checked opener, as
+  in chat messages); a link that cannot be opened shows "That link could not be opened." instead of doing nothing.
+- **BDA13-I3**: kanban drag and drop works in the Windows webview (`dragDropEnabled: false`, see *Changed*).
+- Time: when the task list scrolls with nothing focusable in it (only "Nothing matches…" in a short window, or with a
+  toast's room below), it becomes a labelled, focusable region so the keyboard can scroll it (axe
+  `scrollable-region-focusable`); otherwise there is no extra tab stop.
+
+- **Tasks on an older Beacon**: a server without the `tasks` scope family (`400 invalid_scope` on `device/code`) or
+  without the TaskBoard client API (`404` on `GET me`) now says "Tasks are not available on this Beacon server yet:
+  they need a newer version of Beacon." instead of "tasks may be off for your account" or "Something went wrong
+  loading tasks".
+
+### Known limitations
+
+- **Tasks needs Beacon 1.183 or later**; until then the Tasks module says it is not available on this server (the
+  "Connect tasks" card stays, nothing is stored and no browser page opens).
+- **BDA13-L2**: sign-out and *Disconnect tasks* delete the tasks token from this computer, but TaskBoard has no route
+  to revoke it on the server yet (chat has `POST …/chat/v1/logout`); it stays valid until it expires. To end it at
+  once, revoke the device in Beacon (Account → Security). The app will call the route once TaskBoard offers one.
+
 ## [0.12.1] - 2026-11-27
 
 Sign-in and "Connect chat" when the browser that opens is not the one signed in to Beacon (the default browser

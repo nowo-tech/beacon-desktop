@@ -8,6 +8,7 @@ import { startPromptWindow } from './ui/promptWindow';
 import './styles.css';
 // After styles.css: the shell's rules win over the Time module's element defaults.
 import './chat/chat.css';
+import './tasks/tasks.css';
 
 const isTauri = '__TAURI_INTERNALS__' in window;
 const root = document.getElementById('app');
@@ -32,6 +33,7 @@ if (root !== null && new URLSearchParams(location.search).get('window') === 'pro
   const app = new DesktopApp(shell.timeRoot, platform, {
     onRender: () => shell.onAppRender(),
     beforeSignOut: () => shell.chat.revokeOnServer(),
+    trayChat: () => shell.trayChat(),
     askAllocation: (request) => shell.askAllocation(request),
     onContextRefused: (context) => void shell.timeContextRefused(context),
     contextLabel: () => shell.contextLabel(),

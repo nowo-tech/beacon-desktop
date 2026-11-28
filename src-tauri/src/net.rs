@@ -30,28 +30,45 @@ const MAX_BODY: usize = 32 * 1024 * 1024;
 
 /// Request headers the UI may set; anything else is dropped. Never `authorization`: Rust sets it (`auth`).
 /// `x-beacon-context` names the tenant of a chat request (`personal` / `org:<uuid>`, design §4.4, BD-2);
-/// `idempotency-key` names one chat write (ChatKit 2.5, BD-3b), so a retry is never written twice.
+/// `idempotency-key` names one chat or task write (ChatKit 2.5, TaskBoard 3.4; BD-3b), so a retry is never written
+/// twice; `if-match` carries a task's revision (TaskBoard 3.4: every change of an existing task).
 const ALLOWED_HEADERS: &[&str] = &[
     "accept",
     "accept-language",
     "content-type",
     "idempotency-key",
+    "if-match",
     "x-beacon-context",
 ];
 
-/// The method of a UI request. `GET` and `POST` go anywhere on the bound origin; `PUT` and `DELETE` only to the chat
-/// reaction route (`…/api/chat/v1/conversations/{uuid}/messages/{uuid}/reactions/{emoji}`, ChatKit 2.5), where the chat
-/// token, never the time token, is attached. Deny by default (audit ZDG-L1): no other route takes them, and `PATCH`
-/// (message edits) is not sent by this version. Anything else is refused.
-fn method_of(method: &str, reaction_route: bool) -> Result<reqwest::Method, String> {
+/// Which write methods a request's route takes (deny by default).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Writes {
+    put_delete: bool,
+    patch: bool,
+}
+
+/// The method of a UI request. `GET` and `POST` go anywhere on the bound origin. The other methods only where this
+/// version writes with them (deny by default, audit ZDG-L1), each with only its own family's token attached:
+/// - `PUT` / `DELETE`: the chat reaction route (`…/chat/v1/conversations/{uuid}/messages/{uuid}/reactions/{emoji}`,
+///   ChatKit 2.5) and a task's members (`…/task-board/v1/tasks/{id}/members/{user}`, TaskBoard 3.4);
+/// - `PATCH`: a task's fields and a checklist item (`…/task-board/v1/tasks/{id}`, `…/checklist-items/{id}`).
+///
+/// Anything else is refused.
+fn method_of(method: &str, writes: Writes) -> Result<reqwest::Method, String> {
     let method = match method.to_ascii_uppercase().as_str() {
         "GET" => return Ok(reqwest::Method::GET),
         "POST" => return Ok(reqwest::Method::POST),
         "PUT" => reqwest::Method::PUT,
+        "PATCH" => reqwest::Method::PATCH,
         "DELETE" => reqwest::Method::DELETE,
         _ => return Err("method not allowed".into()),
     };
-    if reaction_route {
+    let allowed = match method {
+        reqwest::Method::PATCH => writes.patch,
+        _ => writes.put_delete,
+    };
+    if allowed {
         Ok(method)
     } else {
         Err("method not allowed".into())
@@ -236,9 +253,18 @@ pub async fn send_and_capture(
     if secret::obfuscated_path(&url) {
         return Err("invalid URL".into());
     }
-    let reaction_route =
-        session.route(&url)? == secret::Route::Chat && session.is_reaction_route(&url)?;
-    let method = method_of(&request.method, reaction_route)?;
+    let writes = match session.route(&url)? {
+        secret::Route::Chat => Writes {
+            put_delete: session.is_reaction_route(&url)?,
+            patch: false,
+        },
+        secret::Route::Tasks => {
+            let (put_delete, patch) = session.task_write_route(&url)?;
+            Writes { put_delete, patch }
+        }
+        _ => Writes::default(),
+    };
+    let method = method_of(&request.method, writes)?;
     let mut headers = HeaderMap::new();
     for (name, value) in &request.headers {
         let name = name.to_ascii_lowercase();
@@ -295,7 +321,14 @@ pub async fn send_and_capture(
                 origin,
                 spanish,
                 family: secret::Family::Chat,
-            }));
+            }))
+            .or(captured
+                .tasks_stored_for
+                .map(|(origin, spanish)| StoredFor {
+                    origin,
+                    spanish,
+                    family: secret::Family::Tasks,
+                }));
         (captured.body, stored)
     } else {
         (secret::scrub(body), None)
@@ -338,6 +371,11 @@ pub async fn beacon_fetch(
             spanish,
             family: secret::Family::Chat,
         }) => secret::notify_chat_connected(&app, &origin, spanish),
+        Some(StoredFor {
+            origin,
+            spanish,
+            family: secret::Family::Tasks,
+        }) => secret::notify_tasks_connected(&app, &origin, spanish),
         Some(StoredFor {
             origin, spanish, ..
         }) => secret::notify_signed_in(&app, &origin, spanish),
@@ -683,20 +721,70 @@ mod tests {
         assert!(send(&client, bad_header, &example).await.is_err());
     }
 
+    const PUT_DELETE: Writes = Writes {
+        put_delete: true,
+        patch: false,
+    };
+    const PATCH: Writes = Writes {
+        put_delete: false,
+        patch: true,
+    };
+
     #[test]
-    fn write_methods_reach_the_reaction_route_only() {
+    fn write_methods_reach_only_the_routes_that_take_them() {
         for method in ["GET", "get", "POST"] {
-            assert!(method_of(method, true).is_ok(), "{method}");
-            assert!(method_of(method, false).is_ok(), "{method}");
+            for writes in [Writes::default(), PUT_DELETE, PATCH] {
+                assert!(method_of(method, writes).is_ok(), "{method} {writes:?}");
+            }
         }
         for method in ["PUT", "delete"] {
-            assert!(method_of(method, true).is_ok(), "{method}");
-            assert!(method_of(method, false).is_err(), "{method}");
+            assert!(method_of(method, PUT_DELETE).is_ok(), "{method}");
+            assert!(method_of(method, PATCH).is_err(), "{method}");
+            assert!(method_of(method, Writes::default()).is_err(), "{method}");
         }
-        // PATCH (message edits) is not sent by this version (audit ZDG-L1).
-        for method in ["PATCH", "OPTIONS", "HEAD", "TRACE", "CONNECT", ""] {
-            assert!(method_of(method, true).is_err(), "{method}");
+        // PATCH only where a task route takes it (no message edits, audit ZDG-L1).
+        assert!(method_of("PATCH", PATCH).is_ok());
+        assert!(method_of("PATCH", PUT_DELETE).is_err());
+        for method in ["OPTIONS", "HEAD", "TRACE", "CONNECT", ""] {
+            let all = Writes {
+                put_delete: true,
+                patch: true,
+            };
+            assert!(method_of(method, all).is_err(), "{method}");
         }
+        // Task routes: PATCH on a task and a checklist item, PUT / DELETE on a member, nothing else.
+        let task = |path: &str| {
+            secret::task_write_methods(
+                &url::Url::parse(&format!(
+                    "https://beacon.example.com/api/task-board/v1/{path}"
+                ))
+                .unwrap(),
+                "",
+            )
+        };
+        assert_eq!(task("tasks/t1"), (false, true));
+        assert_eq!(task("tasks/t1/checklist-items/i1"), (false, true));
+        assert_eq!(task("tasks/t1/members/me"), (true, false));
+        for path in [
+            "tasks",
+            "tasks/t1/move",
+            "boards/b1",
+            "tasks/t1/members",
+            "tasks/t1/members/a/b",
+            "tasks/../x",
+            "tasks/-x",
+            "me",
+        ] {
+            assert_eq!(task(path), (false, false), "{path}");
+        }
+        assert_eq!(
+            secret::task_write_methods(
+                &url::Url::parse("https://beacon.example.com/x/api/task-board/v1/tasks/t1")
+                    .unwrap(),
+                ""
+            ),
+            (false, false)
+        );
         const C: &str = "0c000000-0000-4000-8000-000000000001";
         const M: &str = "0c000000-0000-4000-8000-00000000000a";
         let url =

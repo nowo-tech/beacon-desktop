@@ -21,7 +21,8 @@
         "minHeight": 560,
         "resizable": true,
         "visible": true,
-        "backgroundThrottling": "disabled"
+        "backgroundThrottling": "disabled",
+        "dragDropEnabled": false
       }
     ],
     "security": {
@@ -70,6 +71,11 @@
       "requireSignedVersion": true,
       "windows": {
         "installMode": "passive"
+      }
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["beacon-desktop"]
       }
     }
   }

@@ -86,6 +86,8 @@ export interface TrayMenu {
    */
   meetingsLabel?: string | null;
   meetings?: TrayMenuItem[];
+  /** Chat (BD-3b): "Open chat" (`open-chat`) and "Pause / Resume chat notifications" (`pause-chat` / `resume-chat`). */
+  chat?: TrayMenuItem[];
   settings: string;
   quit: string;
 }
@@ -117,6 +119,15 @@ export interface FriendlyNotification {
   action?: NotificationAction | null;
   /** Up to two buttons ("Working without a timer?"); the host drops unknown ids. */
   actions?: NotificationAction[];
+  /** What a click on the notification itself opens (`chat-open:<context>:<uuid>`, BD-3b, BDA13-L3); the host drops anything else. */
+  click?: string | null;
+}
+
+/** A `beacon-desktop://` link, as the host parsed it (src-tauri/src/deeplink.rs): ids and a context key only. */
+export interface DeepLink {
+  kind: 'chat' | 'task';
+  id: string;
+  context: string | null;
 }
 
 /** `unsupported`: the host has no desktop notifications (plain browser). */
@@ -237,10 +248,27 @@ export interface ChatHost {
   setUnreadBadge(count: number): Promise<void>;
 }
 
+/**
+ * What the tasks module needs from the host (BD-3b, `BEACON_DESKTOP_TASKS.md` §3.4). In the Tauri app the tasks token
+ * stays in Rust (a third keychain entry, `tasks-token`, attached to `/api/task-board/v1/` routes only).
+ */
+export interface TasksHost {
+  /** `SESSION_HANDLE` when a tasks token is stored for the signed-in server (Tauri), the token itself (browser), else `null`. */
+  token(): Promise<string | null>;
+  /** Keeps the token of a "Connect tasks" answer (the Tauri app stored it in Rust already and only accepts the handle). */
+  tokenSet(token: string): Promise<void>;
+  /** Arms the capture of the next `tasks` answer of `device/token` (Rust `tasks_connect_begin`). */
+  connectBegin(): Promise<void>;
+  /** Deletes the tasks token only (time and chat stay connected). */
+  disconnect(): Promise<void>;
+}
+
 export interface Platform {
   readonly kind: 'tauri' | 'browser';
   /** Chat (BD-2); absent on hosts without it. */
   readonly chat?: ChatHost;
+  /** Tasks (BD-3b); absent on hosts without it. */
+  readonly tasks?: TasksHost;
   fetch: typeof fetch;
   /** TLS pinning state for `server`; `null` when the host does not know (plain browser: the browser validates TLS). */
   connectionSecurity(server: string): Promise<ConnectionSecurity | null>;
@@ -326,6 +354,13 @@ export interface Platform {
   onSessionEvent(handler: (event: SessionEvent) => void): void;
   /** A tray menu item was chosen (see `TrayMenu`). */
   onTray(handler: (action: string) => void): void;
+  /**
+   * The latest `beacon-desktop://` link, taken once (audit BDA13-L1: the only way the UI gets a link, at start-up and on
+   * each `onDeepLink` ping, so a link is opened exactly once whether or not the UI was listening when it came).
+   */
+  takeDeepLink(): Promise<DeepLink | null>;
+  /** A `beacon-desktop://` link arrived (no payload: the UI takes it with `takeDeepLink`). */
+  onDeepLink(handler: () => void): void;
 }
 
 /** Test / development hooks of the browser fallback (set from Playwright through `window.__timeTrack`). */
@@ -413,12 +448,18 @@ export interface BrowserHooks {
   chatRealtime: { server: string; context: string } | null;
   badge: number;
   chatLinks: string[];
+  /** Tasks (BD-3b): the stored tasks token and "Connect tasks" calls. */
+  tasksToken: string | null;
+  tasksConnectBegins: number;
   /** The fake stream sends a hint / changes mode. */
   chatHint(hint: unknown): void;
   chatMode(mode: ChatRealtimeMode): void;
   /** The fake OS locks / unlocks the screen or sleeps / wakes. */
   sessionEvent(event: SessionEvent): void;
   trayAction(action: string): void;
+  /** The fake OS opens a `beacon-desktop://` link (already parsed, as the host would); before the UI runs: pending. */
+  deepLink(link: DeepLink): void;
+  pendingDeepLink: DeepLink | null;
   /** The fake heartbeat fires. */
   wake(reason?: WakeReason): void;
   /** The button of a fake notification is pressed. */
@@ -446,10 +487,13 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
   const micHandlers: ((signal: unknown) => void)[] = [];
   const hintHandlers: ((hint: unknown) => void)[] = [];
   const modeHandlers: ((mode: ChatRealtimeMode) => void)[] = [];
+  const linkHandlers: (() => void)[] = [];
   const hooks: BrowserHooks = {
     chatToken: null,
     chatConnectBegins: 0,
     chatRealtime: null,
+    tasksToken: null,
+    tasksConnectBegins: 0,
     badge: 0,
     chatLinks: [],
     chatHint: (hint) => hintHandlers.forEach((handler) => handler(hint)),
@@ -511,6 +555,12 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     resumeShortcutPressed: () => resumeHandlers.forEach((handler) => handler()),
     sessionEvent: (event) => sessionHandlers.forEach((handler) => handler(event)),
     trayAction: (action) => trayHandlers.forEach((handler) => handler(action)),
+    pendingDeepLink: null,
+    // As src-tauri/src/deeplink.rs (BDA13-I5): the link is always kept (latest wins), then the UI is pinged.
+    deepLink: (link) => {
+      hooks.pendingDeepLink = link;
+      linkHandlers.forEach((handler) => handler());
+    },
     wake: (reason = 'tick') => wakeHandlers.forEach((handler) => handler(reason)),
     notificationAction: (id) => actionHandlers.forEach((handler) => handler(id)),
     answerPrompt: (answer) => answerHandlers.forEach((handler) => handler(answer)),
@@ -563,10 +613,20 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     openLink: async (url) => void hooks.chatLinks.push(url),
     setUnreadBadge: async (count) => void (hooks.badge = count),
   };
+  const tasks: TasksHost = {
+    token: async () => (secret === null ? null : hooks.tasksToken),
+    tokenSet: async (token) => void (hooks.tasksToken = token),
+    connectBegin: async () => {
+      if (secret === null) throw new Error('sign in first');
+      hooks.tasksConnectBegins += 1;
+    },
+    disconnect: async () => void (hooks.tasksToken = null),
+  };
   return {
     kind: 'browser',
     hooks,
     chat,
+    tasks,
     fetch: fetchImpl,
     connectionSecurity: async () => hooks.connectionSecurity,
     appVersion: async () => version,
@@ -596,6 +656,9 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
       hooks.boundServer = null;
       hooks.chatToken = null;
       hooks.chatRealtime = null;
+      hooks.tasksToken = null;
+      // Sign-out forgets a link not taken yet (BDA13-L1), as Rust does.
+      hooks.pendingDeepLink = null;
     },
     idleSeconds: async () => hooks.idleSeconds,
     openExternal: async (url) => {
@@ -690,6 +753,12 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     onResumeShortcut: (handler) => void resumeHandlers.push(handler),
     onSessionEvent: (handler) => void sessionHandlers.push(handler),
     onTray: (handler) => void trayHandlers.push(handler),
+    takeDeepLink: async () => {
+      const link = hooks.pendingDeepLink;
+      hooks.pendingDeepLink = null;
+      return link;
+    },
+    onDeepLink: (handler) => void linkHandlers.push(handler),
   };
 }
 

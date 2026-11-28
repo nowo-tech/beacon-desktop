@@ -49,6 +49,9 @@ const ICONS = {
   link: [['path', 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1']],
   send: [['path', 'M4.5 12 19.5 5l-4 14-3.5-5.5zM12 13.5 19.5 5']],
   alert: [['circle', 12, 12, 8.5], ['path', 'M12 7.5v5M12 16h.01']],
+  plus: [['path', 'M12 5v14M5 12h14']],
+  bell: [['path', 'M6 11a6 6 0 0 1 12 0v4l1.5 2.5h-15L6 15zM10 20.5a2.2 2.2 0 0 0 4 0']],
+  check: [['path', 'm5 12.5 4.5 4.5L19 7.5']],
 } satisfies Record<string, Shape[]>;
 
 export type ChatIconName = keyof typeof ICONS;

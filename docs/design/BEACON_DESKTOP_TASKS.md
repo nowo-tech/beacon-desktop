@@ -225,6 +225,12 @@ for the next dedup survey (owner rule).
 - Keychain: service `tech.nowo.time-track-desktop`, user **`tasks-token`** (third entry). Only Rust reads it.
 - Sign out revokes and deletes the three tokens; "Disconnect tasks" deletes only the tasks token; a `401 invalid_token`
   on the tasks API disconnects tasks only.
+- **Gap in 0.13.0 (audit BDA13-L2).** The app deletes the tasks token locally on sign-out and "Disconnect tasks", but
+  cannot revoke it on the server: TaskBoard 3.4 has no `logout` route and TimeTrack's logout revokes only the time
+  token presented. The server-side token stays valid until its TTL or a manual revoke in Beacon (Account → Security);
+  SECURITY.md and the CHANGELOG say so. **Follow-up (TaskBoard + Beacon):** `POST /api/task-board/v1/logout`
+  (idempotent `204`, revokes the presented token, calls `TaskApiIdempotencyStoreInterface::forget()`), then the app's
+  `TasksModule.revokeOnServer()` (best effort, 3 s, as chat) from sign-out and "Disconnect tasks".
 - On revocation (or account erasure) Beacon also calls TaskBoard's `TaskApiIdempotencyStoreInterface::forget()` with the
   token's scope, so no stored answer (which can hold task text) outlives the token.
 
@@ -521,7 +527,12 @@ The clickable prototype (built in parallel) fixes the visuals; this section fixe
   text) kept per board on the device.
 - **Drag and drop** (mouse and keyboard: `Space` to pick, arrows to move, `Space` to drop, `Esc` to cancel, announced in
   a polite live region). Optimistic move; on `409 conflict` the card goes back with "Changed by someone else — reloaded";
-  on `403 transition_refused` the policy's message is shown.
+  on `403 transition_refused` the policy's message is shown. The card goes back from the pages kept before the move, so
+  it is right even when the reload fails (offline). Writes to one task are queued, each with the revision the previous
+  one returned (audit BDA13-L4). **Windows (audit BDA13-I3):** Tauri 2's webview handles drag and drop natively
+  (file drops) unless the window sets `dragDropEnabled: false`, and then HTML5 drag events never reach the page
+  (WebView2). The main window sets it to `false` in `tauri.conf.json`; the app has no file-drop feature, so nothing is
+  lost. Keyboard moves (`Alt+←/→`) and the status select work either way.
 - **Task detail** as a side panel (wide window) or full view (compact window): inline edit of title, description
   (plain-text editor, Markdown, preview from the server's tokens), priority, dates, estimate, tags, members; checklists;
   subtasks tree (expand per level); comments; questions with *Answer*; links; "Open in Beacon".

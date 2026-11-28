@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: API calls to the user's own server through beacon_fetch only (Rust HTTP client with TLS public-key pinning for the official Beacon host, docs/PINNING.md; HTTPS, or loopback for development; no HTTP plugin), and the app's own commands (keychain: whether a session token is stored, starting a sign-in and sign-out only, never the token itself, which Rust keeps with its origin and adds to requests to that origin only; the chat token (BD-2) likewise: its status, \"Connect chat\" and \"Disconnect chat\" only, attached by Rust to chat routes only; the chat realtime stream runs in Rust and sends ids-only hints; the unread badge; tray, updater, heartbeat, notifications, the prompt window, links through open_external in the browser chosen with set_browser / pick_browser (the custom-browser file dialog is opened from Rust, so the webview has no dialog permission), writing copied links to the clipboard); the main window may resize and move itself (\"Compact view\" / \"Full view\") and bring itself forward (show, unminimize, focus: a required-fields dialog to answer, BD-3a); the mini timer window (open, update, close; its buttons come back as events). Each app command is declared in build.rs and granted here per window.",
+  "description": "Main window: API calls to the user's own server through beacon_fetch only (Rust HTTP client with TLS public-key pinning for the official Beacon host, docs/PINNING.md; HTTPS, or loopback for development; no HTTP plugin), and the app's own commands (keychain: whether a session token is stored, starting a sign-in and sign-out only, never the token itself, which Rust keeps with its origin and adds to requests to that origin only; the chat token (BD-2) likewise: its status, \"Connect chat\" and \"Disconnect chat\" only, attached by Rust to chat routes only; the tasks token (BD-3b) likewise: its status, \"Connect tasks\" and \"Disconnect tasks\" only, attached by Rust to task-board routes only; the chat realtime stream runs in Rust and sends ids-only hints; the unread badge; tray, updater, heartbeat, notifications, the prompt window, links through open_external in the browser chosen with set_browser / pick_browser (the custom-browser file dialog is opened from Rust, so the webview has no dialog permission), writing copied links to the clipboard); the main window may resize and move itself (\"Compact view\" / \"Full view\") and bring itself forward (show, unminimize, focus: a required-fields dialog to answer, BD-3a); the mini timer window (open, update, close; its buttons come back as events). Each app command is declared in build.rs and granted here per window.",
   "windows": ["main"],
   "permissions": [
     "core:app:default",
@@ -28,6 +28,10 @@
     "allow-chat-status",
     "allow-chat-connect-begin",
     "allow-chat-disconnect",
+    "allow-tasks-status",
+    "allow-tasks-connect-begin",
+    "allow-tasks-disconnect",
+    "allow-deep-link-take",
     "allow-chat-realtime-start",
     "allow-chat-realtime-stop",
     "allow-set-unread-badge",
