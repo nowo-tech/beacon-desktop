@@ -9,6 +9,7 @@
  * 20 s while shown, My tasks every 60 s, 5 min in the background; backoff on errors, `Retry-After` honoured.
  */
 import { ApiError, type TimeTrackApi } from '../api/client';
+import { isSignInNotPresent } from '../lib/nativeFetch';
 import { renderBlocks } from '../chat/body';
 import type { ChatText } from '../chat/i18n';
 import { chatIcon } from '../chat/icons';
@@ -267,10 +268,19 @@ export class TasksModule {
    * Unknown (never asked) counts as offered, as before.
    */
   get unavailable(): boolean {
+    return this.offer === 'no';
+  }
+
+  /**
+   * What is known about the signed-in server offering tasks (0.14.2): `yes` (a connected tasks token, or remembered),
+   * `no` (remembered refusal), `unknown` (never answered yet: {@link discover} may still be asking).
+   */
+  get offer(): 'yes' | 'no' | 'unknown' {
     // A connected tasks token is the answer itself, whatever was cached before (BDA141-I4).
-    if (this.connected) return false;
+    if (this.connected) return 'yes';
     const origin = originOf(this.deps.server() ?? '');
-    return origin !== null && loadOffers(this.deps.storage)[origin] === false;
+    const known = origin === null ? undefined : loadOffers(this.deps.storage)[origin];
+    return known === true ? 'yes' : known === false ? 'no' : 'unknown';
   }
 
   private remember(origin: string, offered: boolean): void {
@@ -499,7 +509,10 @@ export class TasksModule {
                 ? // A server without the `tasks` scope family (Beacon before 1.183) refuses it as an unknown scope.
                   this.t('connectUnsupported')
                 : null
-          : error instanceof ApiError && error.status === 404
+          : isSignInNotPresent(error)
+            ? // Rust refused the start: nobody at the app (window not focused, no recent input). 0.14.2.
+              this.t('connectNotPresent')
+            : error instanceof ApiError && error.status === 404
             ? this.t('connectUnsupported')
             : error instanceof ApiError && (error.status === 400 || error.status === 403)
               ? this.t('connectRefused')

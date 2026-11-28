@@ -5,6 +5,22 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-11-28
+
+Hotfix: "Could not start the connection" right after approving Chat on the first run.
+
+### Fixed
+
+- **First-run Tasks step no longer fails with a network error.** 0.14.1 asked for the Tasks code the moment the Chat
+  approval arrived, while the person was still in the browser. Beacon Desktop only starts a connection for a person at
+  the app (the window focused, recent input; a security check in Rust, unchanged), so it was refused and shown as
+  "Could not start the connection. Check your network and try again." The chained Tasks step now waits until the
+  window is back in focus, and until Beacon has said whether it offers tasks: while that is unknown it waits, and where
+  tasks are not offered the step goes. Pressing Connect, Skip or Later in between cancels the automatic start.
+- **A refused start says what to do.** When a chat or tasks connection is refused because nobody was at the app, the
+  message is now "Come back to Beacon Desktop and press Connect to continue." ("Vuelve a Beacon Desktop y pulsa
+  Conectar para continuar."), never the network text; the Connect button stays usable.
+
 ## [0.14.1] - 2026-11-28
 
 0.14.1 polish (audit BDA14 follow-ups and owner approvals of 2026-11-28).

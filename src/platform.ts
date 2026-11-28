@@ -2,7 +2,7 @@ import type { Rect, Screens } from './lib/layout';
 import type { BrowserChoice, BrowserRequest, DetectedBrowser, OpenOutcome } from './lib/links';
 import type { PromptAnswer, PromptView } from './ui/prompt';
 import type { MiniAction, MiniClient, MiniView } from './ui/miniWindow';
-import { SIGN_IN_DECLINED } from './lib/nativeFetch';
+import { SIGN_IN_DECLINED, SIGN_IN_NOT_PRESENT } from './lib/nativeFetch';
 
 /**
  * What the UI needs from the host. In the Tauri app it is backed by Rust commands and plugins (platform-tauri.ts);
@@ -505,6 +505,11 @@ export interface BrowserHooks {
   unsent: number;
   quitRequest(): void;
   quits: number;
+  /**
+   * Nobody at the app (0.14.2): "Connect chat" / "Connect tasks" are refused with `sign_in_not_present`, as Rust does
+   * when the window is not focused or had no recent input.
+   */
+  connectAway: boolean;
   /** Tasks (BD-3b): the stored tasks token and "Connect tasks" calls. */
   tasksToken: string | null;
   tasksConnectBegins: number;
@@ -556,6 +561,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     chatToken: null,
     chatConnectBegins: 0,
     chatRealtime: null,
+    connectAway: false,
     tasksToken: null,
     tasksConnectBegins: 0,
     tasksRevokeParked: [],
@@ -669,6 +675,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     tokenSet: async (token) => void (hooks.chatToken = token),
     connectBegin: async () => {
       if (secret === null) throw new Error('sign in first');
+      if (hooks.connectAway) throw new Error(SIGN_IN_NOT_PRESENT);
       hooks.chatConnectBegins += 1;
     },
     disconnect: async () => {
@@ -694,6 +701,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     tokenSet: async (token) => void (hooks.tasksToken = token),
     connectBegin: async () => {
       if (secret === null) throw new Error('sign in first');
+      if (hooks.connectAway) throw new Error(SIGN_IN_NOT_PRESENT);
       hooks.tasksConnectBegins += 1;
     },
     disconnect: async () => void (hooks.tasksToken = null),

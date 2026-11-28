@@ -9,6 +9,7 @@
  */
 import { ApiError } from '../api/client';
 import type { TimeTrackApi } from '../api/client';
+import { isSignInNotPresent } from '../lib/nativeFetch';
 import { DeviceFlowError, runDeviceFlow } from '../lib/deviceFlow';
 import type { ChatHost, ChatRealtimeMode } from '../platform';
 import { type Child, h } from '../ui/dom';
@@ -2398,9 +2399,11 @@ export function showEmojiMenu(anchor: HTMLElement, emojis: string[], mine: Set<s
 /**
  * Why the chained `POST device/code` failed, in words (0.12.1): `401` the time session expired (the card adds the
  * action), `429` too many attempts with the server's wait (`Retry-After`, seconds or HTTP date, capped by the client),
- * a refusal of the chat family, else the generic text (network, `5xx`).
+ * a refusal of the chat family, else the generic text (network, `5xx`). Rust refusing the start because nobody was at
+ * the app (window not focused, no recent input) asks the person to come back and press Connect (0.14.2).
  */
 export function connectErrorMessage(error: unknown, t: ChatText): string {
+  if (isSignInNotPresent(error)) return t('connectNotPresent');
   if (!(error instanceof ApiError)) return t('connectFailed');
   if (error.status === 401) return t('connectSessionExpired');
   if (error.status === 429) {
