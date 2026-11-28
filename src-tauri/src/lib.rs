@@ -1471,6 +1471,7 @@ pub fn run() {
             secret::tasks_disconnect,
             secret::tasks_revoke_park,
             secret::tasks_revoke_retry,
+            secret::tasks_revoke_clear,
             deeplink::deep_link_take,
             realtime::chat_realtime_start,
             realtime::chat_realtime_stop,

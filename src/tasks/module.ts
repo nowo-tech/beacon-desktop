@@ -88,6 +88,8 @@ type NoticeKind = 'write' | 'rate' | 'info';
 export const NOTICE_MS = 8000;
 
 const PREFS_KEY = 'beacon-desktop-tasks-view';
+/** The tasks view settings' key ("Clear local data" removes it). */
+export const TASKS_VIEW_KEY = PREFS_KEY;
 /**
  * Whether a server offers the `tasks` scope family, by server origin (0.14.1): `true` / `false` as Beacon last answered
  * (`device/code` for the family, or a stored tasks token). The family is registered per Beacon install, and the
@@ -265,6 +267,8 @@ export class TasksModule {
    * Unknown (never asked) counts as offered, as before.
    */
   get unavailable(): boolean {
+    // A connected tasks token is the answer itself, whatever was cached before (BDA141-I4).
+    if (this.connected) return false;
     const origin = originOf(this.deps.server() ?? '');
     return origin !== null && loadOffers(this.deps.storage)[origin] === false;
   }
@@ -390,9 +394,37 @@ export class TasksModule {
     }
   }
 
-  /** At start-up, once: the retry of a server logout parked by the previous run (the host forgets it after). */
-  async retryParkedLogout(): Promise<void> {
+  /** The retry run in progress (one at a time, BDA141-L1). */
+  private retrying: Promise<void> | null = null;
+
+  /**
+   * At start-up: the retry of the server logouts parked by an earlier run. Offline (`navigator.onLine` false, e.g. an
+   * autostart before the network), it waits for the `online` event instead of spending an attempt (BDA141-L1); the host
+   * parks a token again when it gets no answer at all (3 starts at most). One run at a time.
+   */
+  retryParkedLogout(): Promise<void> {
+    if (this.retrying !== null) return this.retrying;
+    if (globalThis.navigator?.onLine === false && typeof globalThis.addEventListener === 'function') {
+      const once = () => {
+        globalThis.removeEventListener('online', once);
+        void this.retryParkedLogout();
+      };
+      globalThis.addEventListener('online', once);
+      return Promise.resolve();
+    }
+    this.retrying = (this.deps.host.retryRevoke?.() ?? Promise.resolve('none'))
+      .then(() => undefined, () => undefined)
+      .finally(() => {
+        this.retrying = null;
+      });
+    return this.retrying;
+  }
+
+  /** *Clear local data* (BDA141-L2): parked logouts are tried at once, then nothing parked is kept. */
+  async clearParkedLogout(): Promise<void> {
+    await this.retrying;
     await this.deps.host.retryRevoke?.().catch(() => undefined);
+    await this.deps.host.clearRevoke?.().catch(() => undefined);
   }
 
   /** "Disconnect tasks" (Settings): revoked on the server (best effort), then deleted here; time and chat stay. */

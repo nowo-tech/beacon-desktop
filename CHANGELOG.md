@@ -5,6 +5,8 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-11-28
+
 0.14.1 polish (audit BDA14 follow-ups and owner approvals of 2026-11-28).
 
 ### Changed
@@ -38,12 +40,20 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 - **BDA13-L2**: sign-out and *Disconnect tasks* now revoke the tasks token on the server first
   (`POST /api/task-board/v1/logout`, TaskBoard 3.7.0), best effort with a 3 s timeout, then always delete it locally.
-  A server before 3.7.0 (`404`) has nothing to revoke. A network error, `5xx`, `409 unavailable` or no answer in time
-  parks the token in Rust (`tasks-revoke`, never attached to any request of the UI) for **one** retry at the next
-  start, which Rust sends itself and forgets whatever the answer.
+  A server before 3.7.0 (`404`) has nothing to revoke. A network error, `5xx`, `409 unavailable`, `429` or no answer
+  in time parks the token in Rust (`tasks-revoke`, never attached to any request of the UI) for a retry at the next
+  start, which Rust sends itself. Any answer ends the retry. Only "no answer at all" parks it again, for at most 3 starts,
+  and a start that the webview sees as offline (an autostart before the network) waits for `online` before trying
+  (BDA141-L1). One retry run at a time. A second failed logout keeps the first parked token (up to 4 wait; BDA141-I3).
+- **Clear local data** now revokes the chat and tasks tokens on the server first, as sign-out does, tries any parked
+  tasks logout at once and deletes the `tasks-revoke` entry (BDA141-L2). It also removes the chat view
+  (`beacon-desktop-chat-view`), chat notification (`beacon-desktop-chat-notify`) and tasks view
+  (`beacon-desktop-tasks-view`) settings, as PRIVACY.md says (BDA141-L3, also in ≤ 0.14.0).
 - **Deep links across reloads**: a `beacon-desktop://` link announced to a page that never took it (signed out, mid
   sign-in) is dropped when the main window loads a page again, so a reload never opens a link from before it. A link
-  that started the app still waits for the first page.
+  that started the app waits for the first page and is that page's: a later reload drops it too (BDA141-I1).
+- **Settings → Tasks** no longer says "Turned off in Beacon for this organization" for connected tasks while the server
+  was cached as not offering them (BDA141-I4).
 
 ### Already in 0.14.0 (checked)
 

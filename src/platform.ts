@@ -300,8 +300,13 @@ export interface TasksHost {
    * is deleted; `server` is the signed-in server (the Tauri app knows it already).
    */
   parkRevoke?(server: string): Promise<void>;
-  /** At start-up: the one retry of a parked server logout (Rust `tasks_revoke_retry`); then it is forgotten. */
+  /**
+   * The retry of the parked server logouts (Rust `tasks_revoke_retry`): taken out first, one `POST logout` each; a
+   * token with no answer at all is parked again (at most 3 starts in all). One run at a time.
+   */
   retryRevoke?(): Promise<string>;
+  /** *Clear local data*: deletes whatever is still parked (Rust `tasks_revoke_clear`). */
+  clearRevoke?(): Promise<void>;
 }
 
 export interface Platform {
@@ -503,8 +508,10 @@ export interface BrowserHooks {
   /** Tasks (BD-3b): the stored tasks token and "Connect tasks" calls. */
   tasksToken: string | null;
   tasksConnectBegins: number;
-  /** A tasks token parked for one server logout retry (0.14.1). */
-  tasksRevokeParked: { server: string; token: string } | null;
+  /** Tasks tokens parked for a server logout retry (0.14.1), oldest first. */
+  tasksRevokeParked: { server: string; token: string; attempts: number }[];
+  /** Retry runs that had something to send. */
+  tasksRevokeRuns: number;
   /** The fake stream sends a hint / changes mode. */
   chatHint(hint: unknown): void;
   chatMode(mode: ChatRealtimeMode): void;
@@ -551,7 +558,8 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     chatRealtime: null,
     tasksToken: null,
     tasksConnectBegins: 0,
-    tasksRevokeParked: null,
+    tasksRevokeParked: [],
+    tasksRevokeRuns: 0,
     badge: 0,
     chatLinks: [],
     unsent: 0,
@@ -690,16 +698,27 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     },
     disconnect: async () => void (hooks.tasksToken = null),
     parkRevoke: async (server) => {
-      if (hooks.tasksToken !== null) hooks.tasksRevokeParked = { server, token: hooks.tasksToken };
+      const token = hooks.tasksToken;
+      if (token === null) return;
+      hooks.tasksRevokeParked = [...hooks.tasksRevokeParked.filter((item) => item.token !== token), { server, token, attempts: 0 }].slice(-4);
     },
-    // As Rust does it: taken out first (one retry at most), then one `POST logout` with that token.
+    // As Rust does it: taken out first, one `POST logout` each; no answer at all parks it again (3 starts at most).
     retryRevoke: async () => {
       const parked = hooks.tasksRevokeParked;
-      hooks.tasksRevokeParked = null;
-      if (parked === null) return 'none';
-      const response = await fetchImpl(`${parked.server.replace(/\/+$/, '')}/api/task-board/v1/logout`, { method: 'POST', headers: { Authorization: `Bearer ${parked.token}`, Accept: 'application/json' }, credentials: 'omit', cache: 'no-store', redirect: 'error' }).catch(() => null);
-      return response === null ? 'failed' : response.ok ? 'revoked' : response.status === 404 ? 'gone' : 'failed';
+      hooks.tasksRevokeParked = [];
+      if (parked.length === 0) return 'none';
+      hooks.tasksRevokeRuns += 1;
+      const outcomes: string[] = [];
+      const again: typeof parked = [];
+      for (const item of parked) {
+        const response = await fetchImpl(`${item.server.replace(/\/+$/, '')}/api/task-board/v1/logout`, { method: 'POST', headers: { Authorization: `Bearer ${item.token}`, Accept: 'application/json' }, credentials: 'omit', cache: 'no-store', redirect: 'error' }).catch(() => null);
+        if (response === null && item.attempts + 1 < 3) again.push({ ...item, attempts: item.attempts + 1 });
+        outcomes.push(response === null ? (item.attempts + 1 < 3 ? 'parked' : 'failed') : response.ok ? 'revoked' : response.status === 404 ? 'gone' : 'failed');
+      }
+      hooks.tasksRevokeParked = [...again, ...hooks.tasksRevokeParked].slice(-4);
+      return outcomes.join(',');
     },
+    clearRevoke: async () => void (hooks.tasksRevokeParked = []),
   };
   return {
     kind: 'browser',

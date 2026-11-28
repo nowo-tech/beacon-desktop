@@ -37,6 +37,7 @@ if (root !== null && new URLSearchParams(location.search).get('window') === 'pro
   const app = new DesktopApp(shell.timeRoot, platform, {
     onRender: () => shell.onAppRender(),
     beforeSignOut: () => shell.revokeOnServer(),
+    clearParked: () => shell.clearParked(),
     trayChat: () => shell.trayChat(),
     trayTasks: () => shell.trayTasks(),
     // UX batch 7: the update offer is a pill in the shell's title bar.

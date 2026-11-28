@@ -132,7 +132,7 @@ export class TasksApi {
    * Revokes the presented tasks token on the server (TaskBoard 3.7.0 `POST logout`, as ChatKit 2.4.1's; idempotent: an
    * already revoked, expired or unknown token gets `204` too; audit BDA13-L2). Best effort with a short timeout, never
    * throws: `revoked` (2xx), `gone` (`404`, a server before 3.7.0: nothing to revoke there), `retry` (a network error,
-   * no answer in time, `5xx` or `409 unavailable`: the token is still valid, worth one more try later) or `refused`
+   * no answer in time, `5xx`, `409 unavailable` or `429`: the token is still valid, worth one more try later) or `refused`
    * (anything else, e.g. `401` without a Bearer).
    */
   async logout(timeoutMs = 3000): Promise<LogoutResult> {
@@ -145,7 +145,7 @@ export class TasksApi {
       (error: unknown): LogoutResult => {
         const status = error instanceof ApiError ? error.status : 0;
         if (status === 404) return 'gone';
-        if (status === 0 || status === 409 || status >= 500) return 'retry';
+        if (status === 0 || status === 409 || status === 429 || status >= 500) return 'retry';
         return 'refused';
       },
     );

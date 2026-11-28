@@ -95,6 +95,8 @@ interface ViewPrefs {
 }
 
 const PREFS_KEY = 'beacon-desktop-chat-view';
+/** The chat view settings' key ("Clear local data" removes it). */
+export const CHAT_VIEW_KEY = PREFS_KEY;
 const THREAD_MIN = 300;
 const THREAD_MAX = 640;
 

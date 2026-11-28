@@ -42,6 +42,7 @@ function mount(options: { freshSignIn?: boolean; platform?: ReturnType<typeof br
     onRender: () => shell.onAppRender(),
     // As main.ts: the chat and tasks tokens are revoked on the server before the sign-out.
     beforeSignOut: () => shell.revokeOnServer(),
+    clearParked: () => shell.clearParked(),
     sleep: () => new Promise((resolve) => setTimeout(resolve, 5)),
     searchDelayMs: 1,
   });
@@ -168,13 +169,15 @@ describe('Tasks hidden up front where Beacon does not offer them (0.14.1)', () =
 });
 
 describe('server logout of the tasks token (BDA13-L2, TaskBoard 3.7.0)', () => {
-  it('classifies the answers: 204, 404, 409, 5xx, a network error, no answer in time, 401', async () => {
+  it('classifies the answers: 204, 404, 409, 429, 5xx, a network error, no answer in time, 401', async () => {
     const answer = (status: number) => (async () => new Response(status === 204 ? null : JSON.stringify({ ok: false, error: status === 409 ? 'unavailable' : 'x' }), { status })) as unknown as typeof fetch;
     const api = (fetchImpl: typeof fetch) => new TasksApi({ baseUrl: 'https://beacon.example', token: 't', context: null, fetchImpl });
     expect(await api(answer(204)).logout()).toBe('revoked');
     expect(await api(answer(404)).logout()).toBe('gone');
     expect(await api(answer(409)).logout()).toBe('retry');
     expect(await api(answer(500)).logout()).toBe('retry');
+    // BDA141-I3: rate limited, the token is still valid: parked too.
+    expect(await api(answer(429)).logout()).toBe('retry');
     expect(await api(answer(401)).logout()).toBe('refused');
     expect(await api((async () => Promise.reject(new TypeError('offline'))) as unknown as typeof fetch).logout()).toBe('retry');
     expect(await api((() => new Promise<Response>(() => undefined)) as unknown as typeof fetch).logout(20)).toBe('retry');
@@ -196,42 +199,143 @@ describe('server logout of the tasks token (BDA13-L2, TaskBoard 3.7.0)', () => {
     await ui.shell.tasks?.disconnect();
     expect(await logouts()).toEqual([{ mode: 'ok', known: true }]);
     expect(platform.hooks.tasksToken).toBeNull();
-    expect(platform.hooks.tasksRevokeParked).toBeNull();
+    expect(platform.hooks.tasksRevokeParked).toEqual([]);
     // A server before 3.7.0 (404): nothing to revoke there, nothing parked.
     await connectTasks(ui);
     await env.control('config', { tasksLogout: 'missing' });
     await ui.shell.tasks?.disconnect();
     expect((await logouts()).at(-1)).toEqual({ mode: 'missing', known: true });
-    expect(platform.hooks.tasksRevokeParked).toBeNull();
+    expect(platform.hooks.tasksRevokeParked).toEqual([]);
     // Busy server (409 with Retry-After) at sign-out: parked, and the sign-out still goes through.
     await connectTasks(ui);
     const token = platform.hooks.tasksToken;
     await env.control('config', { tasksLogout: 'unavailable' });
     await ui.app.logout();
     expect(platform.hooks.tasksToken).toBeNull();
-    expect(platform.hooks.tasksRevokeParked).toEqual({ server: env.url, token });
+    expect(platform.hooks.tasksRevokeParked).toEqual([{ server: env.url, token, attempts: 0 }]);
     expect((await logouts()).at(-1)).toEqual({ mode: 'unavailable', known: true });
     // The next start tries once more (now answered): revoked; the start after that sends nothing.
     await env.control('config', { tasksLogout: 'ok' });
     mount({ platform });
     await until(async () => (await logouts()).length === 4, 'the retry');
     expect((await logouts()).at(-1)).toEqual({ mode: 'ok', known: true });
-    expect(platform.hooks.tasksRevokeParked).toBeNull();
+    expect(platform.hooks.tasksRevokeParked).toEqual([]);
     mount({ platform });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(await logouts()).toHaveLength(4);
   });
 
-  it('a network error parks too, and a failed retry is not tried again', async () => {
+  it('a 5xx parks too; an answered retry is final, whatever it says', async () => {
     const platform = browserPlatform('0.1.0', nodeFetch);
     const ui = await signIn(mount({ platform }));
     await connectTasks(ui);
     await env.control('config', { tasksLogout: 'error' });
     await ui.shell.tasks?.disconnect();
-    expect(platform.hooks.tasksRevokeParked).not.toBeNull();
+    expect(platform.hooks.tasksRevokeParked).toHaveLength(1);
     expect(await platform.tasks?.retryRevoke?.()).toBe('failed');
-    expect(platform.hooks.tasksRevokeParked).toBeNull();
+    expect(platform.hooks.tasksRevokeParked).toEqual([]);
     expect(await platform.tasks?.retryRevoke?.()).toBe('none');
+  });
+
+  it('BDA141-L1: an offline start waits for `online`, no answer parks it again (3 starts at most), one run at a time', async () => {
+    let offline = false;
+    const fetchImpl = (async (input: string, init?: RequestInit) => {
+      if (offline && String(input).endsWith('/logout')) throw new TypeError('Failed to fetch');
+      return nodeFetch(input, init);
+    }) as unknown as typeof fetch;
+    const platform = browserPlatform('0.1.0', fetchImpl);
+    const ui = await signIn(mount({ platform }));
+    await connectTasks(ui);
+    await env.control('config', { tasksLogout: 'unavailable' });
+    await ui.app.logout();
+    expect(platform.hooks.tasksRevokeParked).toHaveLength(1);
+    await env.control('config', { tasksLogout: 'ok' });
+    const sent = (await logouts()).length;
+    // An autostart before the network: nothing is spent while the webview says it is offline.
+    const onLine = Object.getOwnPropertyDescriptor(navigator, 'onLine');
+    Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => false });
+    try {
+      const start = mount({ platform });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(platform.hooks.tasksRevokeRuns).toBe(0);
+      expect(platform.hooks.tasksRevokeParked).toHaveLength(1);
+      // Online: exactly one successful POST.
+      Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => true });
+      window.dispatchEvent(new Event('online'));
+      await until(() => platform.hooks.tasksRevokeParked.length === 0 && platform.hooks.tasksRevokeRuns === 1, 'the retry once online');
+      expect((await logouts()).slice(sent)).toEqual([{ mode: 'ok', known: true }]);
+      // Two calls at once: one run (the second joins it).
+      platform.hooks.tasksRevokeParked = [{ server: env.url, token: 'parked-token', attempts: 0 }];
+      await Promise.all([start.shell.tasks?.retryParkedLogout(), start.shell.tasks?.retryParkedLogout()]);
+      expect(platform.hooks.tasksRevokeRuns).toBe(2);
+      expect((await logouts()).slice(sent)).toHaveLength(2);
+    } finally {
+      if (onLine !== undefined) Object.defineProperty(navigator, 'onLine', onLine);
+      else Reflect.deleteProperty(navigator, 'onLine');
+    }
+    // "Online" but no answer at all (a captive network): parked again, at most 3 starts in all.
+    platform.hooks.tasksRevokeParked = [{ server: env.url, token: 'parked-token', attempts: 0 }];
+    offline = true;
+    expect(await platform.tasks?.retryRevoke?.()).toBe('parked');
+    expect(platform.hooks.tasksRevokeParked).toEqual([{ server: env.url, token: 'parked-token', attempts: 1 }]);
+    expect(await platform.tasks?.retryRevoke?.()).toBe('parked');
+    expect(await platform.tasks?.retryRevoke?.()).toBe('failed');
+    expect(platform.hooks.tasksRevokeParked).toEqual([]);
+  });
+
+  it('BDA141-I3: a second failed logout keeps the first parked token; both are retried', async () => {
+    const platform = browserPlatform('0.1.0', nodeFetch);
+    const ui = await signIn(mount({ platform }));
+    await env.control('config', { tasksLogout: 'unavailable' });
+    await connectTasks(ui);
+    const first = platform.hooks.tasksToken;
+    await ui.shell.tasks?.disconnect();
+    await connectTasks(ui);
+    const second = platform.hooks.tasksToken;
+    await ui.shell.tasks?.disconnect();
+    expect(platform.hooks.tasksRevokeParked.map((item) => item.token)).toEqual([first, second]);
+    await env.control('config', { tasksLogout: 'ok' });
+    expect(await platform.tasks?.retryRevoke?.()).toBe('revoked,revoked');
+    expect(platform.hooks.tasksRevokeParked).toEqual([]);
+  });
+
+  it('BDA141-L2/L3: Clear local data revokes chat and tasks on the server, keeps nothing parked and leaves no view keys', async () => {
+    const platform = browserPlatform('0.1.0', nodeFetch);
+    const ui = await signIn(mount({ platform }));
+    ui.$<HTMLButtonElement>('#tab-chat').click();
+    ui.$<HTMLButtonElement>('#chat-connect').click();
+    await until(() => ui.$('#chat-user-code') !== null, 'the chat code');
+    await env.control('device/approve', { userCode: ui.$('#chat-user-code').textContent });
+    await until(() => ui.shell.chat.connected, 'chat');
+    await connectTasks(ui);
+    // An older token waits for its retry (the server was busy then).
+    platform.hooks.tasksRevokeParked = [{ server: env.url, token: 'older-token', attempts: 0 }];
+    for (const key of ['beacon-desktop-chat-view', 'beacon-desktop-chat-notify', 'beacon-desktop-tasks-view']) localStorage.setItem(key, '{}');
+    const chatLogouts = ((await env.control('chat/state')) as { logouts: number }).logouts;
+    const tasksLogouts = (await logouts()).length;
+    await ui.app.clearLocalData();
+    expect(((await env.control('chat/state')) as { logouts: number }).logouts).toBe(chatLogouts + 1);
+    expect((await logouts()).slice(tasksLogouts)).toEqual([
+      { mode: 'ok', known: true },
+      { mode: 'ok', known: false },
+    ]);
+    expect(platform.hooks.tasksRevokeParked).toEqual([]);
+    expect(platform.hooks.tasksToken).toBeNull();
+    expect(platform.hooks.chatToken).toBeNull();
+    expect(Object.keys(localStorage).filter((key) => key.startsWith('beacon-desktop'))).toEqual([]);
+  });
+});
+
+describe('Settings with a stale "not offered" (BDA141-I4)', () => {
+  it('connected tasks never read as turned off, whatever was cached', async () => {
+    const ui = await signIn(mount());
+    await connectTasks(ui);
+    localStorage.setItem(OFFER_KEY, JSON.stringify({ [origin()]: false }));
+    expect(ui.shell.tasks?.unavailable).toBe(false);
+    expect(ui.shell.tasksHidden).toBe(false);
+    ui.shell.openSettings('tasks');
+    expect(ui.$('#shell-settings').textContent).not.toContain('Turned off in Beacon');
+    expect(ui.$('#shell-settings').textContent).toContain('Connected');
   });
 });
 

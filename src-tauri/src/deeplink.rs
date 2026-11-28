@@ -16,7 +16,7 @@
 //! Reloads (0.14.1): a link belongs to the page it was announced to. A link that came while a page of the main window
 //! was loaded, and that page never took it (it was not ready: signed out, in the middle of a sign-in), is dropped when
 //! the main window loads a page again ([`Pending::page_started`]), so a reload never opens a link from before it. A link
-//! that came before the first page (the app was started by it) waits for that page.
+//! that came before the first page (the app was started by it) waits for that page, and belongs to it (BDA141-I1).
 //!
 //! Focus (BDA13-I1): links raise and focus the main window at most once per [`RAISE_EVERY`]; a burst of links (a page
 //! opening many) is coalesced, and the latest one is what the UI takes.
@@ -133,11 +133,11 @@ impl Pending {
     }
 
     /// The main window starts loading a page (the first one, or a reload): a link announced to an earlier page and not
-    /// taken by it is dropped; one that came before any page waits for this one.
+    /// taken by it is dropped; one that came before any page waits for the first page and is that page's.
     pub fn page_started(&self) {
         let now = self.page.fetch_add(1, Ordering::SeqCst) + 1;
         if let Ok(mut slot) = self.link.lock() {
-            if matches!(*slot, Some((_, at)) if at >= 1 && at < now) {
+            if matches!(*slot, Some((_, at)) if at.max(1) < now) {
                 *slot = None;
             }
         }
@@ -237,6 +237,12 @@ mod tests {
         pending.page_started();
         pending.page_started();
         assert_eq!(pending.take(), None);
+        // A link that started the app and was not taken by the first page (signed out) does not survive a reload.
+        let cold = Pending::default();
+        cold.put(link("t-5"));
+        cold.page_started();
+        cold.page_started();
+        assert_eq!(cold.take(), None);
     }
 
     #[test]

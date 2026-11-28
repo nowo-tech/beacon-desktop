@@ -232,8 +232,10 @@ for the next dedup survey (owner rule).
   body, Bearer; `204` also for a revoked, expired or unknown token; `401` only without a Bearer; `500` / `409
   unavailable` + `Retry-After`: still valid). The app's `TasksModule.revokeOnServer()` runs it best effort (3 s, as
   chat) from sign-out and "Disconnect tasks", then always deletes the token. `404` (before 3.7.0): nothing to revoke. A
-  network error, `5xx`, `409` or no answer: Rust parks the token (`tasks-revoke`, usable for nothing else) and sends one
-  retry at the next start (`tasks_revoke_retry`), then forgets it.
+  network error, `5xx`, `409`, `429` or no answer: Rust parks the token (`tasks-revoke`, usable for nothing else, up to
+  4 tokens) and retries at the next start once the webview is online (`tasks_revoke_retry`); any answer ends it, no
+  answer at all parks it again for at most 3 starts (BDA141-L1, I3). *Clear local data* revokes first and keeps nothing
+  parked (BDA141-L2).
 - On revocation (or account erasure) Beacon also calls TaskBoard's `TaskApiIdempotencyStoreInterface::forget()` with the
   token's scope, so no stored answer (which can hold task text) outlives the token.
 

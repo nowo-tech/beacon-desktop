@@ -127,11 +127,13 @@ Only the latest release receives fixes. The server can force an update with `min
   `PATCH` only on `…/tasks/{id}` and `…/tasks/{id}/checklist-items/{id}`, `PUT` / `DELETE` only on
   `…/tasks/{id}/members/{user}`, `POST` as any route; `If-Match` is an allowed request header and `ETag` a returned
   one. Sign-out deletes the tasks entry first; "Disconnect tasks" deletes it alone. Both first call TaskBoard's
-  `POST /api/task-board/v1/logout` (3.7.0) best effort, 3 s. When that call fails with a network error, `5xx` or `409`,
-  the UI asks Rust to park the token (`tasks_revoke_park`, a fourth entry, user `tasks-revoke`) before the delete. A
-  parked token is never attached to any request of the UI; at the next start `tasks_revoke_retry` deletes the entry
-  first and then sends that one `POST …/logout` itself, to the token's own origin and base path (release builds: the
-  official server only). One retry at most. Answers to requests sent before an organization switch or a reconnect are dropped, and
+  `POST /api/task-board/v1/logout` (3.7.0) best effort, 3 s. When that call fails with a network error, `5xx`, `409`
+  or `429`, the UI asks Rust to park the token (`tasks_revoke_park`, a fourth entry, user `tasks-revoke`, up to 4
+  tokens) before the delete. A parked token is never attached to any request of the UI. At the next start (once the
+  webview is online) `tasks_revoke_retry` deletes the entry first and then sends one `POST …/logout` per token itself,
+  to the token's own origin and base path (release builds: the official server only). Any answer ends a token's
+  retry; no answer at all parks it again, for at most 3 starts. One run at a time. *Clear local data* revokes the chat
+  and tasks tokens first, runs the parked retry at once and deletes the entry (`tasks_revoke_clear`). Answers to requests sent before an organization switch or a reconnect are dropped, and
   their `401` / `403` act on nothing (audit BDA13-M1).
 - **Links** (`beacon-desktop://`, src-tauri/src/deeplink.rs). Untrusted input that only navigates: parsed in Rust
   into `{kind: chat|task, id, context}` (UUID / TaskBoard id, `personal` or `org:<uuid>`; anything else, extra

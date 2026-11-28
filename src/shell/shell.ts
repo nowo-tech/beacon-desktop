@@ -12,14 +12,14 @@ import type { DesktopApp } from '../ui/app';
 import { type Child, h, patch } from '../ui/dom';
 import { type ChromeMode, type DeepLink, hostOs, type Platform } from '../platform';
 import { windowControls } from './windowControls';
-import { ChatNotifier, chatClickTarget, PAUSE_HOUR_MS, parseChatClick, tomorrowMorning } from '../chat/notifications';
+import { ChatNotifier, chatClickTarget, NOTIFY_KEY, PAUSE_HOUR_MS, parseChatClick, tomorrowMorning } from '../chat/notifications';
 import type { Locale } from '../lib/i18n';
 import type { ThemePreference } from '../lib/theme';
 import { chatText, type ChatText } from '../chat/i18n';
 import { chatIcon, type ChatIconName } from '../chat/icons';
-import { ChatModule, showMenu } from '../chat/module';
+import { CHAT_VIEW_KEY, ChatModule, showMenu } from '../chat/module';
 import { tasksText, type TasksText } from '../tasks/i18n';
-import { type Markers, OFFER_KEY as TASKS_OFFER_KEY, TasksModule } from '../tasks/module';
+import { type Markers, OFFER_KEY as TASKS_OFFER_KEY, TasksModule, TASKS_VIEW_KEY } from '../tasks/module';
 import { rankConversations } from '../chat/format';
 import type { Context, Conversation } from '../chat/types';
 import { isMuted, sectionOf } from '../chat/store';
@@ -515,7 +515,7 @@ export class Shell {
   attach(app: DesktopApp): void {
     this.app = app;
     // UX batch 6 (UXA-1, UXA-2): the Time module drops its own header and Settings; the shell's are the only ones.
-    app.embed({ openSettings: (tab) => this.openSettings(tab as AnyTab | undefined), localKeys: [SHELL_KEY, SETUP_CHIP_KEY, TASKS_OFFER_KEY] });
+    app.embed({ openSettings: (tab) => this.openSettings(tab as AnyTab | undefined), localKeys: [SHELL_KEY, SETUP_CHIP_KEY, TASKS_OFFER_KEY, CHAT_VIEW_KEY, NOTIFY_KEY, TASKS_VIEW_KEY] });
     // Before the first time API request: the organization used last (Personal on a first launch).
     app.setContext(this.prefs.context);
   }
@@ -786,6 +786,11 @@ export class Shell {
    */
   async revokeOnServer(): Promise<void> {
     await Promise.all([this.chat.revokeOnServer().catch(() => undefined), this.tasks?.revokeOnServer()]);
+  }
+
+  /** *Clear local data* (BDA141-L2), after `revokeOnServer`: parked tasks logouts are tried now and not kept. */
+  async clearParked(): Promise<void> {
+    await this.tasks?.clearParkedLogout();
   }
 
   /** Signed in (at start-up or after the sign-in): landing module, then chat. */
@@ -1638,7 +1643,7 @@ export class Shell {
     if (tasks.connected) {
       const manage = h('button', { class: 'btn sm', id: 'settings-tasks-manage', attrs: { type: 'button' } }, this.st('manage'));
       manage.addEventListener('click', () => this.openSettings('account'));
-      group.append(this.settingRow(tt('tasksConnection'), this.tasksHidden ? this.st('connTasksHidden') : this.st('connOn'), manage));
+      group.append(this.settingRow(tt('tasksConnection'), this.tasksForbidden ? this.st('connTasksHidden') : this.st('connOn'), manage));
     } else if (tasks.unavailable) {
       // 0.14.1: this server has no tasks yet (Beacon before 1.183): said once, nothing to press.
       group.append(this.settingRow(tt('tasksConnection'), this.st('connTasksUnavailable'), null));

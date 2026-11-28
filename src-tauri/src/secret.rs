@@ -43,10 +43,14 @@
 //!
 //! **Tasks logout retry (0.14.1, BDA13-L2).** Sign-out and "Disconnect tasks" call TaskBoard's `POST …/logout` (3.7.0)
 //! best effort from the UI, then always delete the token. When that call failed in a way worth one more try (network,
-//! `5xx`, `409 unavailable`), the UI parks the token first ([`Session::park_tasks_revoke`]): a fourth entry, user
-//! `tasks-revoke`, never attached to any request of the UI. At the next start `tasks_revoke_retry` takes it out
-//! (deleted **before** the request: one retry at most) and sends that one `POST <origin><base>/api/task-board/v1/logout`
-//! itself, to the origin that issued the token (and in release builds only to the official server).
+//! `5xx`, `409 unavailable`, `429`), the UI parks the token first ([`Session::park_tasks_revoke`]): a fourth entry,
+//! user `tasks-revoke`, never attached to any request of the UI. It holds a short list ([`MAX_PARKED`], oldest dropped
+//! last), so a second failed logout never drops an earlier parked token. At the next start (once the webview is
+//! online) `tasks_revoke_retry` takes the list out (deleted **before** the requests) and sends one
+//! `POST <origin><base>/api/task-board/v1/logout` per token itself, to the origin that issued it (release builds: the
+//! official server only). Any answer ends a token's retry; only "no answer at all" (no network) parks it again, for at
+//! most [`MAX_ATTEMPTS`] starts in all. One retry run at a time. *Clear local data* runs it at once, then deletes the
+//! entry.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -616,8 +620,8 @@ pub struct Session {
     chat_store: Box<dyn TokenStore>,
     /// The tasks token's entry (`tasks-token`).
     tasks_store: Box<dyn TokenStore>,
-    /// A tasks token parked for one server logout retry (`tasks-revoke`, 0.14.1).
-    revoke_store: Box<dyn TokenStore>,
+    /// Tasks tokens parked for a server logout retry (`tasks-revoke`, 0.14.1).
+    revoke_store: Box<dyn RawStore>,
     io: Mutex<()>,
     state: Mutex<State>,
     sign_in_window: Duration,
@@ -731,27 +735,106 @@ fn default_tasks_store() -> Box<dyn TokenStore> {
     }
 }
 
-/// The parked tasks token's entry (memory only in tests).
-fn default_revoke_store() -> Box<dyn TokenStore> {
+/// A keychain entry read and written as it is (the parked tasks tokens' list).
+pub trait RawStore: Send + Sync {
+    fn read(&self) -> Result<Option<String>, String>;
+    fn write(&self, value: &str) -> Result<(), String>;
+    fn delete(&self) -> Result<(), String>;
+}
+
+impl RawStore for Keychain {
+    fn read(&self) -> Result<Option<String>, String> {
+        match self.entry()?.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(keychain_error(&e)),
+        }
+    }
+
+    fn write(&self, value: &str) -> Result<(), String> {
+        self.entry()?
+            .set_password(value)
+            .map_err(|e| keychain_error(&e))
+    }
+
+    fn delete(&self) -> Result<(), String> {
+        TokenStore::delete(self)
+    }
+}
+
+/// The parked tasks tokens' entry (memory only in tests).
+fn default_revoke_store() -> Box<dyn RawStore> {
     #[cfg(not(test))]
     {
         Box::new(Keychain::tasks_revoke())
     }
     #[cfg(test)]
     {
-        Box::new(tests::MemoryStore::default())
+        Box::new(tests::MemoryRaw::default())
     }
 }
 
-/// Where a parked tasks token's one logout retry goes: `<origin><base>/api/task-board/v1/logout`, only for an entry
-/// with an origin that is a valid server (in release builds, `fixed`: the official one only). `None` otherwise.
-pub fn revoke_url(stored: &Stored, allow_loopback_http: bool, fixed: bool) -> Option<url::Url> {
-    let origin = stored.origin.as_deref()?;
+/// At most this many tasks tokens wait for their logout retry (the oldest goes first when one more is parked).
+pub const MAX_PARKED: usize = 4;
+/// Starts a parked token is tried at, at most, when the network never answers (BDA141-L1).
+pub const MAX_ATTEMPTS: u32 = 3;
+
+/// A tasks token whose server logout waits for a retry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Parked {
+    pub origin: String,
+    pub base: Option<String>,
+    pub token: String,
+    /// Retries already sent without any answer (no network).
+    pub attempts: u32,
+}
+
+/// The entry's value: `{"v":2,"items":[{origin, base, token, attempts}]}`.
+pub fn encode_parked(items: &[Parked]) -> String {
+    let items: Vec<Value> = items
+        .iter()
+        .map(|item| serde_json::json!({"origin": item.origin, "base": item.base, "token": item.token, "attempts": item.attempts}))
+        .collect();
+    serde_json::json!({"v": 2, "items": items}).to_string()
+}
+
+/// The parked list; anything malformed is skipped (never an error: a bad entry must not block the retry of others).
+pub fn decode_parked(value: &str) -> Vec<Parked> {
+    let Ok(Value::Object(entry)) = serde_json::from_str::<Value>(value) else {
+        return Vec::new();
+    };
+    let Some(Value::Array(items)) = entry.get("items") else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            Some(Parked {
+                origin: item.get("origin")?.as_str()?.to_string(),
+                base: item.get("base").and_then(Value::as_str).map(str::to_string),
+                token: item.get("token")?.as_str()?.to_string(),
+                attempts: u32::try_from(item.get("attempts").and_then(Value::as_u64).unwrap_or(0))
+                    .unwrap_or(MAX_ATTEMPTS),
+            })
+        })
+        .take(MAX_PARKED)
+        .collect()
+}
+
+/// Where a parked tasks token's logout retry goes: `<origin><base>/api/task-board/v1/logout`, only for an origin that
+/// is a valid server (in release builds, `fixed`: the official one only). `None` otherwise.
+pub fn revoke_url(
+    origin: Option<&str>,
+    base: Option<&str>,
+    allow_loopback_http: bool,
+    fixed: bool,
+) -> Option<url::Url> {
+    let origin = origin?;
     let server = crate::net::validate_server_url_with(origin, allow_loopback_http, fixed).ok()?;
     if server.origin().ascii_serialization() != origin {
         return None;
     }
-    let base = stored.base.as_deref().unwrap_or("").trim_end_matches('/');
+    let base = base.unwrap_or("").trim_end_matches('/');
     if !(base.is_empty() || base.starts_with('/'))
         || base.contains("..")
         || base.contains('?')
@@ -763,15 +846,19 @@ pub fn revoke_url(stored: &Stored, allow_loopback_http: bool, fixed: bool) -> Op
     (url.origin() == server.origin()).then_some(url)
 }
 
-/// What the one retry of a parked tasks logout came to (`tasks_revoke_retry`).
-pub fn revoke_outcome(status: Option<u16>) -> &'static str {
+/// What one parked token's retry came to: `revoked` (2xx), `gone` (`404`, a server before TaskBoard 3.7.0), `parked`
+/// (no answer at all: parked again while attempts are left), `failed` (any other answer, or no attempts left).
+pub fn revoke_outcome(status: u16, attempts_after: u32) -> &'static str {
     match status {
-        None => "none",
-        Some(200..=299) => "revoked",
-        Some(404) => "gone",
-        Some(_) => "failed",
+        200..=299 => "revoked",
+        404 => "gone",
+        0 if attempts_after < MAX_ATTEMPTS => "parked",
+        _ => "failed",
     }
 }
+
+/// One retry run at a time (BDA141-L1): a second call while one runs sends nothing.
+static RETRYING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The two extra families (each its own keychain entry, connect window and route).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -833,44 +920,108 @@ impl Session {
     }
 
     /// Parks tasks tokens for a logout retry in `store` (the app: [`Keychain::tasks_revoke`]).
-    pub fn with_revoke_store(mut self, store: Box<dyn TokenStore>) -> Self {
+    pub fn with_revoke_store(mut self, store: Box<dyn RawStore>) -> Self {
         self.revoke_store = store;
         self
     }
 
-    /// Parks the stored tasks token for one server logout retry at the next start (0.14.1): the UI's `POST logout`
-    /// failed with a network error, `5xx` or `409`. Replaces an older parked one (at most one waits). Nothing stored,
-    /// or a token without an origin: nothing parked (`false`). The tasks token itself is deleted as usual afterwards.
+    fn parked_locked(&self) -> Result<Vec<Parked>, String> {
+        Ok(self
+            .revoke_store
+            .read()?
+            .map(|value| decode_parked(&value))
+            .unwrap_or_default())
+    }
+
+    /// `items` after `kept` (older first), at most [`MAX_PARKED`] (the oldest dropped), written or the entry deleted.
+    fn write_parked_locked(&self, items: Vec<Parked>) -> Result<(), String> {
+        let skip = items.len().saturating_sub(MAX_PARKED);
+        let items: Vec<Parked> = items.into_iter().skip(skip).collect();
+        if items.is_empty() {
+            self.revoke_store.delete()
+        } else {
+            self.revoke_store.write(&encode_parked(&items))
+        }
+    }
+
+    /// Parks the stored tasks token for a server logout retry at the next start (0.14.1): the UI's `POST logout`
+    /// failed with a network error, `5xx`, `409` or `429`. Added to what already waits (BDA141-I3: a second failed
+    /// logout never drops the first). Nothing stored, or a token without an origin: nothing parked (`false`). The
+    /// tasks token itself is deleted as usual afterwards.
     pub fn park_tasks_revoke(&self) -> Result<bool, String> {
         let _io = self.io()?;
         self.load_extra_locked(Extra::Tasks)?;
         let stored = slot(&mut *self.lock()?, Extra::Tasks).1.clone();
-        match stored {
-            Some(stored) if stored.origin.is_some() => {
-                self.revoke_store.write(&stored)?;
-                Ok(true)
-            }
-            _ => Ok(false),
-        }
+        let Some(Stored {
+            origin: Some(origin),
+            token,
+            base,
+        }) = stored
+        else {
+            return Ok(false);
+        };
+        let mut items = self.parked_locked()?;
+        items.retain(|item| item.token != token);
+        items.push(Parked {
+            origin,
+            base,
+            token,
+            attempts: 0,
+        });
+        self.write_parked_locked(items)?;
+        Ok(true)
     }
 
-    /// Takes the parked tasks token out for its one retry: the entry is deleted **first** (a failed delete keeps it and
-    /// sends nothing), so it is never sent twice. Returns where to send it and the bearer; `None` when nothing waits or
-    /// the entry is not one this build may send ([`revoke_url`]).
-    pub fn take_tasks_revoke(&self) -> Result<Option<(url::Url, HeaderValue)>, String> {
+    /// Takes every parked tasks token out for its retry: the entry is deleted **first** (a failed delete keeps it and
+    /// sends nothing), so no token is sent twice by one run. Returns each token with where to send it and its bearer;
+    /// entries this build may not send ([`revoke_url`]) are dropped.
+    pub fn take_tasks_revoke(&self) -> Result<Vec<(Parked, url::Url, HeaderValue)>, String> {
         let _io = self.io()?;
-        let Some(stored) = self.revoke_store.read()? else {
-            return Ok(None);
+        let Some(value) = self.revoke_store.read()? else {
+            return Ok(Vec::new());
         };
+        let items = decode_parked(&value);
         self.revoke_store.delete()?;
-        let Some(url) = revoke_url(
-            &stored,
-            crate::net::ALLOW_LOOPBACK_HTTP,
-            crate::net::FIXED_SERVER,
-        ) else {
-            return Ok(None);
-        };
-        Ok(Some((url, bearer(&stored.token)?)))
+        let mut out = Vec::new();
+        for item in items {
+            if let Some(url) = revoke_url(
+                Some(&item.origin),
+                item.base.as_deref(),
+                crate::net::ALLOW_LOOPBACK_HTTP,
+                crate::net::FIXED_SERVER,
+            ) {
+                let value = bearer(&item.token)?;
+                out.push((item, url, value));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Parks again the tokens whose retry got no answer at all (no network), one attempt more each, ahead of anything
+    /// parked meanwhile; a token out of attempts ([`MAX_ATTEMPTS`]) is dropped.
+    pub fn repark_tasks_revoke(&self, unanswered: Vec<Parked>) -> Result<(), String> {
+        let _io = self.io()?;
+        let mut items: Vec<Parked> = unanswered
+            .into_iter()
+            .map(|item| Parked {
+                attempts: item.attempts.saturating_add(1),
+                ..item
+            })
+            .filter(|item| item.attempts < MAX_ATTEMPTS)
+            .collect();
+        if items.is_empty() {
+            return Ok(());
+        }
+        let newer = self.parked_locked()?;
+        items.retain(|item| !newer.iter().any(|other| other.token == item.token));
+        items.extend(newer);
+        self.write_parked_locked(items)
+    }
+
+    /// *Clear local data*: no parked token is left behind (after its retry was tried at once).
+    pub fn clear_tasks_revoke(&self) -> Result<(), String> {
+        let _io = self.io()?;
+        self.revoke_store.delete()
     }
 
     /// Measures the pause with `clock` instead of the system clock (set it before [`Self::with_declines_file`]).
@@ -1583,29 +1734,61 @@ pub async fn tasks_revoke_park(
     blocking(move || session.park_tasks_revoke()).await
 }
 
-/// The one retry of a parked tasks logout (at start-up): taken out of the keychain first, then `POST …/logout` with that
-/// token, from Rust (the token never reaches the webview). `none` (nothing parked), `revoked`, `gone` (a server before
-/// TaskBoard 3.7.0) or `failed`; never retried again.
+/// The retry of the parked tasks logouts (at start-up once online, and at *Clear local data*): taken out of the
+/// keychain first, then one `POST …/logout` per token, from Rust (the tokens never reach the webview). A token with no
+/// answer at all is parked again while attempts are left. One run at a time (`busy` otherwise). Answers `none`
+/// (nothing parked) or the outcomes in order (`revoked`, `gone`, `parked`, `failed`), comma-separated.
 #[tauri::command]
 pub async fn tasks_revoke_retry(
     window: tauri::Window,
     session: tauri::State<'_, Arc<Session>>,
 ) -> Result<String, String> {
+    use std::sync::atomic::Ordering;
+    crate::only_from(&window, "main")?;
+    if RETRYING.swap(true, Ordering::SeqCst) {
+        return Ok("busy".into());
+    }
+    let result = retry_parked(Arc::clone(&session)).await;
+    RETRYING.store(false, Ordering::SeqCst);
+    result
+}
+
+async fn retry_parked(session: Arc<Session>) -> Result<String, String> {
+    let taker = Arc::clone(&session);
+    let items = blocking(move || taker.take_tasks_revoke()).await?;
+    if items.is_empty() {
+        return Ok("none".into());
+    }
+    let mut outcomes = Vec::new();
+    let mut unanswered = Vec::new();
+    for (item, url, value) in items {
+        let status = crate::net::client()
+            .post(url)
+            .header(reqwest::header::AUTHORIZATION, value)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map(|response| response.status().as_u16())
+            .unwrap_or(0);
+        outcomes.push(revoke_outcome(status, item.attempts.saturating_add(1)));
+        if status == 0 {
+            unanswered.push(item);
+        }
+    }
+    blocking(move || session.repark_tasks_revoke(unanswered)).await?;
+    Ok(outcomes.join(","))
+}
+
+/// *Clear local data*: deletes any parked tasks token (its retry was tried just before).
+#[tauri::command]
+pub async fn tasks_revoke_clear(
+    window: tauri::Window,
+    session: tauri::State<'_, Arc<Session>>,
+) -> Result<(), String> {
     crate::only_from(&window, "main")?;
     let session = Arc::clone(&session);
-    let Some((url, value)) = blocking(move || session.take_tasks_revoke()).await? else {
-        return Ok(revoke_outcome(None).into());
-    };
-    let status = crate::net::client()
-        .post(url)
-        .header(reqwest::header::AUTHORIZATION, value)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .map(|response| response.status().as_u16())
-        .unwrap_or(0);
-    Ok(revoke_outcome(Some(status)).into())
+    blocking(move || session.clear_tasks_revoke()).await
 }
 
 /// Whether a session token is stored (the UI then starts signed in). Never the token itself.
@@ -1732,6 +1915,42 @@ pub mod tests {
 
     fn locked() -> String {
         keychain_error(&keyring::Error::NoStorageAccess("secret-token".into()))
+    }
+
+    /// An in-memory [`RawStore`]; `fail_delete` simulates a locked keychain.
+    #[derive(Default, Clone)]
+    pub struct MemoryRaw {
+        pub value: Arc<Mutex<Option<String>>>,
+        pub fail_delete: Arc<AtomicBool>,
+    }
+
+    impl MemoryRaw {
+        pub fn get(&self) -> Option<String> {
+            self.value.lock().unwrap().clone()
+        }
+
+        pub fn set(&self, value: &str) {
+            *self.value.lock().unwrap() = Some(value.to_string());
+        }
+    }
+
+    impl RawStore for MemoryRaw {
+        fn read(&self) -> Result<Option<String>, String> {
+            Ok(self.get())
+        }
+
+        fn write(&self, value: &str) -> Result<(), String> {
+            self.set(value);
+            Ok(())
+        }
+
+        fn delete(&self) -> Result<(), String> {
+            if self.fail_delete.load(Ordering::SeqCst) {
+                return Err("locked".into());
+            }
+            *self.value.lock().unwrap() = None;
+            Ok(())
+        }
     }
 
     impl TokenStore for MemoryStore {
@@ -2180,12 +2399,12 @@ pub mod tests {
     }
 
     #[test]
-    fn a_parked_tasks_token_is_sent_once_and_never_attached_to_a_request() {
+    fn parked_tasks_tokens_are_sent_once_per_run_never_attached_and_kept_while_unanswered() {
         let (time, chat, tasks, parked) = (
             MemoryStore::with(A, "time-secret"),
             MemoryStore::default(),
             MemoryStore::with(A, "tasks-secret"),
-            MemoryStore::default(),
+            MemoryRaw::default(),
         );
         let session = Arc::new(
             Session::with_timing(Box::new(time.clone()), SIGN_IN_WINDOW, Duration::ZERO)
@@ -2196,12 +2415,14 @@ pub mod tests {
         session.bind(&url(A)).unwrap();
         assert_eq!(Keychain::tasks_revoke().user, "tasks-revoke");
         // Nothing parked: nothing to send.
-        assert_eq!(session.take_tasks_revoke().unwrap(), None);
-        // The UI's logout failed (network, 5xx, 409): the token is parked, then deleted as usual (sign-out).
+        assert!(session.take_tasks_revoke().unwrap().is_empty());
+        // The UI's logout failed (network, 5xx, 409, 429): the token is parked, then deleted as usual (sign-out).
+        assert!(session.park_tasks_revoke().unwrap());
+        // Parked twice (the same token): one entry.
         assert!(session.park_tasks_revoke().unwrap());
         session.sign_out().unwrap();
         assert_eq!(tasks.stored(), None);
-        assert_eq!(parked.stored().unwrap().token, "tasks-secret");
+        assert_eq!(decode_parked(&parked.get().unwrap()).len(), 1);
         // A parked token is never attached to anything the UI sends, not even the logout route.
         session.bind(&url(A)).unwrap();
         for route in [
@@ -2211,40 +2432,122 @@ pub mod tests {
         ] {
             assert_eq!(bearer_of(&session, &format!("{A}{route}")), None, "{route}");
         }
-        // The one retry: deleted before it is sent, so a second start sends nothing.
-        let (target, value) = session.take_tasks_revoke().unwrap().unwrap();
+        // A run takes it out first: a second run at once sends nothing.
+        let taken = session.take_tasks_revoke().unwrap();
+        assert_eq!(taken.len(), 1);
+        let (item, target, value) = &taken[0];
         assert_eq!(target.as_str(), format!("{A}/api/task-board/v1/logout"));
         assert_eq!(value.to_str().unwrap(), "Bearer tasks-secret");
         assert!(value.is_sensitive());
-        assert_eq!(parked.stored(), None);
-        assert_eq!(session.take_tasks_revoke().unwrap(), None);
+        assert_eq!(parked.get(), None);
+        assert!(session.take_tasks_revoke().unwrap().is_empty());
+        // No answer at all (offline start, BDA141-L1): parked again, one attempt more, until MAX_ATTEMPTS starts.
+        let mut item = item.clone();
+        for attempt in 1..MAX_ATTEMPTS {
+            session.repark_tasks_revoke(vec![item.clone()]).unwrap();
+            let again = session.take_tasks_revoke().unwrap();
+            assert_eq!(again.len(), 1, "attempt {attempt}");
+            assert_eq!(again[0].0.attempts, attempt);
+            item = again[0].0.clone();
+        }
+        session.repark_tasks_revoke(vec![item]).unwrap();
+        assert_eq!(parked.get(), None);
         // A keychain that refuses the delete keeps it and sends nothing.
-        parked.value.lock().unwrap().replace(Stored {
-            origin: Some(A.into()),
-            token: "tasks-secret".into(),
+        parked.set(&encode_parked(&[Parked {
+            origin: A.into(),
             base: None,
-        });
+            token: "tasks-secret".into(),
+            attempts: 0,
+        }]));
         parked.fail_delete.store(true, Ordering::SeqCst);
         assert!(session.take_tasks_revoke().is_err());
+        assert!(parked.get().is_some());
+        parked.fail_delete.store(false, Ordering::SeqCst);
+        // Clear local data: nothing left.
+        session.clear_tasks_revoke().unwrap();
+        assert_eq!(parked.get(), None);
         // No tasks token stored: nothing parked.
         assert!(!session.park_tasks_revoke().unwrap());
     }
 
     #[test]
+    fn a_second_failed_logout_keeps_the_first_parked_token() {
+        let (time, tasks, parked) = (
+            MemoryStore::with(A, "time-secret"),
+            MemoryStore::with(A, "tasks-one"),
+            MemoryRaw::default(),
+        );
+        let session = Arc::new(
+            Session::with_timing(Box::new(time.clone()), SIGN_IN_WINDOW, Duration::ZERO)
+                .with_chat_store(Box::new(MemoryStore::default()))
+                .with_tasks_store(Box::new(tasks.clone()))
+                .with_revoke_store(Box::new(parked.clone())),
+        );
+        session.bind(&url(A)).unwrap();
+        assert!(session.park_tasks_revoke().unwrap());
+        session.disconnect_extra(Extra::Tasks).unwrap();
+        // Reconnected with another token, whose logout fails too.
+        tasks.value.lock().unwrap().replace(Stored {
+            origin: Some(A.into()),
+            token: "tasks-two".into(),
+            base: None,
+        });
+        let reread = Arc::new(
+            Session::with_timing(Box::new(time.clone()), SIGN_IN_WINDOW, Duration::ZERO)
+                .with_chat_store(Box::new(MemoryStore::default()))
+                .with_tasks_store(Box::new(tasks.clone()))
+                .with_revoke_store(Box::new(parked.clone())),
+        );
+        reread.bind(&url(A)).unwrap();
+        assert!(reread.park_tasks_revoke().unwrap());
+        let tokens: Vec<String> = decode_parked(&parked.get().unwrap())
+            .into_iter()
+            .map(|item| item.token)
+            .collect();
+        assert_eq!(tokens, ["tasks-one", "tasks-two"]);
+        // A token re-parked after no answer stays ahead of one parked meanwhile; at most MAX_PARKED wait.
+        let taken: Vec<Parked> = reread
+            .take_tasks_revoke()
+            .unwrap()
+            .into_iter()
+            .map(|(item, _, _)| item)
+            .collect();
+        for n in 0..MAX_PARKED {
+            tasks.value.lock().unwrap().replace(Stored {
+                origin: Some(A.into()),
+                token: format!("later-{n}"),
+                base: None,
+            });
+            let fresh = Arc::new(
+                Session::with_timing(Box::new(time.clone()), SIGN_IN_WINDOW, Duration::ZERO)
+                    .with_tasks_store(Box::new(tasks.clone()))
+                    .with_revoke_store(Box::new(parked.clone())),
+            );
+            fresh.bind(&url(A)).unwrap();
+            fresh.park_tasks_revoke().unwrap();
+        }
+        reread.repark_tasks_revoke(taken).unwrap();
+        let tokens: Vec<String> = decode_parked(&parked.get().unwrap())
+            .into_iter()
+            .map(|item| item.token)
+            .collect();
+        assert_eq!(tokens.len(), MAX_PARKED);
+        assert_eq!(tokens.last().map(String::as_str), Some("later-3"));
+        // Malformed entries are skipped, never an error.
+        assert!(decode_parked("not json").is_empty());
+        assert!(decode_parked(r#"{"v":2,"items":[{"token":"x"}]}"#).is_empty());
+    }
+
+    #[test]
     fn a_parked_logout_goes_to_its_own_origin_and_base_only() {
-        let entry = |origin: Option<&str>, base: Option<&str>| Stored {
-            origin: origin.map(str::to_string),
-            token: "t".into(),
-            base: base.map(str::to_string),
-        };
         assert_eq!(
-            revoke_url(&entry(Some("https://beacon.nowo.tech"), None), false, true)
+            revoke_url(Some("https://beacon.nowo.tech"), None, false, true)
                 .unwrap()
                 .as_str(),
             "https://beacon.nowo.tech/api/task-board/v1/logout"
         );
         assert_eq!(
-            revoke_url(&entry(Some(A), Some("/beacon")), false, false)
+            revoke_url(Some(A), Some("/beacon"), false, false)
                 .unwrap()
                 .as_str(),
             format!("{A}/beacon/api/task-board/v1/logout")
@@ -2262,16 +2565,17 @@ pub mod tests {
             (Some("https://beacon.nowo.tech"), Some("/a?b")),
         ] {
             assert_eq!(
-                revoke_url(&entry(origin, base), false, true),
+                revoke_url(origin, base, false, true),
                 None,
                 "{origin:?} {base:?}"
             );
         }
-        assert_eq!(revoke_outcome(None), "none");
-        assert_eq!(revoke_outcome(Some(204)), "revoked");
-        assert_eq!(revoke_outcome(Some(404)), "gone");
-        for status in [0, 401, 409, 500] {
-            assert_eq!(revoke_outcome(Some(status)), "failed");
+        assert_eq!(revoke_outcome(204, 1), "revoked");
+        assert_eq!(revoke_outcome(404, 1), "gone");
+        assert_eq!(revoke_outcome(0, 1), "parked");
+        assert_eq!(revoke_outcome(0, MAX_ATTEMPTS), "failed");
+        for status in [401, 409, 429, 500] {
+            assert_eq!(revoke_outcome(status, 1), "failed");
         }
     }
 
