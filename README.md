@@ -1,10 +1,20 @@
 # Beacon Desktop
 
-Formerly **TimeTrack desktop** (renamed in 0.9.0). Tray app (Tauri 2) to start, stop and switch your
-[symfony-beacon](https://github.com/nowo-tech/symfony-beacon) time tracking; Beacon chat follows
-([design](docs/design/BEACON_DESKTOP.md)). Talks to the TimeTrackBundle **1.9.0** client API only. Windows, macOS and Linux. English and Spanish.
+Formerly **TimeTrack desktop** (renamed in 0.9.0). Tray app (Tauri 2) for
+[symfony-beacon](https://github.com/nowo-tech/symfony-beacon): start, stop and switch your time tracking, and read and
+write Beacon chat ([design](docs/design/BEACON_DESKTOP.md)). Current version: **0.12.0**. Windows, macOS and Linux.
+English and Spanish.
 
-<img src="docs/images/desktop-device-code-light.webp" alt="Device sign-in code" width="300"> <img src="docs/images/desktop-timer-light.webp" alt="Running timer and task list" width="300">
+| Feature | Needs on the Beacon server |
+|---|---|
+| Time tracking | TimeTrackBundle 1.9 client API (1.10 for the offline replay with real times and *Reassign*) |
+| Organizations, required fields (0.11.0) | TimeTrackBundle 2.1 (activity types, subjects) and 2.2 (context policy); older servers ask nothing |
+| Chat, read (0.10.0) | TimeTrackBundle 2.2 and ChatKitBundle 2.4 (2.4.1 to revoke the chat approval from the app) |
+| Chat, send, threads, reactions (0.12.0) | ChatKitBundle 2.5 and a chat approval for sending |
+
+<img src="docs/images/desktop-device-code-light.webp" alt="Device sign-in code" width="250"> <img src="docs/images/desktop-timer-light.webp" alt="Running timer and task list" width="250">
+
+<img src="docs/images/desktop-chat-thread-light.webp" alt="Chat conversation with a thread open, light theme" width="600">
 
 It records only the time you choose to track — see [PRIVACY.md](PRIVACY.md).
 
@@ -22,12 +32,13 @@ entry `tech.nowo.time-track-desktop`, the local settings keys, the updater key a
 ## Install
 
 Download the installer from Beacon → **Tasks → Time → Apps** (`/dashboard/tasks/time/apps`); the page shows the
-version and SHA-256 of each file. Version 0.1 is **not code-signed** yet, so the operating system warns once:
+version and SHA-256 of each file. The installers are **not code-signed** (the in-app updates are signed: see
+*Updates*), so the operating system warns once:
 
 | OS | File | First start |
 |---|---|---|
 | Windows 10/11 | `*-setup.exe` (per user, no administrator rights; 0.1.0 also had an `.msi`) | SmartScreen "Windows protected your PC" → **More info** → **Run anyway**. |
-| macOS 12+ (Intel and Apple silicon) | `.dmg` | Drag TimeTrack to Applications. First start: right-click (Control-click) the app → **Open** → **Open**. If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/TimeTrack.app` once. On macOS 15+: System Settings → Privacy & Security → **Open Anyway**. |
+| macOS 12+ (Intel and Apple silicon) | `.dmg` | Drag the app (its file is still `TimeTrack.app`) to Applications. First start: right-click (Control-click) the app → **Open** → **Open**. If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/TimeTrack.app` once. On macOS 15+: System Settings → Privacy & Security → **Open Anyway**. |
 | Linux (x86_64) | `.deb` or `.AppImage` | `sudo apt install ./TimeTrack_*.deb`, or `chmod +x TimeTrack_*.AppImage` and run it. The token is kept in the Secret Service (GNOME Keyring / KWallet). |
 
 Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile <file> SHA256`, `shasum -a 256 <file>`,
@@ -35,9 +46,17 @@ Check the SHA-256 shown on the Apps page before installing (`certutil -hashfile 
 
 ### Upgrading on Windows
 
-From 0.4.0 on, the app updates itself (signed, in place, no questions: *Update now* closes the app, installs and
-starts it again). Running a newer `*-setup.exe` by hand also upgrades in place: it closes the app, tray included
-(it asks first), keeps your sign-in and settings, and leaves a single entry in Settings → Apps (*Beacon Desktop* from
+From 0.4.0 on, the app updates itself, signed and in place. It checks at start and every 6 hours; to check now:
+
+1. Right-click the tray icon (notification area, bottom right) → **Check for updates…**, or open Settings → **Updates**
+   → **Check for updates**. Up to date, the app says *Beacon Desktop <version> is up to date*.
+2. When a version is available, the card *Version X is available* shows **What's new**, **Update now** and **Later**.
+3. **Update now** downloads (with progress), verifies the signature, closes the app, installs and starts it again.
+   With a timer running it asks first: *Update now* (the timer keeps running in Beacon) or *After I stop*.
+
+The Microsoft Store build has no *Check for updates*: the Store updates it (Settings → Updates says so).
+
+Running a newer `*-setup.exe` by hand also upgrades in place: it closes the app, tray included (it asks first), keeps your sign-in and settings, and leaves a single entry in Settings → Apps (*Beacon Desktop* from
 0.9.0, *TimeTrack* before). If the
 installer offers *Uninstall before installing*, either choice works; the second one is quicker.
 
@@ -49,11 +68,11 @@ Coming from **0.1.0**:
 - **Installed with the `.msi`** (for all users, in `C:\Program Files\TimeTrack`): the 0.5.0+ installer finds it and
   offers to remove it (Windows asks for administrator approval). If you decline, or that fails, or you installed
   0.4.0: open **Settings → Apps → Installed apps**, find the **TimeTrack** whose publisher is **nowo** (version
-  0.1.0) and choose **Uninstall** (needs an administrator account), then start the remaining TimeTrack. Keep the
+  0.1.0) and choose **Uninstall** (needs an administrator account), then start the remaining copy (Beacon Desktop). Keep the
   one from publisher **nowo.tech**. Your sign-in is shared, so nothing else to do; if *Start at login* was on, switch
   it off and on again in Settings.
 
-### Two TimeTrack icons in the tray
+### Two icons in the tray
 
 Up to 0.5.0 a second launch (Start menu or desktop shortcut while the app was hidden in the tray, or a second
 start-at-login entry left by an older install) started a second copy with its own tray icon. From 0.5.1:
@@ -72,7 +91,7 @@ start-at-login entry left by an older install) started a second copy with its ow
   copy is kept, and removes the app's per-machine value when it runs with administrator rights.
 - **Start at login written by the app itself** (Windows): Settings switches one quoted HKCU value, never an
   unquoted or per-machine (`HKLM`) one as the autostart plugin did when the app ran elevated. Switching it on is
-  refused from a TimeTrack run as administrator or from a copy that is not the installed one (Settings says why).
+  refused from a copy run as administrator or from a copy that is not the installed one (Settings says why).
 - **One tray icon per process**: built once in Rust; the webview has no tray permission.
 
 To check by hand (Windows, PowerShell), list what starts at login and what runs:
@@ -85,9 +104,9 @@ Get-Process | Where-Object { $_.Path -match '(?i)\\(TimeTrack|time-track-desktop
 
 Quit every copy (tray → *Quit*, or `Stop-Process -Name TimeTrack, time-track-desktop`), remove extra entries with
 `Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name <name>` (an `HKLM` one from an
-administrator PowerShell), or Task Manager → *Startup apps* → disable the duplicate; also delete any TimeTrack
-shortcut in `shell:startup` / `shell:common startup` (Win+R). Uninstall a leftover 0.1.0 copy
-(publisher **nowo**) and start TimeTrack again. A tray icon that stays after its process is gone (killed, crashed) is
+administrator PowerShell), or Task Manager → *Startup apps* → disable the duplicate; also delete any TimeTrack or
+Beacon Desktop shortcut in `shell:startup` / `shell:common startup` (Win+R). Uninstall a leftover 0.1.0 copy
+(publisher **nowo**) and start Beacon Desktop again. A tray icon that stays after its process is gone (killed, crashed) is
 a ghost Windows removes when the mouse passes over it.
 
 ### Sign in
@@ -119,6 +138,14 @@ Beacon chat sits next to the timer: **Chat** and **Time** on the left rail (`Ctr
    read). A message that could not be sent shows *Retry* (it is never posted twice) or why the server refused it.
    Notifications come later: use "Open in Beacon" meanwhile.
 
+<img src="docs/images/desktop-chat-list-light.webp" alt="Chat: the organization's conversations in the sidebar, light theme" width="400"> <img src="docs/images/desktop-chat-list-dark.webp" alt="Chat: conversation list, dark theme" width="400">
+
+<img src="docs/images/desktop-chat-composer-light.webp" alt="A conversation with text in the message box and its formatting toolbar, light theme" width="400"> <img src="docs/images/desktop-chat-composer-dark.webp" alt="Message box, dark theme" width="400">
+
+<img src="docs/images/desktop-chat-thread-light.webp" alt="Thread panel with its own message box, light theme" width="400"> <img src="docs/images/desktop-chat-thread-dark.webp" alt="Thread panel, dark theme" width="400">
+
+<img src="docs/images/desktop-chat-reactions-light.webp" alt="Reaction picker opened with E on a message with reaction chips, light theme" width="400"> <img src="docs/images/desktop-chat-reactions-dark.webp" alt="Reaction picker, dark theme" width="400">
+
 Messages, drafts and unsent messages stay in memory only. "Disconnect chat" (Settings) revokes the chat approval (Beacon with ChatKit 2.4.1; older
 servers: revoke the device in Beacon, Account → Security) and removes it from this computer, keeping time tracking
 signed in. Needs Beacon with
@@ -138,12 +165,21 @@ TimeTrackBundle 2.2 and ChatKitBundle 2.4. Shortcuts: `?` in Chat.
 - **Mini timer**: a small window that stays on top (title-bar button or `Ctrl/Cmd+Shift+M`): the running task, its
   organization and time, Stop / Resume and "Open Beacon Desktop". `Esc` closes it.
 
+<img src="docs/images/desktop-org-switcher-light.webp" alt="Organization switcher as a title-bar dropdown (Personal, Lumen Works, Harbor Studio), light theme" width="400"> <img src="docs/images/desktop-org-switcher-dark.webp" alt="Organization switcher, dark theme" width="400">
+
+<img src="docs/images/desktop-org-switch-timer-light.webp" alt="Switching organization with a running timer: Stop the timer and switch, or Cancel, light theme" width="400"> <img src="docs/images/desktop-org-switch-timer-dark.webp" alt="Switch with a running timer, dark theme" width="400">
+
+<img src="docs/images/desktop-required-fields-light.webp" alt="Required fields on stop: activity type and optional client or subject, light theme" width="400"> <img src="docs/images/desktop-required-fields-dark.webp" alt="Required fields, dark theme" width="400">
+
+<img src="docs/images/desktop-mini-timer-light.webp" alt="Mini timer window: running task, organization, time and Stop, light theme" width="312"> <img src="docs/images/desktop-mini-timer-dark.webp" alt="Mini timer window, dark theme" width="312">
+
 ## Features
 
 - Tray timer (`H:MM` and task, tooltip with today's total, running / stopped icon) in the Windows notification area
-  (bottom right, like Docker Desktop), the macOS menu bar and the Linux StatusNotifier / AppIndicator, with a translated
+  (bottom right), the macOS menu bar and the Linux StatusNotifier / AppIndicator, with a translated
   menu: the running task and its time (refreshed every 30 s), Stop / Resume, Switch to (pinned and recent tasks),
-  Search task…, Open Beacon Desktop, Full view / Compact view, Open Beacon, My time, *Pause friendly messages for 1 h*, Settings, Quit. A left click
+  Today's meetings (when there are any), Search task…, Open Beacon Desktop, Full view / Compact view, Open Beacon, My
+  time, *Pause friendly messages for 1 h*, Check for updates… (not in the Microsoft Store build), Settings…, Quit. A left click
   shows or hides the window (Windows, macOS; Linux AppIndicators only open the menu). Closing or minimising the
   window keeps the app running in the tray: the timer, the "Still there?" check and the friendly messages carry on,
   woken on time by a wall-clock heartbeat in Rust (`src-tauri/src/heartbeat.rs`), not by the webview's timers, which
@@ -249,7 +285,7 @@ to anyone watching a shared screen. Where it cannot open (a plain browser), it i
 
 | | Where | Picture | Click |
 |---|---|---|---|
-| Windows 10 / 11 | Bottom right, then the Action Center, under the app's AppUserModelID (`tech.nowo.timetrack` for the NSIS install, `<package family>!TimeTrack` for the Microsoft Store / MSIX package) | The pose as the square app logo of the toast | Brings TimeTrack forward (while the toast is on screen) |
+| Windows 10 / 11 | Bottom right, then the Action Center, under the app's AppUserModelID (`tech.nowo.timetrack` for the NSIS install, `<package family>!TimeTrack` for the Microsoft Store / MSIX package) | The pose as the square app logo of the toast | Brings Beacon Desktop forward (while the toast is on screen) |
 | macOS | Notification Center (top right) | The pose as the content image, the app icon as the sender | Brings Beacon Desktop forward |
 | Linux | The desktop's notification service (GNOME, KDE, …) | The pose through the `image-path` hint | Brings Beacon Desktop forward (servers that support the `default` action) |
 
@@ -331,9 +367,9 @@ state (app id, start, end, the answer) in local storage, and nothing is sent (on
 shows what the last check found. `pnpm screenshots:meetings` (`MEETING_SCREENS=<dir>`) renders the questions and the
 settings in Spanish, light and dark.
 
-### Meeting reminders (TimeTrack 1.14)
+### Meeting reminders (TimeTrackBundle 1.14)
 
-With a Beacon on TimeTrack 1.14 or later and a calendar connected there, the app reminds you before each meeting,
+With a Beacon on TimeTrackBundle 1.14 or later and a calendar connected there, the app reminds you before each meeting,
 on this computer only (contract §23). Settings → Meetings → **Meeting reminders**: *Remind me before my meetings* (on by default
 once a calendar is connected), *Remind me* 5 minutes before (not before, 1, 2, 5, 10, 15, 30 or a custom 1–120),
 *Remind me outside working hours* and *on days off* (both off), *When a meeting starts and a timer is running, ask
@@ -456,12 +492,12 @@ Requirements: Node 24, pnpm (`corepack enable`), Rust stable and the
 
 ```bash
 pnpm install
-pnpm mock                 # mock TimeTrack 1.9.0 API + Beacon updater route on http://127.0.0.1:8787
+pnpm mock                 # mock Beacon (device sign-in, time API, chat API, updater route) on http://127.0.0.1:8787
 pnpm dev                  # UI in a browser (fake platform) on http://127.0.0.1:1420 — handy for UI work
 pnpm tauri dev            # the real app
 pnpm lint && pnpm typecheck && pnpm test:coverage   # unit tests, ≥ 90% coverage
 pnpm exec playwright install chromium && pnpm test:e2e
-pnpm screenshots          # regenerates docs/images/*.webp (real UI, fake platform, mock Beacon, placeholder data; captured as PNG, converted with sharp)
+pnpm screenshots          # regenerates docs/images/*.webp (real UI, fake platform, mock Beacon, placeholder data; captured as PNG, converted with sharp; tests/screenshots/{direct,moments,store,manual}.spec.ts)
 (cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test)
 ```
 
