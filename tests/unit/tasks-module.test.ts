@@ -95,7 +95,8 @@ function pick(trigger: string, value: string): void {
   expect(menu.hidden).toBe(true);
 }
 
-async function connected(locale: 'en' | 'es' = 'en') {
+/** Signed in to time tracking, in the organization, on the Tasks tab (not connected to tasks yet). */
+async function signedIn(locale: 'en' | 'es' = 'en') {
   document.body.replaceChildren();
   const root = document.createElement('div');
   document.body.append(root);
@@ -116,6 +117,11 @@ async function connected(locale: 'en' | 'es' = 'en') {
   $<HTMLButtonElement>(`.ctx-tile[data-context="${ORG}"]`).click();
   await until(() => shell.context === ORG, 'the organization');
   $<HTMLButtonElement>('#tab-tasks').click();
+  return { root, platform, shell, app, $ };
+}
+
+async function connected(locale: 'en' | 'es' = 'en') {
+  const { root, platform, shell, app, $ } = await signedIn(locale);
   $<HTMLButtonElement>('#tasks-connect').click();
   await until(() => $('#tasks-user-code') !== null, 'the tasks code');
   await env.control('device/approve', { userCode: $('#tasks-user-code').textContent });
@@ -153,6 +159,32 @@ describe('tasks module', () => {
     ui.key({ key: '2', ctrlKey: true });
     expect(ui.shell.module).toBe('tasks');
     expect(JSON.parse(localStorage.getItem(SHELL_KEY) ?? '{}').module).toBe('tasks');
+  });
+
+  it('a server without the tasks family (Beacon before 1.183) says Tasks are not available there yet', async () => {
+    const ui = await signedIn();
+    // TimeTrackBundle answers 400 invalid_scope to an unregistered scope family on device/code.
+    const refused = hold((url, init) => url.endsWith('device/code') && String(init.body ?? '').includes('"tasks"'), () => made(400, { error: 'invalid_scope', message: 'family must be a registered scope family.' }));
+    refused.release();
+    const openedBefore = ui.platform.hooks.opened.length;
+    ui.$<HTMLButtonElement>('#tasks-connect').click();
+    await until(() => document.querySelector('.cc-error') !== null, 'the refusal');
+    expect(document.querySelector('.cc-error')?.textContent).toBe('Tasks are not available on this Beacon server yet: they need a newer version of Beacon.');
+    expect(document.querySelector('#tasks-user-code')).toBeNull();
+    expect(ui.platform.hooks.opened).toHaveLength(openedBefore);
+    // Connect stays available (the same card, ready for a newer server).
+    expect(ui.$<HTMLButtonElement>('#tasks-connect').disabled).toBe(false);
+  });
+
+  it('a connected token whose server has no tasks API (404 on me) says so instead of a generic error', async () => {
+    const ui = await signedIn('es');
+    const missing = hold((url) => isTasks(url) && route(url) === 'me', () => made(404, { error: 'not_found' }));
+    missing.release();
+    ui.$<HTMLButtonElement>('#tasks-connect').click();
+    await until(() => ui.$('#tasks-user-code') !== null, 'the tasks code');
+    await env.control('device/approve', { userCode: ui.$('#tasks-user-code').textContent });
+    await until(() => document.querySelector('#tasks-retry') !== null, 'the error line');
+    expect(document.querySelector('#tasks-retry')?.parentElement?.textContent).toContain('Las tareas aún no están disponibles en este servidor de Beacon');
   });
 
   it('board: columns with markers, keyboard moves, a conflict and a policy refusal go back with a notice', async () => {

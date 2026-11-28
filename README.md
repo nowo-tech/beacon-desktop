@@ -95,7 +95,9 @@ a ghost Windows removes when the mouse passes over it.
 1. Click **Sign in with Beacon**. Beacon Desktop always uses **https://beacon.nowo.tech** (owner decision 2026-11-27):
    there is no address to type and no *Sign in to <host>?* question, since the host is fixed and its TLS keys are
    pinned. An install signed in to another server is signed out at the next start with a message saying so.
-2. The app shows a code like `BCDF-GHJK` and opens Beacon's *Connect a device* page in your browser.
+2. The app shows a code like `BCDF-GHJK` and opens Beacon's *Connect a device* page in your browser. The page's
+   address is shown too, with **Copy link** (0.12.1): if the browser that opened is not the one where you are signed
+   in to Beacon, paste it there.
 3. Check the code, approve. The app is now listed in Beacon under Account → Security → Time tracking apps, where you
    can revoke it. The session token is stored in the OS keychain only, and only Rust reads it: the app's web view
    never sees it. A system notification confirms every sign-in. If the app ever signs you out because the saved
@@ -103,10 +105,12 @@ a ghost Windows removes when the mouse passes over it.
 
 ## Chat (0.10.0; sending from 0.12.0)
 
-Beacon chat sits next to the timer: **Chat** and **Time** on the left rail (`Ctrl/Cmd+1`, `Ctrl/Cmd+2`).
+Beacon chat sits next to the timer: **Chat**, **Tasks** and **Time** on the left rail (`Ctrl/Cmd+1..3`).
 
 1. Open Chat and press **Connect chat**. Beacon asks you to approve a second, separate device request (it only works
-   for the person signed in to time tracking). Approve it in the browser page that opens.
+   for the person signed in to time tracking). Approve it in the browser page that opens, or use **Copy link** and
+   open it in the browser where you are signed in to Beacon. If it cannot start, the card says why (time session
+   expired, with *Connect time tracking again*; too many attempts, with the wait).
 2. Pick the organization on the rail (or in the title-bar dropdown, Settings → Organization switcher). The app sends
    it with every request; your web context in Beacon does not change.
 3. Read conversations, threads and reactions. From 0.12.0 (Beacon with ChatKitBundle 2.5) write in the message box
@@ -114,7 +118,7 @@ Beacon chat sits next to the timer: **Chat** and **Time** on the left rail (`Ctr
    approval made with 0.10 / 0.11 reads only: the box offers **Allow sending**, a new approval for reading and
    sending (the read approval is given up first: declining the new one leaves chat disconnected, connect again to
    read). A message that could not be sent shows *Retry* (it is never posted twice) or why the server refused it.
-   Notifications come later: use "Open in Beacon" meanwhile.
+   Notifications (0.13.0) are off until you turn them on: see *Notifications and links* below.
 
 Messages, drafts and unsent messages stay in memory only. "Disconnect chat" (Settings) revokes the chat approval (Beacon with ChatKit 2.4.1; older
 servers: revoke the device in Beacon, Account → Security) and removes it from this computer, keeping time tracking
@@ -138,8 +142,9 @@ They only say "New message in Beacon", never who wrote or what; a click opens th
 or until tomorrow from Settings or the tray, where *Open chat* is too. `beacon-desktop://chat/<id>` and
 `beacon-desktop://tasks/<id>` links open the app on that conversation or task.
 
-Tasks stay in memory only; a change made elsewhere shows within a minute. Needs Beacon with TaskBoardBundle 3.4 and
-the tasks approval turned on. If Beacon turns the module off for you, the tab disappears and comes back when it is on
+Tasks stay in memory only; a change made elsewhere shows within a minute. Needs **Beacon 1.183 or later**
+(TaskBoardBundle 3.4 and the tasks approval turned on); with an older Beacon, **Connect tasks** says that tasks are not
+available on this Beacon server yet. If Beacon turns the module off for you, the tab disappears and comes back when it is on
 again (the approval is kept).
 
 ## Organizations, required fields and the mini timer (0.11.0)

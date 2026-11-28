@@ -400,6 +400,11 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .cc-code { display: flex; align-items: center; gap: 12px; padding: 12px var(--sp-3); border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line); }
 .cc-code-label { color: var(--ink-3); font-size: var(--fs-xs); }
 .cc-code-value { font: 600 1.375rem/1 var(--font-mono); letter-spacing: 0.08em; color: var(--ink); }
+.cc-hint { margin: 0; color: var(--ink-2); font-size: var(--fs-sm); }
+.cc-link { margin: 0; font-size: var(--fs-xs); color: var(--ink-3); overflow-wrap: anywhere; }
+.cc-url { display: block; margin-top: 2px; user-select: text; -webkit-user-select: text; cursor: text; font-family: var(--font-mono); color: var(--ink-2); }
+.cc-copied { margin: 0; min-height: 1.25em; color: var(--moss); font-size: var(--fs-sm); font-weight: 600; }
+.cc-copied:empty { min-height: 0; }
 .cc-error { margin: 0; padding: 8px 12px; border-radius: var(--r-sm); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-sm); }
 :where(#mod-chat, #mod-tasks, .sh-dialog) .btn { height: 32px; padding: 0 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease); }
 :where(#mod-chat, #mod-tasks, .sh-dialog) .btn:hover { background: var(--hover); border-color: var(--ink-3); }
