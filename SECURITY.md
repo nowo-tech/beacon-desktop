@@ -126,8 +126,12 @@ Only the latest release receives fixes. The server can force an update with `min
   under, attached only to `<server base path>/api/task-board/v1/…` (anchored; look-alikes get no token). Writes:
   `PATCH` only on `…/tasks/{id}` and `…/tasks/{id}/checklist-items/{id}`, `PUT` / `DELETE` only on
   `…/tasks/{id}/members/{user}`, `POST` as any route; `If-Match` is an allowed request header and `ETag` a returned
-  one. Sign-out deletes the tasks entry first; "Disconnect tasks" deletes it alone. Neither revokes it on the server
-  (see *Known limitations*). Answers to requests sent before an organization switch or a reconnect are dropped, and
+  one. Sign-out deletes the tasks entry first; "Disconnect tasks" deletes it alone. Both first call TaskBoard's
+  `POST /api/task-board/v1/logout` (3.7.0) best effort, 3 s. When that call fails with a network error, `5xx` or `409`,
+  the UI asks Rust to park the token (`tasks_revoke_park`, a fourth entry, user `tasks-revoke`) before the delete. A
+  parked token is never attached to any request of the UI; at the next start `tasks_revoke_retry` deletes the entry
+  first and then sends that one `POST …/logout` itself, to the token's own origin and base path (release builds: the
+  official server only). One retry at most. Answers to requests sent before an organization switch or a reconnect are dropped, and
   their `401` / `403` act on nothing (audit BDA13-M1).
 - **Links** (`beacon-desktop://`, src-tauri/src/deeplink.rs). Untrusted input that only navigates: parsed in Rust
   into `{kind: chat|task, id, context}` (UUID / TaskBoard id, `personal` or `org:<uuid>`; anything else, extra
@@ -168,13 +172,11 @@ Only the latest release receives fixes. The server can force an update with `min
 
 ## Known limitations
 
-- **Tasks token not revoked on the server (BDA13-L2, Low).** Sign-out and "Disconnect tasks" delete the tasks token
-  from the keychain, but TaskBoard (3.4) has no logout route, and TimeTrack's `POST /api/time-track/logout` revokes only
-  the time token it is called with. A copy of the tasks token taken before sign-out (local malware reading the
-  keychain, a backup) keeps working against `/api/task-board/v1` until it expires. Revoke the device in Beacon
-  (Account → Security) to end it at once. Follow-up: a TaskBoard `POST /api/task-board/v1/logout` (idempotent `204`,
-  revoking the presented token and calling `TaskApiIdempotencyStoreInterface::forget()`), called best effort by the app
-  as chat does.
+- **Tasks token revocation needs TaskBoard 3.7.0 (BDA13-L2, Low).** Since 0.14.1 sign-out and "Disconnect tasks" call
+  `POST /api/task-board/v1/logout` first. On a Beacon with TaskBoard before 3.7.0 the route is missing (`404`): the
+  token is deleted from the keychain only, and a copy taken before (local malware reading the keychain, a backup) keeps
+  working until it expires. A server reporting `me.features.serverLogout: false` answers the route without revoking.
+  Revoke the device in Beacon (Account → Security) to end it at once.
 
 - **macOS single-instance socket in `/tmp` (upstream, Low).** The one-copy guard (`tauri-plugin-single-instance`
   2.5.x) uses the fixed path `/tmp/tech_nowo_timetrack_si.sock` on macOS, and the plugin does not let the app choose

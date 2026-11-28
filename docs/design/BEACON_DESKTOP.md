@@ -458,7 +458,15 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
     above is superseded.
   - **Guided first run**: after the first sign-in a setup card chains the Chat and Tasks approvals (§4.2), each step
     skippable, resumable (Settings → Account, or the next launch if the app quit mid-way); it ends on Chat. A fresh
-    sign-in no longer forces Time: the landing rule applies.
+    sign-in no longer forces Time: the landing rule applies. **0.14.1 (owner approval 2026-11-28):** the Tasks device
+    code is asked for as soon as the Chat approval completes (no click; no Tasks step where the server has no tasks);
+    *Later* still ends it. While Chat or Tasks are left, a **"Finish setup" / "Terminar configuración" chip** in the
+    title bar (after the organization; icon-only in the compact window) opens the setup at the pending step; × hides it
+    for that server and organization (remembered, `beacon-desktop-setup-chip`); it goes once all is connected.
+  - **Compact window chat home (0.14.1, owner approval 2026-11-28):** with no conversation open the 400 px window shows
+    a reduced home, unread first, then recent conversations, then mentions when there are any (fewer rows), instead of
+    the bare list. *All conversations* opens the list; *Back* returns to the list or the home, wherever the
+    conversation was picked. One tab stop for the rows, arrows move, Enter opens.
   - **First window** about 1200 × 780, centred and clamped to the work area; the remembered size wins afterwards.
 - **Timer placement** (owner decision 2026-11-25): a setting, title bar only or title bar + sidebar; the mini timer
   stays a separate, always-available window.
@@ -574,7 +582,11 @@ own tokens: the protocol stays generic and versioned in the bundle, the app stay
 
 - **One status strip per module** (UXA-7, `src/ui/statusStrip.ts`) for transient states: Chat under its header, Tasks
   under its toolbar, Time at the top of its column. One line, 36 px, **its height kept whether it says something or
-  not**, so a message never pushes the list (layout shift ≈ 0). One message at a time, the most severe first:
+  not**, so a message never pushes the list (layout shift ≈ 0). **0.14.1 (owner approval 2026-11-28):** Chat and Tasks
+  reserve the band only from **720 px** of inner window height (`TALL_MIN_HEIGHT`); below, the slot takes no room and
+  a message overlays the bottom of the pane (Chat: the timeline's box, so it sits above the message box, never over
+  it), with room added under the newest message and focus kept clear (`scroll-padding`). The mode never changes while
+  a message shows, so a resize across the threshold does not jump. A long line wraps to two lines inside the 36 px. One message at a time, the most severe first:
   `danger` (a load error, with *Retry*), `warn` (offline, messages waiting to send, a refused write or context), `info`
   (a `429` pause, reconnecting, Time's "You're in"). A `429` is a calm countdown, "Paused for a moment. Back in 0:25.",
   never an error card; it ends at `Retry-After`, or earlier at the next answer, and Time then tries the action again
