@@ -1319,6 +1319,16 @@ pub fn run() {
         builder.plugin(tauri_plugin_updater::Builder::new().build())
     };
     builder
+        // A reload of the main window drops a link announced to the page before it and not taken (deeplink.rs, 0.14.1).
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main"
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
+            {
+                if let Some(pending) = webview.try_state::<deeplink::Pending>() {
+                    pending.page_started();
+                }
+            }
+        })
         // `beacon-desktop://` links (deeplink.rs); after the single instance, which forwards them to this app.
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
@@ -1374,7 +1384,8 @@ pub fn run() {
             // three entries of the same service.
             let session = secret::Session::new(Box::new(secret::Keychain::time()))
                 .with_chat_store(Box::new(secret::Keychain::chat()))
-                .with_tasks_store(Box::new(secret::Keychain::tasks()));
+                .with_tasks_store(Box::new(secret::Keychain::tasks()))
+                .with_revoke_store(Box::new(secret::Keychain::tasks_revoke()));
             let session = match app.path().app_data_dir() {
                 Ok(dir) => session.with_declines_file(dir.join("sign-in-pause.json")),
                 Err(_) => session,
@@ -1458,6 +1469,9 @@ pub fn run() {
             secret::tasks_status,
             secret::tasks_connect_begin,
             secret::tasks_disconnect,
+            secret::tasks_revoke_park,
+            secret::tasks_revoke_retry,
+            secret::tasks_revoke_clear,
             deeplink::deep_link_take,
             realtime::chat_realtime_start,
             realtime::chat_realtime_stop,

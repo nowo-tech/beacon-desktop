@@ -39,7 +39,12 @@ mismatch is logged locally with the server name only, never a token.
 ## Stored on this computer
 
 - The session token, in the OS keychain; with chat connected, the chat token too (a second entry); with tasks
-  connected, the tasks token (a third entry).
+  connected, the tasks token (a third entry). When the server could not be reached to revoke a tasks token at
+  sign-out or "Disconnect tasks", that token waits in a fourth entry (`tasks-revoke`, at most 4 tokens) only to be
+  revoked at the next start (a few starts at most when there is no network); it is never used for anything else, and
+  *Clear local data* deletes it.
+- Whether your Beacon server offers tasks (`beacon-desktop-tasks-offer`: yes / no per server address, no account data)
+  and the "Finish setup" chips you hid (`beacon-desktop-setup-chip`: server address and organization id).
 - Chat notifications: only the setting (on / off, asked, paused until). A notification never carries a sender, a
   conversation name or message text; the operating system shows "New message in Beacon" only.
 - Tasks are **never written to disk** either: boards, tasks and what you type in a task stay in memory and are
@@ -66,7 +71,7 @@ mismatch is logged locally with the server name only, never a token.
   token (signed out elsewhere, or a re-sign-in for meeting reminders that was denied, expired or left open), when the
   saved server no longer matches the stored session, and whenever someone signs in as another account (or on another
   server) than the saved one.
-- **Clear local data** (Settings → General → What we collect) signs you out and deletes all of the above, and turns "start at
+- **Clear local data** (Settings → General → What we collect) revokes the chat and tasks tokens on the server (best effort), signs you out and deletes all of the above (including the chat and tasks view settings and any `tasks-revoke` entry), and turns "start at
   login" off.
 - "Open Beacon in" (Settings): which browser opens your links, by the id the system gives it, or the path of a browser
   you picked by hand in the file dialog. Read from the system (installed browsers) when Settings opens; kept by the

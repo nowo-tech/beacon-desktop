@@ -228,9 +228,14 @@ for the next dedup survey (owner rule).
 - **Gap in 0.13.0 (audit BDA13-L2).** The app deletes the tasks token locally on sign-out and "Disconnect tasks", but
   cannot revoke it on the server: TaskBoard 3.4 has no `logout` route and TimeTrack's logout revokes only the time
   token presented. The server-side token stays valid until its TTL or a manual revoke in Beacon (Account → Security);
-  SECURITY.md and the CHANGELOG say so. **Follow-up (TaskBoard + Beacon):** `POST /api/task-board/v1/logout`
-  (idempotent `204`, revokes the presented token, calls `TaskApiIdempotencyStoreInterface::forget()`), then the app's
-  `TasksModule.revokeOnServer()` (best effort, 3 s, as chat) from sign-out and "Disconnect tasks".
+  SECURITY.md and the CHANGELOG say so. **Done in 0.14.1 (TaskBoard 3.7.0):** `POST /api/task-board/v1/logout` (no
+  body, Bearer; `204` also for a revoked, expired or unknown token; `401` only without a Bearer; `500` / `409
+  unavailable` + `Retry-After`: still valid). The app's `TasksModule.revokeOnServer()` runs it best effort (3 s, as
+  chat) from sign-out and "Disconnect tasks", then always deletes the token. `404` (before 3.7.0): nothing to revoke. A
+  network error, `5xx`, `409`, `429` or no answer: Rust parks the token (`tasks-revoke`, usable for nothing else, up to
+  4 tokens) and retries at the next start once the webview is online (`tasks_revoke_retry`); any answer ends it, no
+  answer at all parks it again for at most 3 starts (BDA141-L1, I3). *Clear local data* revokes first and keeps nothing
+  parked (BDA141-L2).
 - On revocation (or account erasure) Beacon also calls TaskBoard's `TaskApiIdempotencyStoreInterface::forget()` with the
   token's scope, so no stored answer (which can hold task text) outlives the token.
 
@@ -500,6 +505,15 @@ The clickable prototype (built in parallel) fixes the visuals; this section fixe
 
 - **Navigation.** The shell gets three top-level modules — **Time**, **Chat**, **Tasks** — (`Ctrl/Cmd+1..3`), each
   shown only when its token exists ("Connect tasks" card otherwise). One context for the whole app (main design §4.4).
+- **Tasks only where Beacon offers them (0.14.1).** Beacon has no feature payload the app can read before a tasks
+  token exists, so the signal is the `tasks` scope family itself: a stored tasks token means offered; otherwise one
+  chained `device/code` request for the family per app start (3 s cap) answers, `400 invalid_scope` / `404` meaning
+  "not offered" (Beacon before 1.183). The answer is remembered per server origin (`beacon-desktop-tasks-offer`; the
+  family is registered per Beacon install and the request names no organization). Not offered: no Tasks tab or rail
+  entry, `Ctrl/Cmd+1..2` for Chat and Time, no switcher entries or tray item, no first-run step, and Settings says
+  "Not available on this Beacon server yet". The next start that finds the family shows the module and stops asking.
+  *Connect tasks* answered with `invalid_scope` keeps its "not available yet" text on screen, and the tab goes when the
+  person leaves the module.
 - **Landing module (owner decision 2026-11-25).** First launch: **Chat**. Later launches: the **last-used module**
   (stored per device in settings). A timer running at launch wins: the app opens on **Time**. A module whose token is
   missing falls back to its "Connect" card in place, never to another module silently.

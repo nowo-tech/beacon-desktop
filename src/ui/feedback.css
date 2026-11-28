@@ -13,6 +13,11 @@
 .status-strip .ss-ico { display: grid; flex: none; }
 .status-strip .ss-ico svg { width: 16px; height: 16px; }
 .status-strip .ss-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/*
+ * 0.14.1 (BDA14-L5): a long line wraps to a second line inside the same 36 px (two lines at 1.2 fit), clamped with an
+ * ellipsis only past that, so "You're in, … · {org}" reads whole at 400 px and the slot's height never changes.
+ */
+.status-strip .ss-text { white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; line-height: 1.2; }
 .status-strip .ss-action { flex: none; min-height: 0; height: 26px; padding: 0 var(--sp-2); border: 1px solid currentColor; border-radius: var(--r-sm); background: transparent; color: inherit; font: inherit; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; }
 .status-strip .ss-action:hover:not([disabled]) { background: color-mix(in srgb, currentColor 10%, transparent); }
 .status-strip .ss-action[disabled] { opacity: 0.6; cursor: default; }
@@ -20,6 +25,18 @@
 .status-strip .ss-close svg { width: 16px; height: 16px; }
 .status-strip .ss-close:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
 .status-strip :focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/*
+ * 0.14.1 (owner approval 2026-11-28): Chat and Tasks reserve the band only in tall windows (720 px of inner height and
+ * up, `TALL_MIN_HEIGHT`). Below, the slot takes no room; a message overlays the bottom of its pane, lifted above the
+ * chat's composer (the strip lives inside the timeline's box, which ends where the composer starts), with a shadow.
+ * The mode is set by statusStrip.ts and never changes while a message shows (no jump on resize).
+ */
+.status-strip[data-mode='overlay'] { position: absolute; inset-inline: 0; inset-block-end: 0; z-index: 6; block-size: 36px; pointer-events: none; contain: layout; }
+.status-strip[data-mode='overlay']:not([data-tone]) { visibility: hidden; }
+.status-strip[data-mode='overlay'] .ss-box { pointer-events: auto; border-bottom: 0; border-top: 1px solid var(--line); box-shadow: 0 -6px 16px -10px color-mix(in srgb, var(--ink) 45%, transparent); }
+.status-strip[data-mode='overlay'] .ss-box.warn { border-top-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+.status-strip[data-mode='overlay'] .ss-box.danger { border-top-color: color-mix(in srgb, var(--danger) 35%, transparent); }
 
 /* Time: the strip sits in the content column, as a quiet rounded line above the timer card. */
 #mod-time #time-strip-strip { margin-bottom: var(--sp-2); }

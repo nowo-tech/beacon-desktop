@@ -12,14 +12,14 @@ import type { DesktopApp } from '../ui/app';
 import { type Child, h, patch } from '../ui/dom';
 import { type ChromeMode, type DeepLink, hostOs, type Platform } from '../platform';
 import { windowControls } from './windowControls';
-import { ChatNotifier, chatClickTarget, PAUSE_HOUR_MS, parseChatClick, tomorrowMorning } from '../chat/notifications';
+import { ChatNotifier, chatClickTarget, NOTIFY_KEY, PAUSE_HOUR_MS, parseChatClick, tomorrowMorning } from '../chat/notifications';
 import type { Locale } from '../lib/i18n';
 import type { ThemePreference } from '../lib/theme';
 import { chatText, type ChatText } from '../chat/i18n';
 import { chatIcon, type ChatIconName } from '../chat/icons';
-import { ChatModule, showMenu } from '../chat/module';
+import { CHAT_VIEW_KEY, ChatModule, showMenu } from '../chat/module';
 import { tasksText, type TasksText } from '../tasks/i18n';
-import { type Markers, TasksModule } from '../tasks/module';
+import { type Markers, OFFER_KEY as TASKS_OFFER_KEY, TasksModule, TASKS_VIEW_KEY } from '../tasks/module';
 import { rankConversations } from '../chat/format';
 import type { Context, Conversation } from '../chat/types';
 import { isMuted, sectionOf } from '../chat/store';
@@ -56,6 +56,8 @@ export interface ShellPrefs {
 }
 
 export const SHELL_KEY = 'beacon-desktop-shell';
+/** "Finish setup" chips dismissed (0.14.1): `<server origin>|<context>` keys. No account data. */
+export const SETUP_CHIP_KEY = 'beacon-desktop-setup-chip';
 const DEFAULTS: ShellPrefs = { module: null, density: 'comfortable', switcher: 'tiles', timer: 'title', context: null, markers: 'emoji', setup: null, skipped: [] };
 
 export function loadShellPrefs(storage: Storage | undefined): ShellPrefs {
@@ -117,7 +119,17 @@ export class Shell {
   /** Tasks (BD-3b); `null` on hosts without it. */
   readonly tasks: TasksModule | null;
   /** `403 module_forbidden`: the Tasks tab is hidden, the token kept. */
-  tasksHidden = false;
+  tasksForbidden = false;
+
+  /**
+   * The Tasks module is hidden: `403 module_forbidden`, or a server known not to offer tasks (0.14.1, Beacon before
+   * 1.183). A module on screen when the server's "no" arrives (its "Connect tasks" answer) stays until the person leaves
+   * it, so that answer can still be read there.
+   */
+  get tasksHidden(): boolean {
+    if (this.tasksForbidden) return true;
+    return this.tasks?.unavailable === true && !(this.module === 'tasks' && !this.setupShown && !this.tasksPanel.hidden);
+  }
   /** Chat notifications (BD-3b): opt-in, level None, pause. */
   readonly notifier: ChatNotifier;
   /** A notification click to open once the chat (or the tasks) are ready (links wait in the host, BDA13-L1). */
@@ -280,11 +292,18 @@ export class Shell {
             contextLabel: () => this.currentContext()?.context.label ?? this.t('moduleTasks'),
             onConnection: () => {
               this.renderRail();
+              this.renderTitlebar();
               this.followSetup();
             },
             onConnectRender: () => this.followSetup(),
+            onAvailability: () => {
+              this.renderRail();
+              this.renderTitlebar();
+              this.followSetup();
+              if (this.settings.open) this.renderSettings();
+            },
             onForbidden: (hidden) => {
-              this.tasksHidden = hidden;
+              this.tasksForbidden = hidden;
               if (hidden && this.module === 'tasks') this.show('chat', false);
               this.renderRail();
             },
@@ -311,6 +330,7 @@ export class Shell {
       chat: this.chat,
       tasks: this.tasks,
       tasksHidden: () => this.tasksHidden,
+      tasksUnavailable: () => this.tasks?.unavailable === true && this.tasks.connected === false,
       skipped: () => this.prefs.skipped,
       signedIn: () => ({ name: this.app?.state.session?.displayName ?? this.app?.state.session?.identifier ?? '', org: this.currentContext()?.context.label ?? null }),
       skip: (step) => {
@@ -344,6 +364,8 @@ export class Shell {
     });
     // A ping (BDA13-L1): the link is taken from the host, once.
     platform.onDeepLink(() => void this.takeLink());
+    // 0.14.1 (BDA13-L2): a tasks logout the previous run could not reach the server with is tried once more.
+    void this.tasks?.retryParkedLogout();
     this.mount.replaceChildren(this.root);
     this.root.addEventListener('chat-switcher', () => this.openSwitcher());
     document.addEventListener('keydown', (event) => this.onKey(event));
@@ -493,7 +515,7 @@ export class Shell {
   attach(app: DesktopApp): void {
     this.app = app;
     // UX batch 6 (UXA-1, UXA-2): the Time module drops its own header and Settings; the shell's are the only ones.
-    app.embed({ openSettings: (tab) => this.openSettings(tab as AnyTab | undefined), localKeys: [SHELL_KEY] });
+    app.embed({ openSettings: (tab) => this.openSettings(tab as AnyTab | undefined), localKeys: [SHELL_KEY, SETUP_CHIP_KEY, TASKS_OFFER_KEY, CHAT_VIEW_KEY, NOTIFY_KEY, TASKS_VIEW_KEY] });
     // Before the first time API request: the organization used last (Personal on a first launch).
     app.setContext(this.prefs.context);
   }
@@ -576,7 +598,7 @@ export class Shell {
       this.settingsDialog.close();
       this.chat.signedOut();
       this.tasks?.signedOut();
-      this.tasksHidden = false;
+      this.tasksForbidden = false;
       this.ready = false;
       // Nothing from before the sign-out opens after the next sign-in (BDA13-L1; the host forgets its link too).
       this.pendingTarget = null;
@@ -758,6 +780,19 @@ export class Shell {
     await this.tasks.openTask(link.id);
   }
 
+  /**
+   * Before a sign-out (AppDeps.beforeSignOut): the chat and tasks tokens are revoked on the server, both at once, best
+   * effort (ZBZ-L4, BDA13-L2); the sign-out goes on whatever they answer.
+   */
+  async revokeOnServer(): Promise<void> {
+    await Promise.all([this.chat.revokeOnServer().catch(() => undefined), this.tasks?.revokeOnServer()]);
+  }
+
+  /** *Clear local data* (BDA141-L2), after `revokeOnServer`: parked tasks logouts are tried now and not kept. */
+  async clearParked(): Promise<void> {
+    await this.tasks?.clearParkedLogout();
+  }
+
   /** Signed in (at start-up or after the sign-in): landing module, then chat. */
   private async enter(): Promise<void> {
     const app = this.app;
@@ -767,13 +802,18 @@ export class Shell {
     // (or a setup the app quit in the middle of) opens the guided setup instead (UX batch 6, UXA-4), which ends on Chat.
     const timer = app.state.activeTimer !== null;
     const setup = (this.freshSignIn && this.prefs.setup === null) || (this.prefs.setup === 'pending' && !timer);
-    this.show(setup ? 'chat' : landingModule(this.prefs, timer), false);
+    // 0.14.1: a server known not to offer tasks has no Tasks tab from the first frame (remembered per server); whether
+    // it offers them now is asked once per start, in the background, and the rail and the setup card follow the answer.
+    this.show(setup ? 'chat' : landingModule(this.prefs, timer, this.tasksHidden), false);
+    void this.tasks?.discover();
     await this.chat.init(this.prefs.context);
     await this.tasks?.init();
     this.renderChrome();
     if (setup && this.app?.state.session !== null) this.startSetup();
     // A `beacon-desktop://` link the app was started with.
     this.ready = true;
+    // The modules know their connections now: the "Finish setup" chip may show (never before, so it never flickers).
+    this.renderTitlebar();
     const pending = this.pendingTarget;
     this.pendingTarget = null;
     const link = await this.platform.takeDeepLink().catch(() => null);
@@ -873,6 +913,8 @@ export class Shell {
     // The bar is rebuilt on every render: the focused tool keeps the focus.
     const active = document.activeElement;
     const focused = active instanceof HTMLElement && this.titleMain.contains(active) && active.id !== '' ? active.id : null;
+    const chip = this.setupChip('setup-chip');
+    this.railSetup.replaceChildren(...(chip !== null ? [this.setupChip('setup-chip-rail') as HTMLElement] : []));
     if (current !== null) {
       const badge = contextBadge(current.context, current.index);
       if (this.prefs.switcher === 'dropdown' && this.contexts.length > 1) {
@@ -897,6 +939,7 @@ export class Shell {
         left.append(h('div', { class: 'tb-ctx', attrs: { 'aria-label': t('contextCurrent', { name: current.context.label }) } }, h('span', { class: 'ctx-dot', attrs: { style: `background:${badge.color}`, 'aria-hidden': 'true' } }), h('b', {}, current.context.label)));
       }
     }
+    if (chip !== null) left.append(chip);
     const search = h('button', { class: 'tb-search', id: 'tb-search', attrs: { type: 'button', 'aria-haspopup': 'dialog', 'aria-keyshortcuts': 'Control+K Meta+K' } }, chatIcon('search', 'sm'), h('span', {}, t('searchJump')), h('kbd', {}, `${modKey()} K`));
     search.addEventListener('click', () => this.openSwitcher());
     const right = h('div', { class: 'tb-right' }, this.updatePill(), this.timerPill());
@@ -913,6 +956,66 @@ export class Shell {
     this.titleMain.replaceChildren(left, h('div', { class: 'tb-mid' }, search), right);
     if (focused !== null) this.titleMain.querySelector<HTMLElement>(`[id="${focused}"]`)?.focus();
     document.title = current !== null ? `${current.context.label} · ${t('appName')}` : t('appName');
+  }
+
+  /**
+   * What the guided first run left to do (0.14.1): Chat not connected, or Tasks not connected where the server offers
+   * them and they are not turned off. Time is the sign-in itself, so it is always connected here.
+   */
+  setupPending(): 'chat' | 'tasks' | null {
+    if (!this.chat.connected) return 'chat';
+    if (this.tasks !== null && !this.tasks.connected && !this.tasksHidden && !this.tasks.unavailable) return 'tasks';
+    return null;
+  }
+
+  /** The key a dismissed chip is remembered under: the server and the organization. */
+  private setupChipKey(): string | null {
+    const server = this.app?.state.session?.server ?? null;
+    if (server === null) return null;
+    try {
+      return `${new URL(server).origin}|${this.context ?? 'personal'}`;
+    } catch {
+      return null;
+    }
+  }
+
+  private setupChipsDismissed(): string[] {
+    try {
+      const raw = JSON.parse(this.deps.storage?.getItem(SETUP_CHIP_KEY) ?? '[]') as unknown;
+      return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === 'string').slice(-50) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * "Finish setup" in the title bar (0.14.1, owner approval 2026-11-28): while something is left to connect, the setup
+   * card is not on screen and the modules have started. It opens the setup at the pending step; × hides it for this
+   * server and organization (remembered); it goes by itself once everything is connected.
+   */
+  private setupChip(id: string): HTMLElement | null {
+    const st = this.st;
+    const pending = this.ready && !this.setupShown && this.app?.state.session !== null ? this.setupPending() : null;
+    const key = this.setupChipKey();
+    if (pending === null || key === null || this.setupChipsDismissed().includes(key)) return null;
+    const hint = st(pending === 'chat' ? 'setupChipChat' : 'setupChipTasks');
+    const open = h('button', { class: 'tb-setup-go', id, attrs: { type: 'button', title: hint, 'aria-describedby': `${id}-hint` } }, h('span', { class: 'tb-setup-dot', attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'tb-setup-label' }, st('setupChip')));
+    open.addEventListener('click', () => {
+      this.prefs.skipped = [];
+      this.startSetup();
+    });
+    const dismiss = h('button', { class: 'tb-setup-x', id: `${id}-dismiss`, attrs: { type: 'button', 'aria-label': st('setupChipDismiss'), title: st('setupChipDismiss') } }, chatIcon('x', 'xs'));
+    dismiss.addEventListener('click', () => {
+      try {
+        this.deps.storage?.setItem(SETUP_CHIP_KEY, JSON.stringify([...this.setupChipsDismissed(), key]));
+      } catch {
+        // Storage unavailable: hidden for this run only.
+      }
+      this.renderTitlebar();
+      this.announce(st('setupChipHidden'));
+      (id === 'setup-chip' ? this.titleMain.querySelector<HTMLElement>('#tb-search') : this.rail.querySelector<HTMLElement>('#rail-settings'))?.focus();
+    });
+    return h('div', { class: 'tb-setup', attrs: { role: 'group', 'aria-label': st('setupChip') } }, open, h('span', { class: 'sr-only', id: `${id}-hint` }, hint), dismiss);
   }
 
   private iconButton(className: string, name: ChatIconName, label: string, onClick: () => void, id?: string): HTMLButtonElement {
@@ -1028,6 +1131,8 @@ export class Shell {
       tabs.append(tab);
     });
     nodes.push(tabs, h('div', { class: 'rail-spacer' }));
+    // The compact window has no room in its title bar: "Finish setup" sits in the bottom rail there (CSS picks one).
+    nodes.push(this.railSetup);
     nodes.push(this.iconButton('rail-tab rail-settings', 'gear', t('settings'), () => this.openSettings(), 'rail-settings'));
     const focused = document.activeElement instanceof HTMLElement && this.rail.contains(document.activeElement) ? document.activeElement.id || document.activeElement.dataset.context : null;
     this.rail.replaceChildren(...nodes);
@@ -1538,7 +1643,10 @@ export class Shell {
     if (tasks.connected) {
       const manage = h('button', { class: 'btn sm', id: 'settings-tasks-manage', attrs: { type: 'button' } }, this.st('manage'));
       manage.addEventListener('click', () => this.openSettings('account'));
-      group.append(this.settingRow(tt('tasksConnection'), this.tasksHidden ? this.st('connTasksHidden') : this.st('connOn'), manage));
+      group.append(this.settingRow(tt('tasksConnection'), this.tasksForbidden ? this.st('connTasksHidden') : this.st('connOn'), manage));
+    } else if (tasks.unavailable) {
+      // 0.14.1: this server has no tasks yet (Beacon before 1.183): said once, nothing to press.
+      group.append(this.settingRow(tt('tasksConnection'), this.st('connTasksUnavailable'), null));
     } else {
       group.append(this.settingRow(tt('tasksConnection'), tt('tasksNotConnected'), this.connectButton('tasks', 'settings-tasks-connect', tt('connectButton'))));
     }
@@ -1575,7 +1683,11 @@ export class Shell {
       h('h3', {}, st('connections')),
       row('account-time', st('connTime'), st('connTimeHint'), session !== null, null),
       row('account-chat', st('connChat'), st('connChatHint'), this.chat.connected, chatAction),
-      tasks === null ? null : row('account-tasks', st('connTasks'), this.tasksHidden ? st('connTasksHidden') : st('connTasksHint'), tasks.connected, tasks.connected ? this.disconnectButton('tasks') : this.connectButton('tasks', 'account-tasks-connect')),
+      tasks === null
+        ? null
+        : !tasks.connected && tasks.unavailable
+          ? row('account-tasks', st('connTasks'), st('connTasksUnavailable'), false, null)
+          : row('account-tasks', st('connTasks'), this.tasksForbidden ? st('connTasksHidden') : st('connTasksHint'), tasks.connected, tasks.connected ? this.disconnectButton('tasks') : this.connectButton('tasks', 'account-tasks-connect')),
     );
     const privacy = h('button', { class: 'btn sm', id: 'open-privacy', attrs: { type: 'button' } }, st('whatWeCollect'));
     privacy.addEventListener('click', () => {
@@ -1679,6 +1791,7 @@ export class Shell {
     this.root.dataset.setup = 'true';
     this.chat.setShown(false);
     this.tasks?.setShown(false);
+    this.setupActive = this.setup.active();
     this.setup.render();
     this.renderRail();
     this.renderTitlebar();
@@ -1712,9 +1825,21 @@ export class Shell {
       return;
     }
     const before = document.activeElement;
+    const active = this.setup.active();
+    // 0.14.1 (owner approval 2026-11-28): the Chat approval just came through, so the Tasks code is asked for at once,
+    // no extra click (only where the server offers tasks: else the step is not there). Skip and "Later" still work.
+    const chained = this.setupActive === 'chat' && active === 'tasks' && this.chat.connected && this.tasks !== null && this.tasks.connect.kind === 'idle' && this.tasks.connect.message === null;
+    this.setupActive = active;
     this.setup.render();
     if (before === null || before === document.body || !this.setup.root.contains(document.activeElement)) this.setup.focus();
+    if (chained) void this.tasks?.connectTasks();
   }
+
+  /** The rail's place for "Finish setup" (the compact window, 0.14.1). */
+  private readonly railSetup: HTMLElement = h('div', { class: 'rail-setup' });
+
+  /** The setup step that was active when the card was last drawn (the Chat → Tasks chain, 0.14.1). */
+  private setupActive: string | null = null;
 
   /** The shortcut sheet (`?`, UX batch 3): what works anywhere, then the keys of the module in view, and only those. */
   openKeys(): void {

@@ -185,6 +185,8 @@ export interface AppDeps {
   onRender?: () => void;
   /** Before "Sign out" revokes the time token: the shell revokes the chat token (best effort, ZBZ-L4). */
   beforeSignOut?: () => Promise<void>;
+  /** *Clear local data*, after `beforeSignOut`: whatever the host still keeps for a later server logout goes now. */
+  clearParked?: () => Promise<void>;
   /** Label of the current organization (the fields dialog names it), `null` for Personal. */
   contextLabel?: () => string | null;
   /** Label of any known organization (a stop queued offline in another one), `null` for Personal or unknown. */
@@ -3411,6 +3413,12 @@ export class DesktopApp {
    */
   async clearLocalData(): Promise<void> {
     if (this.state.session !== null) {
+      // BDA141-L2: the chat and tasks tokens are revoked on the server first, as at sign-out.
+      try {
+        await this.deps.beforeSignOut?.();
+      } catch {
+        // Best effort: they are deleted locally with the time token anyway.
+      }
       try {
         await this.api().logout();
       } catch {
@@ -3422,6 +3430,8 @@ export class DesktopApp {
     } catch {
       // Not available on this system.
     }
+    // A parked tasks logout is tried now, then nothing parked is kept (BDA141-L2).
+    await this.deps.clearParked?.().catch(() => undefined);
     await this.platform.secretDelete();
     // "Open Beacon in" is kept by the host: back to the system default.
     try {

@@ -283,8 +283,9 @@ describe('guided first run (UXA-4)', () => {
     await env.control('device/approve', { userCode: ui.$('#setup-code').textContent });
     await until(() => ui.$('#setup-step-tasks')?.getAttribute('aria-current') === 'step', 'the tasks step');
     expect(ui.$('#setup-step-chat').classList.contains('done')).toBe(true);
-    ui.$<HTMLButtonElement>('#setup-connect').click();
+    // 0.14.1 (owner approval 2026-11-28): the Tasks code is asked for as soon as Chat is approved, no click.
     await until(() => ui.$('#setup-code') !== null, 'the tasks code in the card');
+    expect(ui.platform.hooks.tasksConnectBegins).toBe(1);
     await env.control('device/approve', { userCode: ui.$('#setup-code').textContent });
     await until(() => !ui.shell.setupShown, 'the end of the setup');
     expect(ui.shell.chat.connected).toBe(true);

@@ -5,6 +5,67 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-11-28
+
+0.14.1 polish (audit BDA14 follow-ups and owner approvals of 2026-11-28).
+
+### Changed
+
+- **Tasks hidden up front where Beacon does not offer them.** A server without the `tasks` scope family (Beacon before
+  1.183) answers `400 invalid_scope` to the tasks device code. The app now learns that once per start (a stored tasks
+  token says yes; else one chained `device/code` probe, 3 s at most; the unused code simply expires), remembers it per
+  server, and hides the Tasks tab and rail entry, `Ctrl/⌘+2` (Time is `Ctrl/⌘+2` there), the switcher entries, the tray's
+  *Quick add task* and the first-run Tasks step. Settings → Account says "Not available on this Beacon server yet." Once
+  Beacon offers tasks, the next start shows the module. The "not available yet" text stays as the fallback answer of
+  *Connect tasks*.
+- **Status strip reserved only in tall windows** (owner approval). Chat and Tasks keep the 36 px band from 720 px of
+  inner window height up (`TALL_MIN_HEIGHT`). Below that, the band is gone and a message overlays the bottom of the
+  pane with a shadow, above the chat's message box (never over it or the focused control). Nothing reflows when a
+  message comes or goes, and a resize across the threshold waits until the message has gone. Time keeps its strip in
+  its content column.
+- **Narrow chat** (BDA14-I1): in short windows the message list scrolls fully above a strip message (room under the
+  newest message; a reader at the bottom stays there; the new-messages pill lifts above it).
+- **"You're in" at 400 px** (BDA14-L5): a long strip line wraps to a second line inside the same 36 px instead of an
+  ellipsis (clamped with one only past two lines).
+- **Compact window chat home** (owner approval): with no conversation open, the 400 px window shows a reduced home
+  (unread first, then recent, then mentions when there are any) instead of the bare list; *All conversations* opens the
+  list, and *Back* returns to where the conversation was picked.
+- **First run**: when the Chat approval comes through, the Tasks device code is asked for at once (no extra click;
+  skipped where the server has no tasks). *Skip* and *Later* still work.
+- **"Finish setup" chip** in the title bar while Chat or Tasks are not connected (and the setup card is not shown). It
+  opens the setup at the pending step; × hides it for that server and organization (remembered); it goes once
+  everything is connected.
+
+### Fixed
+
+- **BDA13-L2**: sign-out and *Disconnect tasks* now revoke the tasks token on the server first
+  (`POST /api/task-board/v1/logout`, TaskBoard 3.7.0), best effort with a 3 s timeout, then always delete it locally.
+  A server before 3.7.0 (`404`) has nothing to revoke. A network error, `5xx`, `409 unavailable`, `429` or no answer
+  in time parks the token in Rust (`tasks-revoke`, never attached to any request of the UI) for a retry at the next
+  start, which Rust sends itself. Any answer ends the retry. Only "no answer at all" parks it again, for at most 3 starts,
+  and a start that the webview sees as offline (an autostart before the network) waits for `online` before trying
+  (BDA141-L1). One retry run at a time. A second failed logout keeps the first parked token (up to 4 wait; BDA141-I3).
+- **Clear local data** now revokes the chat and tasks tokens on the server first, as sign-out does, tries any parked
+  tasks logout at once and deletes the `tasks-revoke` entry (BDA141-L2). It also removes the chat view
+  (`beacon-desktop-chat-view`), chat notification (`beacon-desktop-chat-notify`) and tasks view
+  (`beacon-desktop-tasks-view`) settings, as PRIVACY.md says (BDA141-L3, also in ≤ 0.14.0).
+- **Deep links across reloads**: a `beacon-desktop://` link announced to a page that never took it (signed out, mid
+  sign-in) is dropped when the main window loads a page again, so a reload never opens a link from before it. A link
+  that started the app waits for the first page and is that page's: a later reload drops it too (BDA141-I1).
+- **Settings → Tasks** no longer says "Turned off in Beacon for this organization" for connected tasks while the server
+  was cached as not offering them (BDA141-I4).
+
+### Already in 0.14.0 (checked)
+
+- `Ctrl/⌘+Z` (*Undo the last action* / *Deshacer la última acción*) is in the `?` shortcut sheet; the unused strings
+  `offlineTitle` and `offlineStartNote` were removed with UX batch 4.
+
+### Known limitations
+
+- **BDA13-L2**: server revocation of the tasks token needs Beacon with TaskBoard 3.7.0. On an older server the token is
+  only deleted locally; revoke the device in Beacon (Account → Security) to end it at once. A server that reports
+  `me.features.serverLogout: false` answers the route but keeps the token valid until it expires.
+
 ## [0.14.0] - 2026-11-28
 
 The UX release (UX audit of 2026-11-27, batches 1–7 with the owner's approvals, the spacing pass and the pre-release
@@ -144,7 +205,8 @@ server requirements as 0.13.0 (Tasks need Beacon 1.183 or later). Release builds
   Windows. The Windows 11 Snap Layouts flyout on maximise is not available with Tauri 2.12 (snapping by dragging and
   `Win+Z` work).
 - BDA13-L2 still applies: the tasks token is deleted locally on sign-out and *Disconnect tasks* but not revoked on the
-  server (revoke the device in Beacon, Account → Security).
+  server (revoke the device in Beacon, Account → Security). Fixed in 0.14.1: server revocation needs Beacon with
+  TaskBoard 3.7.0.
 
 ## [0.13.0] - 2026-11-28
 

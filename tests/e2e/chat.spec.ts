@@ -45,7 +45,9 @@ test('connect chat, read a conversation and its thread, keyboard-first, no a11y 
   // The chat request is a separate, chained device code of the `chat` family.
   const state = (await control('state')) as { requests: { path: string; body: string }[] };
   const codes = state.requests.filter((item) => item.path.endsWith('/device/code')).map((item) => JSON.parse(item.body).family ?? 'time');
-  expect(codes).toEqual(['time', 'chat']);
+  // 0.14.1: plus one `tasks` probe per start (does this Beacon offer tasks?), never a code shown or approved.
+  expect(codes.filter((family) => family !== 'tasks')).toEqual(['time', 'chat']);
+  expect(codes.filter((family) => family === 'tasks')).toHaveLength(1);
   // Organization tiles; every request names the context.
   await page.locator(`.ctx-tile[data-context="${ORG}"]`).click();
   await expect(page.locator('.sec-h')).toHaveText(['Channels', 'Projects', 'Direct messages', 'Support']);
@@ -96,7 +98,14 @@ test('connect chat, read a conversation and its thread, keyboard-first, no a11y 
 test('compact window: one pane at a time, the rail at the bottom', async ({ page }) => {
   await page.setViewportSize({ width: 400, height: 640 });
   await signIn(page);
-  await connectChat(page);
+  await page.locator('#tab-chat').click();
+  await page.locator('#chat-connect').click();
+  await control('device/approve', { userCode: await page.locator('#chat-user-code').textContent() });
+  // 0.14.1: the compact window opens on its reduced home; "All conversations" is the list.
+  await expect(page.locator('#chat-home')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.side')).toBeHidden();
+  await page.locator('#chat-home-all').click();
+  await expect(page.locator('.side .conv').first()).toBeVisible();
   await page.locator(`.side .conv`).first().click();
   await expect(page.locator('.chat-main')).toBeVisible();
   await expect(page.locator('.side')).toBeHidden();

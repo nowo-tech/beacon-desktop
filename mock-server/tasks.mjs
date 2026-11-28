@@ -7,7 +7,8 @@
  *
  * Control (through the main server's /__mock/*): `tasks/state` (writes), `tasks/touch` (someone else changes a task),
  * config `tasksForbidden` (`403 module_forbidden`, TaskBoard 3.5), `tasksFailNext`, `tasksRefuseMove` (a transition
- * policy refusal).
+ * policy refusal), `tasksLogout` (`missing` = a server before TaskBoard 3.7.0 (404), `unavailable` = 409 with
+ * `Retry-After`, `error` = 500; else 204).
  */
 import { randomUUID } from 'node:crypto';
 
@@ -93,7 +94,7 @@ function seed() {
     task('b-harbor', 'hb-todo', 'Standup at 9:30', { assignees: ['me'], dueAt: day(0) }),
     task('b-personal', 'pe-todo', 'Dentist on Friday', { assignees: ['me'], dueAt: day(2) }),
   ];
-  return { boards, tasks, changes: [], seq: 0, keys: new Map(), writes: [], number };
+  return { boards, tasks, changes: [], seq: 0, keys: new Map(), writes: [], logouts: [], number };
 }
 
 export function createTasksMock({ send, error }) {
@@ -204,7 +205,7 @@ export function createTasksMock({ send, error }) {
     reset() {
       data = seed();
     },
-    state: () => ({ writes: data.writes, changes: data.changes.length }),
+    state: () => ({ writes: data.writes, changes: data.changes.length, logouts: data.logouts }),
     /** The time API's task list includes these (a timer starts on a task of the board). */
     timeTasks: () => data.tasks.map((task) => ({ id: task.id, title: task.title, boardId: task.boardId, boardTitle: board(task.boardId)?.title ?? '' })),
     /** Someone else changes a task (polling picks it up). */
@@ -215,6 +216,20 @@ export function createTasksMock({ send, error }) {
       return card(task);
     },
     handle(req, res, url, body, state) {
+      // TaskBoard 3.7.0 (as ChatKit 2.4.1): revokes the presented tasks token; idempotent, 204 for a revoked, expired or
+      // unknown token too, 401 only without a Bearer (audit BDA13-L2).
+      if (req.method === 'POST' && url.pathname === `${TASKS_PREFIX}/logout`) {
+        const presented = (req.headers.authorization ?? '').replace(/^Bearer\s+/, '').trim();
+        const mode = state.config.tasksLogout ?? 'ok';
+        data.logouts.push({ mode, known: state.tokens.get(presented)?.family === 'tasks' });
+        if (mode === 'missing') return error(res, 404, 'not_found', 'Not found.');
+        if (mode === 'unavailable') return send(res, 409, { ok: false, error: 'unavailable' }, { 'Retry-After': '30' });
+        if (mode === 'error') return send(res, 500, { ok: false, error: 'server_error' });
+        if (presented === '') return error(res, 401, 'invalid_token', 'Missing token.', { 'WWW-Authenticate': 'Bearer' });
+        if (state.tokens.get(presented)?.family === 'tasks') state.tokens.delete(presented);
+        res.writeHead(204).end();
+        return;
+      }
       const session = tokenOf(req, state);
       if (session === null) return error(res, 401, 'invalid_token', 'Missing or revoked token.', { 'WWW-Authenticate': 'Bearer error="invalid_token"' });
       if (session.family !== 'tasks') return error(res, 401, 'invalid_token', 'A tasks token is required.', { 'WWW-Authenticate': 'Bearer error="invalid_token"' });
@@ -237,7 +252,7 @@ export function createTasksMock({ send, error }) {
         return task !== undefined && inContext(board(task.boardId)) && !task.archived ? task : null;
       };
       if (req.method === 'GET' && route === 'me') {
-        return send(res, 200, { apiVersion: 1, user: PEOPLE.me, scopes: session.scopes, context: CONTEXTS.find((item) => item.key === context), contexts: CONTEXTS, features: { realtime: false, questions: false, timeTracking: true, taskNumbers: true, templates: false, subtaskDepth: 3, files: false, activity: false }, limits: { pageSize: 100, columnPageSize: 30, changes: 200, myTasksScan: 2000 }, enums: { priorities: ['low', 'normal', 'high', 'urgent'], memberRoles: ['assignee', 'reviewer', 'stakeholder', 'watcher'], columnTypes: ['open', 'custom', 'done', 'closed'] } }, headers);
+        return send(res, 200, { apiVersion: 1, user: PEOPLE.me, scopes: session.scopes, context: CONTEXTS.find((item) => item.key === context), contexts: CONTEXTS, features: { realtime: false, questions: false, timeTracking: true, taskNumbers: true, templates: false, subtaskDepth: 3, files: false, activity: false, serverLogout: true }, limits: { pageSize: 100, columnPageSize: 30, changes: 200, myTasksScan: 2000 }, enums: { priorities: ['low', 'normal', 'high', 'urgent'], memberRoles: ['assignee', 'reviewer', 'stakeholder', 'watcher'], columnTypes: ['open', 'custom', 'done', 'closed'] } }, headers);
       }
       if (req.method === 'GET' && route === 'my-tasks') {
         const bucket = url.searchParams.get('bucket') ?? 'all';

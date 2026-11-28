@@ -11,11 +11,28 @@
  * - **Retry / dismiss.** An optional action button and a close button; a dismissed message stays hidden until the
  *   message changes.
  * - Transient states have no mascot art (mascots are for empty and celebration moments).
+ * - **Tall windows only reserve the band** (0.14.1, owner approval 2026-11-28; strips made with `overlay: true`): from
+ *   {@link TALL_MIN_HEIGHT} px of inner height up the slot keeps its 36 px; below it the slot takes no room and a message
+ *   overlays the bottom of its pane (above the chat's composer, never over it). Nothing reflows when a message comes or
+ *   goes in either mode, and a resize across the threshold waits while a message shows (no jump under the reader).
  */
 import { type Child, h, patch } from './dom';
 import { icon } from './icons';
 
 export type StripTone = 'info' | 'warn' | 'danger';
+
+/** Inner window height (px) from which an overlay-capable strip keeps its band reserved (0.14.1). */
+export const TALL_MIN_HEIGHT = 720;
+export const TALL_QUERY = `(min-height: ${TALL_MIN_HEIGHT}px)`;
+
+/** `reserved`: the 36 px band is always there; `overlay`: no band, a message overlays the pane's bottom. */
+export type StripMode = 'reserved' | 'overlay';
+
+/** The part of `MediaQueryList` the strip uses (tests pass a fake one). */
+export interface TallQuery {
+  readonly matches: boolean;
+  addEventListener(type: 'change', listener: () => void): void;
+}
 
 export interface StripAction {
   id: string;
@@ -85,6 +102,12 @@ export interface StatusStripOptions {
   /** Focus was in the message when it went: where it goes instead. */
   focusAway?(): void;
   clock?: StripClock;
+  /** Reserve the band only in tall windows, overlay below ({@link TALL_MIN_HEIGHT}). Default false: always reserved. */
+  overlay?: boolean;
+  /** The tall-window query (default `matchMedia(TALL_QUERY)`; none: always reserved). */
+  tall?: TallQuery | null;
+  /** The mode changed (applied, never while a message shows). */
+  onMode?(mode: StripMode): void;
 }
 
 export class StatusStrip {
@@ -98,11 +121,32 @@ export class StatusStrip {
   private ticker: unknown = null;
   private textNode: HTMLElement | null = null;
   private readonly clock: StripClock;
+  private readonly tall: TallQuery | null;
+  /** The mode in use; a change of window height while a message shows waits for it to go. */
+  mode: StripMode = 'reserved';
 
   constructor(private readonly options: StatusStripOptions) {
     this.clock = options.clock ?? realClock;
     this.box = h('div', { class: 'ss-box', id: options.id, attrs: { hidden: true } });
     this.root = h('div', { class: 'status-strip', id: `${options.id}-strip` }, this.box);
+    this.tall = options.overlay === true ? (options.tall !== undefined ? options.tall : (globalThis.matchMedia?.(TALL_QUERY) ?? null)) : null;
+    this.applyMode();
+    this.tall?.addEventListener('change', () => {
+      if (this.current === null) this.applyMode();
+    });
+  }
+
+  /** The mode the window height asks for now. */
+  private wantedMode(): StripMode {
+    return this.tall !== null && !this.tall.matches ? 'overlay' : 'reserved';
+  }
+
+  private applyMode(): void {
+    const mode = this.wantedMode();
+    const changed = this.root.dataset.mode !== undefined && mode !== this.mode;
+    this.mode = mode;
+    this.root.dataset.mode = mode;
+    if (changed) this.options.onMode?.(mode);
   }
 
   /** The message shown now (`null`: none, or dismissed). */
@@ -145,6 +189,8 @@ export class StatusStrip {
       this.root.removeAttribute('data-tone');
       this.announced = null;
       this.textNode = null;
+      // A window resized across the threshold while the message showed: the new mode now, with nothing on screen.
+      if (this.mode !== this.wantedMode()) this.applyMode();
       if (had) this.options.focusAway?.();
       return;
     }

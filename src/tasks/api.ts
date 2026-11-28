@@ -33,6 +33,9 @@ import {
 } from './types';
 
 export const TASKS_PREFIX = '/api/task-board/v1';
+
+/** What a server logout came to ({@link TasksApi.logout}). */
+export type LogoutResult = 'revoked' | 'gone' | 'retry' | 'refused';
 export const CONTEXT_HEADER = 'X-Beacon-Context';
 
 const CODE_PATTERN = /^[a-z][a-z0-9_]*$/;
@@ -123,6 +126,34 @@ export class TasksApi {
 
   get currentContext(): string | null {
     return this.context;
+  }
+
+  /**
+   * Revokes the presented tasks token on the server (TaskBoard 3.7.0 `POST logout`, as ChatKit 2.4.1's; idempotent: an
+   * already revoked, expired or unknown token gets `204` too; audit BDA13-L2). Best effort with a short timeout, never
+   * throws: `revoked` (2xx), `gone` (`404`, a server before 3.7.0: nothing to revoke there), `retry` (a network error,
+   * no answer in time, `5xx`, `409 unavailable` or `429`: the token is still valid, worth one more try later) or `refused`
+   * (anything else, e.g. `401` without a Bearer).
+   */
+  async logout(timeoutMs = 3000): Promise<LogoutResult> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<LogoutResult>((resolve) => {
+      timer = setTimeout(() => resolve('retry'), timeoutMs);
+    });
+    const request = this.request('POST', 'logout').then(
+      (): LogoutResult => 'revoked',
+      (error: unknown): LogoutResult => {
+        const status = error instanceof ApiError ? error.status : 0;
+        if (status === 404) return 'gone';
+        if (status === 0 || status === 409 || status === 429 || status >= 500) return 'retry';
+        return 'refused';
+      },
+    );
+    try {
+      return await Promise.race([request, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async me(): Promise<TasksMe> {

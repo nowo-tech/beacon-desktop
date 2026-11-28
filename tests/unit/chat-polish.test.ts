@@ -56,6 +56,11 @@ function mount(locale: 'en' | 'es' = 'en') {
   return { root, platform, shell, app, $, key };
 }
 
+/** The fake window's size (happy-dom): media queries follow it. Each test starts at the compact 400 × 640. */
+function windowSize(width: number, height: number): void {
+  (window as unknown as { happyDOM: { setWindowSize(size: { width: number; height: number }): void } }).happyDOM.setWindowSize({ width, height });
+}
+
 async function connected(locale: 'en' | 'es' = 'en') {
   const ui = mount(locale);
   await ui.app.init();
@@ -92,6 +97,7 @@ const texts = () => [...document.querySelectorAll('#msg-list li.msg .m-body')].m
 
 describe('chat polish (UX batch 5)', () => {
   beforeEach(async () => {
+    windowSize(400, 640);
     localStorage.clear();
     await env.control('reset', {});
     await env.control('config', { deviceInterval: 1 });
@@ -141,6 +147,8 @@ describe('chat polish (UX batch 5)', () => {
   });
 
   it('home view: unread first, mentions with their words, recent; the sidebar Home entry; Enter opens a mention at it', async () => {
+    // The full home view is the wide window's (the compact one has its reduced home, below).
+    windowSize(1280, 800);
     const ui = await connected();
     ui.$<HTMLButtonElement>('#chat-home-link').click();
     await until(() => ui.shell.chat.openUuid() === null && !ui.$('#chat-home').hidden, 'home');
@@ -172,6 +180,7 @@ describe('chat polish (UX batch 5)', () => {
   });
 
   it('home view: an organization with no unread says so calmly, in Spanish too', async () => {
+    windowSize(1280, 800);
     const ui = await connected('es');
     ui.$<HTMLButtonElement>(`.ctx-tile[data-context="${ORG2}"]`).click();
     await until(() => ui.$(`[data-conv="${STUDIO}"]`) !== null, 'Harbor Studio');
@@ -183,6 +192,41 @@ describe('chat polish (UX batch 5)', () => {
     expect(ui.$('.hm-calm').textContent).toContain('Todo al día');
     expect(ui.$('.hm-calm img.mascot')?.getAttribute('alt')).toBe('');
     expect(ui.$('.hm-none').textContent).toBe('Cuando alguien te mencione, aparecerá aquí.');
+  });
+
+  it('compact window: a reduced home (unread, recent, then mentions), All conversations opens the list, Back returns where it came from (0.14.1)', async () => {
+    const ui = await connected();
+    // Picked from the home (not the list): Back goes home, the reduced one.
+    ui.key({ key: 'Escape' });
+    await until(() => !ui.$('#chat-home').hidden && ui.$('#chat-home .hm-row') !== null, 'the compact home');
+    expect(ui.$('#chat-home').dataset.compact).toBe('true');
+    expect(ui.shell.chat.root.classList.contains('list-open')).toBe(false);
+    expect(document.activeElement?.classList.contains('hm-row')).toBe(true);
+    const sections = () => [...document.querySelectorAll('#chat-home .hm-sec > h2')].map((node) => node.id);
+    await until(() => sections().includes('hm-mentions'), 'the mentions');
+    expect(sections()).toEqual(['hm-unread', 'hm-recent', 'hm-mentions']);
+    expect(document.querySelectorAll('#chat-home [aria-labelledby="hm-recent"] .hm-row').length).toBeLessThanOrEqual(4);
+    expect([...document.querySelectorAll('#chat-home [aria-labelledby="hm-recent"] .hm-name')].map((node) => node.textContent)).toContain('envelope-v2');
+    // One tab stop for the rows; ↓ moves.
+    expect(document.querySelectorAll('#chat-home .hm-row[tabindex="0"]')).toHaveLength(1);
+    // All conversations: the list, its first row focused; a conversation picked there goes back to the list.
+    ui.$<HTMLButtonElement>('#chat-home-all').click();
+    expect(ui.$('#chat-home-all').textContent).toBe('All conversations');
+    expect(ui.shell.chat.root.classList.contains('list-open')).toBe(true);
+    expect(document.activeElement?.matches('.side .conv, #chat-home-link')).toBe(true);
+    ui.$<HTMLButtonElement>(`[data-conv="${ENVELOPE}"]`).click();
+    await until(() => ui.shell.chat.openUuid() === ENVELOPE, 'opened from the list');
+    expect(ui.shell.chat.root.classList.contains('list-open')).toBe(false);
+    ui.key({ key: 'Escape' });
+    await until(() => ui.shell.chat.root.classList.contains('list-open'), 'back to the list');
+    expect(document.activeElement).toBe(ui.$(`[data-conv="${ENVELOPE}"]`));
+    // The list's Home entry: the reduced home again.
+    ui.$<HTMLButtonElement>('#chat-home-link').click();
+    await until(() => !ui.shell.chat.root.classList.contains('list-open') && !ui.$('#chat-home').hidden, 'home from the list');
+    // Wider again: the full home (mentions before recent, no "All conversations").
+    windowSize(1280, 800);
+    await until(() => ui.$('#chat-home').dataset.compact === 'false', 'the full home');
+    expect(document.querySelector('#chat-home-all')).toBeNull();
   });
 
   it('keeps unchanged rows on a re-render and waits while text is selected (UXA-26)', async () => {
@@ -307,6 +351,7 @@ describe('chat polish helpers', () => {
 
 describe('chat status and undo (UX batch 4)', () => {
   beforeEach(async () => {
+    windowSize(400, 640);
     localStorage.clear();
     await env.control('reset', {});
     await env.control('config', { deviceInterval: 1 });

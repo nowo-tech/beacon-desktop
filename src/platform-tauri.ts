@@ -138,6 +138,10 @@ const tasksHost: TasksHost = {
   },
   connectBegin: () => invoke('tasks_connect_begin', { locale: typeof document === 'undefined' ? null : document.documentElement.lang || null }),
   disconnect: () => invoke('tasks_disconnect'),
+  // 0.14.1 (BDA13-L2): Rust parks its own copy of the token; the webview never sees it.
+  parkRevoke: async () => void (await invoke<boolean>('tasks_revoke_park')),
+  retryRevoke: () => invoke<string>('tasks_revoke_retry'),
+  clearRevoke: () => invoke('tasks_revoke_clear'),
 };
 
 export function tauriPlatform(): Platform {
