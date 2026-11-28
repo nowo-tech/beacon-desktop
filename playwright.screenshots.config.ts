@@ -23,7 +23,7 @@ export default defineConfig({
     },
   },
   projects: [
-    { name: 'direct', testMatch: ['direct.spec.ts', 'moments.spec.ts', 'friendly.spec.ts', 'native.spec.ts', 'schedule.spec.ts', 'layout.spec.ts', 'links.spec.ts', 'quickwins.spec.ts', 'meetings.spec.ts'], use: { baseURL: 'http://127.0.0.1:1420' } },
+    { name: 'direct', testMatch: ['direct.spec.ts', 'moments.spec.ts', 'friendly.spec.ts', 'native.spec.ts', 'schedule.spec.ts', 'layout.spec.ts', 'links.spec.ts', 'quickwins.spec.ts', 'meetings.spec.ts', 'manual.spec.ts'], use: { baseURL: 'http://127.0.0.1:1420' } },
     { name: 'store', testMatch: 'store.spec.ts', use: { baseURL: 'http://127.0.0.1:1421' } },
   ],
   webServer: [
