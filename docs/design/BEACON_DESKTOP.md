@@ -6,8 +6,9 @@ repository name, secret or release changes with it.
 **Implementation status:** BD-1 shipped in 0.9.0. BD-2 (chat read-only) shipped in 0.10.0
 (CHANGELOG `[0.10.0]`). BD-3a (time context, mini timer, required fields, §7.1) shipped in 0.11.0
 (CHANGELOG `[0.11.0]`). BD-3b part 1 (chat send, thread replies, reactions, §7.2) shipped in 0.12.0
-(CHANGELOG `[0.12.0]`); notifications, mute and the tasks module follow. Where the build differs from this text: the
-modules follow the approved prototype (Chat `Ctrl/Cmd+1`, Time `Ctrl/Cmd+2`, Tasks off); `GET me` is asked with the last context or
+(CHANGELOG `[0.12.0]`). BD-3b parts 2 and 3 (the Tasks module §7.3; notifications at level None, tray, links §7.4)
+shipped in 0.13.0 (CHANGELOG `[0.13.0]`; Tasks need Beacon 1.183 or later). Where the build differs from this text: the
+modules follow the approved prototype (Chat `Ctrl/Cmd+1`, Tasks `Ctrl/Cmd+2`, Time `Ctrl/Cmd+3`); `GET me` is asked with the last context or
 `personal` (ChatKit needs a context on every request under a context policy) and falls back to `personal` on
 `403 context_forbidden`; the realtime hub must be on the signed-in origin (Beacon's default; another host is refused and
 the app polls); "Disconnect chat" and sign-out call ChatKit 2.4.1 `POST /api/chat/v1/logout` best effort before the
@@ -550,7 +551,7 @@ never patched directly, so `after=` never skips a message). Drafts and unsent me
 | `mock-server/chat.mjs`, `mock-server/server.mjs` | changed | Write routes with key replay / mismatch, `read_only`, writes off, read-only chat family |
 | `tests/unit/chat-writes.test.ts`, `tests/unit/shell-writes.test.ts`, `tests/e2e/chat-writes.spec.ts`, `tests/screenshots/bd3b.spec.ts` | new | API, outbox, composer, module, e2e with axe, owner screenshots |
 
-### 7.3 BD-3b, part 2: the Tasks module (app 0.13.0 candidate)
+### 7.3 BD-3b, part 2: the Tasks module (app 0.13.0)
 
 Built against the released **TaskBoardBundle 3.4.1** client API (`docs/CLIENT-API.md`,
 `docs/openapi/task-board-client-v1.yaml`), behaviour as [BEACON_DESKTOP_TASKS.md §9](BEACON_DESKTOP_TASKS.md#9-the-tasks-module-in-the-app).
@@ -568,7 +569,7 @@ Beacon still has to register the `tasks` family and the TaskBoard `client_api` (
 | `mock-server/tasks.mjs`, `mock-server/server.mjs` | new / changed | TaskBoard client API mock (revisions, conflicts, policy refusal, `module_forbidden`) |
 | `tests/unit/tasks.test.ts`, `tests/unit/tasks-module.test.ts`, `tests/e2e/tasks.spec.ts`, `tests/screenshots/tasks.spec.ts` | new | API, parsers, module, e2e with axe, owner screenshots |
 
-### 7.4 BD-3b, part 3: notifications (level None), tray, links (app 0.13.0 candidate)
+### 7.4 BD-3b, part 3: notifications (level None), tray, links (app 0.13.0)
 
 Owner decision 2026-11-27: notifications ship opt-in at level **None** with pause; Sender / Text wait for a ChatKit
 minor (mute, `notifications/preview`, members and reference search) and the organization's maximum (Q-BD-9). Web Push

@@ -5,10 +5,14 @@ All notable changes to this project are documented here ([Keep a Changelog](http
 
 ## [Unreleased]
 
-BD-3b, second part (design `docs/design/BEACON_DESKTOP_TASKS.md` §9, `BEACON_DESKTOP.md` §7.3): the Tasks module, 0.13.0
-candidate. Needs TaskBoardBundle **3.4** (`client_api`, `/api/task-board/v1`) and Beacon's `tasks` scope family
-(`task-board:read task-board:write`); without them the module shows its "Connect tasks" card and a refused request
-says so.
+## [0.13.0] - 2026-11-28
+
+BD-3b, second and third parts (design `docs/design/BEACON_DESKTOP_TASKS.md` §9, `BEACON_DESKTOP.md` §7.3 and §7.4):
+the Tasks module, chat notifications, the tray's chat items and `beacon-desktop://` links. Tasks need Beacon **1.183**
+or later (TaskBoardBundle **3.4** `client_api`, `/api/task-board/v1`, and Beacon's `tasks` scope family
+`task-board:read task-board:write`); with an older Beacon the Tasks tab shows its "Connect tasks" card and pressing
+**Connect tasks** says that tasks are not available on this Beacon server yet. Time tracking, chat and the new
+notifications, tray items and chat links do not need it (Beacon 1.181 is enough).
 
 ### Added
 
@@ -90,8 +94,15 @@ Pre-release audit BDA13 of the 0.13.0 candidate (nothing here affects 0.12.0 or 
   toast's room below), it becomes a labelled, focusable region so the keyboard can scroll it (axe
   `scrollable-region-focusable`); otherwise there is no extra tab stop.
 
+- **Tasks on an older Beacon**: a server without the `tasks` scope family (`400 invalid_scope` on `device/code`) or
+  without the TaskBoard client API (`404` on `GET me`) now says "Tasks are not available on this Beacon server yet:
+  they need a newer version of Beacon." instead of "tasks may be off for your account" or "Something went wrong
+  loading tasks".
+
 ### Known limitations
 
+- **Tasks needs Beacon 1.183 or later**; until then the Tasks module says it is not available on this server (the
+  "Connect tasks" card stays, nothing is stored and no browser page opens).
 - **BDA13-L2**: sign-out and *Disconnect tasks* delete the tasks token from this computer, but TaskBoard has no route
   to revoke it on the server yet (chat has `POST …/chat/v1/logout`); it stays valid until it expires. To end it at
   once, revoke the device in Beacon (Account → Security). The app will call the route once TaskBoard offers one.

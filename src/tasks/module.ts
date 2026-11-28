@@ -295,11 +295,14 @@ export class TasksModule {
             : error.reason === 'denied'
               ? this.t('connectDenied')
               : error.reason === 'invalid_scope'
-                ? this.t('connectRefused')
+                ? // A server without the `tasks` scope family (Beacon before 1.183) refuses it as an unknown scope.
+                  this.t('connectUnsupported')
                 : null
-          : error instanceof ApiError && (error.status === 400 || error.status === 403 || error.status === 404)
-            ? this.t('connectRefused')
-            : this.t('connectFailed');
+          : error instanceof ApiError && error.status === 404
+            ? this.t('connectUnsupported')
+            : error instanceof ApiError && (error.status === 400 || error.status === 403)
+              ? this.t('connectRefused')
+              : this.t('connectFailed');
       this.connect = { kind: 'idle', message };
       this.render();
     }
@@ -386,8 +389,10 @@ export class TasksModule {
   /** Loads `me` and the current view (and the open task); keeps what is shown until the answers arrive. */
   async reload(): Promise<void> {
     const generation = this.generation;
+    let step: 'me' | 'view' = 'me';
     try {
       this.me = await this.call((api) => api.me());
+      step = 'view';
       if (generation !== this.generation) return;
       this.setForbidden(false);
       this.contextRefused = false;
@@ -398,7 +403,10 @@ export class TasksModule {
       }
       this.error = null;
     } catch (error) {
-      if (!(error instanceof ApiError && (error.status === 401 || error.status === 403 || error.status === 429)) && generation === this.generation) this.error = this.t('errorGeneric');
+      if (generation === this.generation && step === 'me' && error instanceof ApiError && error.status === 404) {
+        // No TaskBoard client API on this server (route not there): say so instead of "something went wrong".
+        this.error = this.t('connectUnsupported');
+      } else if (!(error instanceof ApiError && (error.status === 401 || error.status === 403 || error.status === 429)) && generation === this.generation) this.error = this.t('errorGeneric');
     }
     this.render();
     this.schedulePoll();

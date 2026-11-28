@@ -104,7 +104,7 @@ a ghost Windows removes when the mouse passes over it.
 
 ## Chat (0.10.0; sending from 0.12.0)
 
-Beacon chat sits next to the timer: **Chat** and **Time** on the left rail (`Ctrl/Cmd+1`, `Ctrl/Cmd+2`).
+Beacon chat sits next to the timer: **Chat**, **Tasks** and **Time** on the left rail (`Ctrl/Cmd+1..3`).
 
 1. Open Chat and press **Connect chat**. Beacon asks you to approve a second, separate device request (it only works
    for the person signed in to time tracking). Approve it in the browser page that opens, or use **Copy link** and
@@ -117,7 +117,7 @@ Beacon chat sits next to the timer: **Chat** and **Time** on the left rail (`Ctr
    approval made with 0.10 / 0.11 reads only: the box offers **Allow sending**, a new approval for reading and
    sending (the read approval is given up first: declining the new one leaves chat disconnected, connect again to
    read). A message that could not be sent shows *Retry* (it is never posted twice) or why the server refused it.
-   Notifications come later: use "Open in Beacon" meanwhile.
+   Notifications (0.13.0) are off until you turn them on: see *Notifications and links* below.
 
 Messages, drafts and unsent messages stay in memory only. "Disconnect chat" (Settings) revokes the chat approval (Beacon with ChatKit 2.4.1; older
 servers: revoke the device in Beacon, Account → Security) and removes it from this computer, keeping time tracking
@@ -140,8 +140,9 @@ They only say "New message in Beacon", never who wrote or what; a click opens th
 or until tomorrow from Settings or the tray, where *Open chat* is too. `beacon-desktop://chat/<id>` and
 `beacon-desktop://tasks/<id>` links open the app on that conversation or task.
 
-Tasks stay in memory only; a change made elsewhere shows within a minute. Needs Beacon with TaskBoardBundle 3.4 and
-the tasks approval turned on. If Beacon turns the module off for you, the tab disappears and comes back when it is on
+Tasks stay in memory only; a change made elsewhere shows within a minute. Needs **Beacon 1.183 or later**
+(TaskBoardBundle 3.4 and the tasks approval turned on); with an older Beacon, **Connect tasks** says that tasks are not
+available on this Beacon server yet. If Beacon turns the module off for you, the tab disappears and comes back when it is on
 again (the approval is kept).
 
 ## Organizations, required fields and the mini timer (0.11.0)
