@@ -105,6 +105,12 @@ export class ChatOutbox {
   private era = 0;
   /** Messages sent per conversation (an undone discard never overtakes one sent after it). */
   private readonly sends = new Map<string, number>();
+  /**
+   * Write order of every message (BDA14-L2): a monotonically increasing number set in {@link send}. `items` is kept in
+   * this order, so an *Undo* puts a message back before any newer one, whatever was removed meanwhile.
+   */
+  private readonly sequence = new WeakMap<Pending, number>();
+  private nextSequence = 0;
 
   constructor(
     private readonly sync: ChatSync,
@@ -143,11 +149,11 @@ export class ChatOutbox {
   }
 
   /**
-   * What an *Undo* of {@link discard} needs (UX batch 4, UXA-8): where the message stood, the outbox's era and how many
-   * messages of its conversation had gone out.
+   * What an *Undo* of {@link discard} needs (UX batch 4, UXA-8): the outbox's era and how many messages of its
+   * conversation had gone out. Where it goes back follows its write order (BDA14-L2), not a position.
    */
-  undoPoint(pending: Pending): { index: number; era: number; sends: number } {
-    return { index: this.items.indexOf(pending), era: this.era, sends: this.sends.get(pending.conversation) ?? 0 };
+  undoPoint(pending: Pending): { era: number; sends: number } {
+    return { era: this.era, sends: this.sends.get(pending.conversation) ?? 0 };
   }
 
   /**
@@ -156,7 +162,7 @@ export class ChatOutbox {
    * conversation went out (or is going out) meanwhile: then it comes back as not sent, with *Retry*, so it never overtakes silently.
    * Nothing happens after a context switch, "Disconnect chat" or sign-out ({@link clear}), or when the key is back already.
    */
-  restore(pending: Pending, point: { index: number; era: number; sends: number }): boolean {
+  restore(pending: Pending, point: { era: number; sends: number }): boolean {
     if (point.era !== this.era || this.items.some((item) => item.key === pending.key)) return false;
     if (pending.state !== 'failed') {
       // A newer message of the conversation went out, or is going out now: this one would overtake it.
@@ -168,7 +174,10 @@ export class ChatOutbox {
       if (overtaken) pending.error ??= 'network_error';
       else if (!this.online) pending.error = 'network_error';
     }
-    this.items.splice(Math.max(0, Math.min(point.index, this.items.length)), 0, pending);
+    // Before the first newer message (BDA14-L2): never behind a message of its conversation written after it.
+    const order = this.sequence.get(pending) ?? Number.MAX_SAFE_INTEGER;
+    const at = this.items.findIndex((item) => (this.sequence.get(item) ?? Number.MAX_SAFE_INTEGER) > order);
+    this.items.splice(at === -1 ? this.items.length : at, 0, pending);
     this.events.changed(pending.conversation, pending.root);
     if (pending.state === 'queued') {
       this.pump(pending.conversation, this.online);
@@ -204,6 +213,7 @@ export class ChatOutbox {
       attempts: 0,
       sent: null,
     };
+    this.sequence.set(pending, this.nextSequence++);
     this.items.push(pending);
     if (!this.online) this.noteQueued(pending);
     this.events.changed(conversation, root);

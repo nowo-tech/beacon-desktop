@@ -27,6 +27,7 @@ mod tray_clock;
 
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::image::Image;
@@ -269,6 +270,31 @@ fn unread_variant(base: &Image<'_>) -> Image<'static> {
         }
     }
     Image::new_owned(rgba, width, height)
+}
+
+/// Messages waiting in the chat's offline send queue (BDA14-L3), as the UI last reported them with `set_quit_guard`.
+/// The tray's *Quit* asks first while any wait (closing the window only hides it to the tray, so *Quit* is the real end).
+static UNSENT_MESSAGES: AtomicU32 = AtomicU32::new(0);
+
+/// Whether *Quit* asks before it ends the app (BDA14-L3).
+fn quit_needs_question(unsent: u32) -> bool {
+    unsent > 0
+}
+
+/// The number of messages still waiting to send (BDA14-L3): only a count, never their text.
+#[tauri::command]
+fn set_quit_guard(window: tauri::Window, count: u32) -> Result<(), String> {
+    only_from(&window, "main")?;
+    UNSENT_MESSAGES.store(count, Ordering::Relaxed);
+    Ok(())
+}
+
+/// *Quit* confirmed in the UI (BDA14-L3: the person chose to discard the waiting messages).
+#[tauri::command]
+fn quit_app(app: AppHandle, window: tauri::Window) -> Result<(), String> {
+    only_from(&window, "main")?;
+    app.exit(0);
+    Ok(())
 }
 
 /// Clamps the unread count the UI sends to what a badge shows (`None` hides it).
@@ -1101,7 +1127,16 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             let id = event.id.as_ref();
             match id {
                 "open" => show_main(app),
-                "quit" => app.exit(0),
+                "quit" => {
+                    // BDA14-L3: messages still waiting in the chat's offline queue (memory only) would be lost; the UI
+                    // asks first and quits with `quit_app`. Nothing waiting: quit at once, as before.
+                    if quit_needs_question(UNSENT_MESSAGES.load(Ordering::Relaxed)) {
+                        show_main(app);
+                        let _ = app.emit("quit-request", ());
+                    } else {
+                        app.exit(0);
+                    }
+                }
                 _ if tray_action_allowed(id) => {
                     // A meeting of *Today* opens the window too (its *Join* button and the list are there).
                     if matches!(
@@ -1427,6 +1462,8 @@ pub fn run() {
             realtime::chat_realtime_start,
             realtime::chat_realtime_stop,
             set_unread_badge,
+            set_quit_guard,
+            quit_app,
             idle_seconds,
             set_tray_status,
             set_tray_menu,
@@ -1746,6 +1783,19 @@ mod tests {
         assert_eq!(badge_count(0), None);
         assert_eq!(badge_count(3), Some(3));
         assert_eq!(badge_count(u32::MAX), Some(9999));
+    }
+
+    #[test]
+    fn quit_asks_only_while_messages_wait_to_send() {
+        assert!(!quit_needs_question(0));
+        assert!(quit_needs_question(1));
+        assert!(quit_needs_question(u32::MAX));
+        // "quit" stays native (never a webview tray action): only the confirmed `quit_app` command ends the app.
+        assert!(!tray_action_allowed("quit"));
+        assert!(app_commands::MAIN_COMMANDS.contains(&"set_quit_guard"));
+        assert!(app_commands::MAIN_COMMANDS.contains(&"quit_app"));
+        assert!(!app_commands::MINI_COMMANDS.contains(&"quit_app"));
+        assert!(!app_commands::PROMPT_COMMANDS.contains(&"quit_app"));
     }
 
     #[test]

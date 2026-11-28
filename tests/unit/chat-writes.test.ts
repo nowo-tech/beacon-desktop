@@ -726,7 +726,6 @@ describe('outbox: undo of a discard (UX batch 4, UXA-8)', () => {
     const first = ctx.outbox.send(ENVELOPE, null, 'One');
     const second = ctx.outbox.send(ENVELOPE, null, 'Two');
     const point = ctx.outbox.undoPoint(first);
-    expect(point.index).toBe(0);
     expect(ctx.outbox.discard(first.key)).toBe(first);
     expect(ctx.outbox.pending(ENVELOPE, null)).toEqual([second]);
     expect(ctx.outbox.restore(first, point)).toBe(true);
@@ -734,6 +733,26 @@ describe('outbox: undo of a discard (UX batch 4, UXA-8)', () => {
     expect(first).toMatchObject({ state: 'queued', error: 'network_error' });
     // Restoring twice does nothing.
     expect(ctx.outbox.restore(first, point)).toBe(false);
+    ctx.outbox.setOnline(true);
+    for (let i = 0; i < 8; i += 1) await settle();
+    expect(ctx.calls.map((call) => [call.text, call.key])).toEqual([
+      ['One', first.key],
+      ['Two', second.key],
+    ]);
+  });
+
+  it('BDA14-L2: comes back before a newer message of its conversation even when an earlier item left meanwhile', async () => {
+    ctx.outbox.setOnline(false);
+    const other = ctx.outbox.send(INCIDENTS, null, 'Elsewhere');
+    const first = ctx.outbox.send(ENVELOPE, null, 'One');
+    const second = ctx.outbox.send(ENVELOPE, null, 'Two');
+    const point = ctx.outbox.undoPoint(first);
+    expect(ctx.outbox.discard(first.key)).toBe(first);
+    // The item before it goes too: a position-based restore would now put it behind "Two".
+    expect(ctx.outbox.discard(other.key)).toBe(other);
+    expect(ctx.outbox.restore(first, point)).toBe(true);
+    expect(ctx.outbox.pending(ENVELOPE, null)).toEqual([first, second]);
+    expect(first.state).toBe('queued');
     ctx.outbox.setOnline(true);
     for (let i = 0; i < 8; i += 1) await settle();
     expect(ctx.calls.map((call) => [call.text, call.key])).toEqual([

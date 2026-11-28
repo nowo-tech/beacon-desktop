@@ -124,6 +124,10 @@ const chatHost: ChatHost = {
   onRealtime: (handler) => void listen<ChatRealtimeMode>('chat-realtime', (event) => handler(event.payload)),
   openLink: async (url) => void (await invoke<string>('open_chat_link', { url })),
   setUnreadBadge: (count) => invoke('set_unread_badge', { count: Math.max(0, Math.min(Math.trunc(count), 9999)) }),
+  // BDA14-L3: a count only (never the text); Rust's tray *Quit* asks through `quit-request` while it is above 0.
+  setUnsent: (count) => invoke('set_quit_guard', { count: Math.max(0, Math.min(Math.trunc(count), 9999)) }),
+  onQuitRequest: (handler) => void listen('quit-request', () => handler()),
+  quit: () => invoke('quit_app'),
 };
 
 /** Tasks (BD-3b): the tasks token stays in Rust (src-tauri/src/secret.rs, `tasks-token`). */

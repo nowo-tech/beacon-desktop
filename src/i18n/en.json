@@ -473,7 +473,10 @@
   "connectFixed": "Sign in with Beacon",
   "serverFixedSignedOut": "Beacon Desktop now always uses {host}, so you were signed out of {old} on this computer. Sign in again to continue.",
   "pausedFor": "Paused for a moment. Back in {time}.",
+  "pausedRetry": "Beacon is still busy. Try again when you're ready.",
   "welcomeStrip": "You're in, {name}. Pick a task and press Start.",
   "welcomeStripOrg": "You're in, {name} · {org}. Pick a task and press Start.",
+  "welcomeStripShort": "You're in, {name}.",
+  "welcomeStripShortOrg": "You're in · {org}",
   "trayUpdateAvailable": "Install update {version}…"
 }

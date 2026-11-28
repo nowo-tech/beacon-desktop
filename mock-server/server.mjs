@@ -877,8 +877,9 @@ export function createMockServer(options = {}) {
       return send(res, 404);
     }
     if (state.config.failNext) {
-      const { status, error: code, retryAfter } = state.config.failNext;
-      state.config.failNext = null;
+      // `times` (default 1): how many requests in a row fail (BDA14-I2: a server that keeps answering `429`).
+      const { status, error: code, retryAfter, times = 1 } = state.config.failNext;
+      state.config.failNext = times > 1 ? { ...state.config.failNext, times: times - 1 } : null;
       return error(res, status, code, `Simulated ${code}.`, retryAfter ? { 'Retry-After': String(retryAfter) } : {});
     }
     return api(req, res, route, url, body);

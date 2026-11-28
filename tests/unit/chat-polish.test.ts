@@ -385,11 +385,18 @@ describe('chat status and undo (UX batch 4)', () => {
     const open = store?.conversation(ENVELOPE) as { unread: number };
     open.unread = 2;
     ui.shell.chat.render();
-    expect(ui.$('#chat-jump').textContent).toContain('2 new messages below');
+    // BDA14-I7: the short text on one line (the arrow says "below"); the button's name keeps the full sentence.
+    expect(ui.$('#chat-jump span').textContent).toBe('2 new messages');
+    expect(ui.$('#chat-jump').getAttribute('aria-label')).toBe('2 new messages below');
     expect(ui.$<HTMLButtonElement>('#chat-jump').disabled).toBe(false);
+    open.unread = 1;
+    ui.shell.chat.render();
+    expect(ui.$('#chat-jump span').textContent).toBe('1 new message');
+    expect(ui.$('#chat-jump').getAttribute('aria-label')).toBe('1 new message below');
     open.unread = 0;
     ui.shell.chat.render();
     expect(ui.$('#chat-jump').textContent).toContain('All caught up');
+    expect(ui.$('#chat-jump').hasAttribute('aria-label')).toBe(false);
     expect(ui.$<HTMLButtonElement>('#chat-jump').disabled).toBe(true);
   });
 });

@@ -36,6 +36,16 @@ async function connectTasks(page: Page) {
 /** Where an element's top edge is (to prove a strip message moved nothing). */
 const top = (page: Page, selector: string) => page.locator(selector).first().evaluate((el) => Math.round(el.getBoundingClientRect().top));
 
+/**
+ * The same, in one round trip on whatever node is connected now (BDA14-L4: a re-render replaces the node between a
+ * locator's resolve and its evaluate), `null` when there is none.
+ */
+const topNow = (page: Page, selector: string) =>
+  page.evaluate((query) => {
+    const element = document.querySelector(query);
+    return element === null ? null : Math.round(element.getBoundingClientRect().top);
+  }, selector);
+
 test.beforeEach(async () => {
   await control('reset', {});
   await control('config', { deviceInterval: 1, contextPolicy: { required: false, refuse: [] } });
@@ -49,12 +59,16 @@ for (const scheme of ['light', 'dark'] as const) {
     await connectTasks(page);
     await page.locator('[data-view="board"]').click();
     await expect(page.locator('.col .card[data-task="t-142"]')).toBeVisible();
-    const before = await top(page, '.board-wrap');
+    const before = await topNow(page, '.board-wrap');
+    expect(before).not.toBeNull();
     await control('config', { tasksRefuseMove: true });
     await page.locator('.card[data-task="t-142"]').focus();
     await page.keyboard.press('Alt+ArrowRight');
     await expect(page.locator('#tasks-banner')).toContainText('Review takes at most 3 tasks.');
-    expect(await top(page, '.board-wrap')).toBe(before);
+    // BDA14-L4: the refused move reloads the board, which replaces `.board-wrap`. Measure the connected node in one
+    // round trip (a locator handle can land on the detached old one) until the reload settled: the board is where it was.
+    await expect.poll(() => topNow(page, '.board-wrap')).toBe(before);
+    await expect(page.locator('#tasks-banner')).toContainText('Review takes at most 3 tasks.');
     expect(await axe(page)).toEqual([]);
     await control('config', { tasksRefuseMove: false });
     // Complete with Undo: announced, never focused; Ctrl+Z (outside a text field) takes it back.

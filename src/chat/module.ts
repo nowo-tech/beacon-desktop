@@ -336,7 +336,7 @@ export class ChatModule {
     this.context = context;
     this.api.setContext(context);
     this.history.clear();
-    this.outbox?.clear();
+    this.discardQueue();
     // An undo of the previous organization never restores anything here (BDA13 guards).
     this.deps.toasts?.dismissGroup(TOAST_GROUP);
     this.peeked.clear();
@@ -393,7 +393,7 @@ export class ChatModule {
     this.savePrefs(true);
     this.sync?.reset();
     this.sync = null;
-    this.outbox?.clear();
+    this.discardQueue();
     this.outbox = null;
     this.deps.toasts?.dismissGroup(TOAST_GROUP);
     this.drafts.clear();
@@ -527,7 +527,35 @@ export class ChatModule {
     return row !== null && this.access().threadReply && row.canSend && !message.deleted && message.kind !== 'system' && !message.author.bot;
   }
 
+  /** Messages written but not sent yet (queued, sending or waiting): asked about before they are dropped (BDA14-L3). */
+  unsentCount(): number {
+    return this.outbox?.queuedCount() ?? 0;
+  }
+
+  /** The count the host last got (`setUnsent`): *Quit* asks while it is above 0 (BDA14-L3). */
+  private reportedUnsent = 0;
+
+  private reportUnsent(): void {
+    const count = this.unsentCount();
+    if (count === this.reportedUnsent) return;
+    this.reportedUnsent = count;
+    void this.deps.host.setUnsent?.(count).catch(() => undefined);
+  }
+
+  /**
+   * Drops the offline queue (memory only, Q-BD-15) on a context switch, "Disconnect chat" or sign-out. The shell asks
+   * first where the person starts it; a drop with no question (a lost authorization, a refused organization) is
+   * announced, so the text never goes silently (BDA14-L3).
+   */
+  private discardQueue(): void {
+    const count = this.unsentCount();
+    this.outbox?.clear();
+    if (count > 0) this.deps.announce(this.t('unsentDiscarded', { count }));
+    this.reportUnsent();
+  }
+
   private outboxChanged(conversation: string, root: string | null): void {
+    this.reportUnsent();
     this.renderBanner();
     if (conversation !== this.openUuid()) return;
     if (root === null) {
@@ -1060,7 +1088,15 @@ export class ChatModule {
     // UXA-11: one truth with the rail badge. Unread only below in the open conversation: "1 new message below".
     const below = anyUnread ? 0 : this.openUnread();
     const jumpLabel = anyUnread ? t('jumpUnread') : below === 1 ? t('newBelowOne') : below > 1 ? t('newBelowMany', { count: below }) : t('caughtUp');
-    const jump = h('button', { class: 'jump', id: 'chat-jump', attrs: { type: 'button', disabled: (!anyUnread && below === 0) || undefined, 'aria-keyshortcuts': 'Control+J Meta+J' } }, chatIcon('down', 'sm'), h('span', {}, jumpLabel), h('kbd', {}, `${modKey()} J`));
+    // BDA14-I7: one line at 900 px. The button shows the short text (the down arrow says "below"); its name keeps the full one.
+    const jumpShort = !anyUnread && below > 0 ? (below === 1 ? t('newPillOne') : t('newPill', { count: below })) : jumpLabel;
+    const jump = h(
+      'button',
+      { class: 'jump', id: 'chat-jump', attrs: { type: 'button', disabled: (!anyUnread && below === 0) || undefined, 'aria-keyshortcuts': 'Control+J Meta+J', 'aria-label': jumpShort !== jumpLabel ? jumpLabel : undefined, title: jumpShort !== jumpLabel ? jumpLabel : undefined } },
+      chatIcon('down', 'sm'),
+      h('span', {}, jumpShort),
+      h('kbd', {}, `${modKey()} J`),
+    );
     jump.addEventListener('click', () => this.jumpUnread());
     nodes.push(jump);
     const scroll = h('nav', { class: 'side-scroll', attrs: { 'aria-labelledby': 'chat-side-title' } });

@@ -338,6 +338,9 @@ const en = {
   messageDiscarded: 'Message discarded',
   newBelowOne: '1 new message below',
   newBelowMany: '{count} new messages below',
+  // BDA14-L3: the offline queue dropped with no question (a lost authorization, a refused organization).
+  unsentDiscardedOne: '1 unsent message was discarded.',
+  unsentDiscarded: '{count} unsent messages were discarded.',
 } as const;
 
 export type ChatKey = keyof typeof en;
@@ -680,6 +683,8 @@ const es: Record<ChatKey, string> = {
   messageDiscarded: 'Mensaje descartado',
   newBelowOne: '1 mensaje nuevo abajo',
   newBelowMany: '{count} mensajes nuevos abajo',
+  unsentDiscardedOne: 'Se ha descartado 1 mensaje sin enviar.',
+  unsentDiscarded: 'Se han descartado {count} mensajes sin enviar.',
 };
 
 const CATALOGS: Record<Locale, Record<ChatKey, string>> = { en, es };

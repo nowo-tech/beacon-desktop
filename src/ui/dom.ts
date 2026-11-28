@@ -71,7 +71,8 @@ export function patch(region: HTMLElement, children: Child[], fallback?: string)
   if (!inside) return;
   const target = (key !== null ? findByKey(region, key) : null) ?? (fallback !== undefined ? findByKey(document, fallback) : null);
   if (target === null) return;
-  target.focus();
+  // BDA14-I6: a background re-render (poll, reload) never scrolls the region to the refocused element.
+  target.focus({ preventScroll: true });
   if (selection !== null && target instanceof HTMLInputElement) {
     try {
       target.setSelectionRange(selection[0], selection[1]);

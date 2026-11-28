@@ -473,7 +473,10 @@
   "connectFixed": "Iniciar sesión con Beacon",
   "serverFixedSignedOut": "Beacon Desktop ahora usa siempre {host}, así que se ha cerrado tu sesión de {old} en este equipo. Vuelve a iniciar sesión para seguir.",
   "pausedFor": "En pausa un momento. Volvemos en {time}.",
+  "pausedRetry": "Beacon sigue ocupado. Vuelve a intentarlo cuando quieras.",
   "welcomeStrip": "Ya estás dentro, {name}. Elige una tarea y pulsa Iniciar.",
   "welcomeStripOrg": "Ya estás dentro, {name} · {org}. Elige una tarea y pulsa Iniciar.",
+  "welcomeStripShort": "Ya estás dentro, {name}.",
+  "welcomeStripShortOrg": "Ya estás dentro · {org}",
   "trayUpdateAvailable": "Instalar la actualización {version}…"
 }

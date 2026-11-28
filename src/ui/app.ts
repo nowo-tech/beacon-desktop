@@ -246,6 +246,26 @@ const NOTE_MAX = 500;
 const MAX_ENTRY_PAGES = 5;
 /** A timer running this long gets a calm "still going?" nudge (once per entry, dismissible). */
 export const LONG_RUNNING_HOURS = 8;
+
+/** Automatic retries of one action after a `429` (BDA14-I2, as Chat's `AUTO_RETRIES`): then the person retries. */
+export const TIME_AUTO_RETRIES = 3;
+
+/**
+ * Seconds to wait before automatic retry `attempt` (0 for the first `429`): the server's `Retry-After` (30 s without
+ * one), never less than a backoff of 1, 2, 4 … s, so a server that keeps answering `Retry-After: 0` is not hammered.
+ */
+export function rateRetryWait(retryAfter: number | null | undefined, attempt: number): number {
+  return Math.max(retryAfter ?? 30, 2 ** Math.max(0, attempt), 1);
+}
+
+/** A `429` pause (UXA-7): when it ends, the action that met it (`retry`); `attempt` automatic retries already used. */
+export interface RatePause {
+  until: number;
+  retry: (() => Promise<void>) | null;
+  attempt: number;
+  /** BDA14-I2: the retries are spent; when the pause ends the strip offers *Retry* instead of trying on its own. */
+  held?: boolean;
+}
 /** Success copy after a stop: the n-th stop of the session gets variant n mod 3. */
 const SAVED_VARIANTS: MessageKey[] = ['savedA', 'savedB', 'savedC'];
 const THEME_LABELS: Record<ThemePreference, MessageKey> = { system: 'themeSystem', light: 'themeLight', dark: 'themeDark' };
@@ -364,7 +384,9 @@ export class DesktopApp {
    * A `429` while signed in (UX batch 4, UXA-7): a calm countdown in the status strip instead of an error card, and the
    * action tried again once it ends.
    */
-  rateLimit: { until: number; retry: (() => Promise<void>) | null } | null = null;
+  rateLimit: RatePause | null = null;
+  /** The automatic retry number the next guarded action is (set just before {@link rateLimitEnded} runs it). */
+  private autoRetry = 0;
   /** Entry (task + start) whose long-running nudge was answered "Keep going". */
   longRunningOk: string | null = null;
   /** Stops of this session (picks the success copy variant). */
@@ -1204,13 +1226,17 @@ export class DesktopApp {
     }
     const [timer, tasks, me, entries] = await Promise.all([api.timer(), api.tasks({ search: this.query }), api.me(), this.loadEntries(api)]);
     this.offline = false;
-    this.tasks = tasks;
+    const served = api.currentContext ?? 'personal';
+    // BDA14-L1: an answer for an organization left meanwhile (a switch while it loaded) never replaces the current
+    // one's tasks and entries; the switch's own refresh brings those.
+    const current = served === this.timeContext;
+    if (current) this.tasks = tasks;
     // From task lists only (`GET timer` is per person, not per organization, audit ZCD-v-L1), in the context the list
     // was actually served in (a refused read falls back to Personal, ZCD-v-I1).
-    this.rememberTaskContexts(tasks, api.currentContext ?? 'personal');
+    this.rememberTaskContexts(tasks, served);
     if (blocked !== undefined) void this.answerQueued(blocked);
     this.setMe(me);
-    this.entries = entries;
+    if (current) this.entries = entries;
     await this.setTimer(timer);
     // Start (or a refresh): today's meetings now, not at the next regular poll.
     await this.pollMeetings(true);
@@ -1289,9 +1315,12 @@ export class DesktopApp {
   async search(query: string): Promise<void> {
     this.query = query;
     await this.guard(async () => {
-      const context = this.timeContext;
-      this.tasks = await this.api().tasks({ search: query });
-      this.rememberTaskContexts(this.tasks, context);
+      const api = this.api();
+      const tasks = await api.tasks({ search: query });
+      const served = api.currentContext ?? 'personal';
+      this.rememberTaskContexts(tasks, served);
+      // BDA14-L1: the answer of an organization left meanwhile (or of an older search) is dropped.
+      if (served === this.timeContext && this.query === query) this.tasks = tasks;
     });
     if (this.view === 'main' && query.trim() !== '' && this.query === query) this.announce(this.t('resultsCount', { count: this.visibleTasks().length }));
   }
@@ -3652,6 +3681,8 @@ export class DesktopApp {
     context: () => { stage?: ErrorStage; task?: string; server?: string } = () => ({}),
     retry?: () => Promise<void>,
   ): Promise<void> {
+    const attempt = this.autoRetry;
+    this.autoRetry = 0;
     this.busy = true;
     this.error = null;
     // Something else is being done: the action that met a `429` is not repeated on its own afterwards (UXA-7).
@@ -3669,7 +3700,7 @@ export class DesktopApp {
         if (offline !== undefined) await offline();
       } else {
         const ctx = context();
-        this.fail(error, ctx.stage ?? 'action', ctx.task, ctx.server, retry ?? (() => this.guard(action, offline, context)));
+        this.fail(error, ctx.stage ?? 'action', ctx.task, ctx.server, retry ?? (() => this.guard(action, offline, context)), attempt);
       }
     } finally {
       this.busy = false;
@@ -3677,11 +3708,12 @@ export class DesktopApp {
     }
   }
 
-  private fail(error: unknown, stage: ErrorStage, task?: string, server?: string, retry?: () => Promise<void>): void {
+  private fail(error: unknown, stage: ErrorStage, task?: string, server?: string, retry?: () => Promise<void>, attempt = 0): void {
     if (error instanceof ApiError && error.status === 429 && stage === 'action' && this.state.session !== null) {
-      // A background pause, not a failure (UXA-7): "Paused for a moment. Back in 0:25." in the strip, then once more.
+      // A background pause, not a failure (UXA-7): "Paused for a moment. Back in 0:25." in the strip, then once more,
+      // at most TIME_AUTO_RETRIES times with a growing wait (BDA14-I2); then *Retry* in the strip.
       this.error = null;
-      this.rateLimit = { until: Date.now() + Math.max(1, error.retryAfter ?? 30) * 1000, retry: retry ?? null };
+      this.rateLimit = { until: Date.now() + rateRetryWait(error.retryAfter, attempt) * 1000, retry: retry ?? null, attempt, held: attempt >= TIME_AUTO_RETRIES };
       this.render();
       return;
     }
@@ -4038,30 +4070,67 @@ export class DesktopApp {
     const t = this.t;
     this.strip.root.hidden = !(signedIn && this.view === 'main');
     const rate = this.rateLimit;
+    // BDA14-I2: the automatic retries are spent and the pause is over: *Retry* is the person's.
+    const held = rate !== null && rate.held === true && rate.retry !== null && rate.until <= Date.now();
     const name = this.state.session?.displayName ?? this.state.session?.identifier ?? '';
     const org = this.deps.contextLabel?.() ?? null;
     const message: StripMessage | null = !signedIn
       ? null
       : pickMessage([
           this.offline && { key: 'offline', text: t('offline', { count: this.queue.size }), tone: 'warn', textId: 'offline' },
-          rate !== null && {
+          held && {
+            key: 'rate-held',
+            text: t('pausedRetry'),
+            tone: 'info',
+            action: { id: 'time-strip-retry', label: t('actionRetry'), onClick: () => void this.retryHeld(rate) },
+          },
+          rate !== null &&
+            !held && {
             key: 'rate',
             text: (left: number) => t('pausedFor', { time: formatCountdown(left) }),
             tone: 'info',
             until: rate.until,
             onElapsed: () => this.rateLimitEnded(rate),
           },
-          this.welcome && this.host !== null && this.error === null && { key: 'welcome', text: org !== null ? t('welcomeStripOrg', { name, org }) : t('welcomeStrip', { name }), tone: 'info' },
+          this.welcome && this.host !== null && this.error === null && { key: 'welcome', text: this.welcomeText(name, org), tone: 'info' },
         ]);
     this.strip.show(message);
   }
 
+  /**
+   * "You're in" in the strip (UXA-23). BDA14-L5: in the compact layout (under 900 px) the short variant, so the one line
+   * is never cut; the *Not tracking* card below already says to pick a task and press Start.
+   */
+  private welcomeText(name: string, org: string | null): string {
+    const t = this.t;
+    if (this.layout === 'compact') return org !== null ? t('welcomeStripShortOrg', { org }) : t('welcomeStripShort', { name });
+    return org !== null ? t('welcomeStripOrg', { name, org }) : t('welcomeStrip', { name });
+  }
+
   /** The `429` pause ended: the action that met it is tried again (once), unless something else happened meanwhile. */
-  private rateLimitEnded(rate: { until: number; retry: (() => Promise<void>) | null }): void {
+  private rateLimitEnded(rate: RatePause): void {
+    if (this.rateLimit !== rate) return;
+    // BDA14-I2: the automatic retries are spent: the strip offers Retry and nothing is sent on its own.
+    if (rate.held === true && rate.retry !== null) {
+      this.render();
+      return;
+    }
+    this.rateLimit = null;
+    this.render();
+    if (rate.retry !== null && this.state.session !== null && !this.busy) {
+      this.autoRetry = rate.attempt + 1;
+      void rate.retry();
+      // Read synchronously by the guard the retry starts; never left for an unrelated action.
+      this.autoRetry = 0;
+    }
+  }
+
+  /** *Retry* after the automatic retries were spent (BDA14-I2): the person's own attempt starts a new count. */
+  private async retryHeld(rate: RatePause): Promise<void> {
     if (this.rateLimit !== rate) return;
     this.rateLimit = null;
     this.render();
-    if (rate.retry !== null && this.state.session !== null && !this.busy) void rate.retry();
+    if (rate.retry !== null && this.state.session !== null) await rate.retry();
   }
 
   private renderError(error: ErrorView): HTMLElement {

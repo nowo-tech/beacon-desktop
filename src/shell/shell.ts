@@ -221,6 +221,7 @@ export class Shell {
         if (current !== null) this.followTimeContext(current);
         void this.tasks?.switchContext();
         this.renderChrome();
+        this.refreshSwitcher();
       },
       onUnread: (total, capped) => {
         this.unread = total;
@@ -325,6 +326,8 @@ export class Shell {
     this.root = h('div', { class: 'shell', id: 'shell', attrs: { 'data-bare': 'true' } }, this.titlebar, h('div', { class: 'body' }, this.rail, this.chatPanel, this.tasksPanel, this.timePanel, this.setup.root), this.live, this.switcher, this.settings, this.keys, this.confirm, this.allocation.dialog, this.updatePop, this.toasts.root);
     platform.miniWindow?.onAction((action) => void this.onMiniAction(action));
     platform.onTray((action) => void this.onTrayAction(action));
+    // BDA14-L3: the tray's *Quit* while messages wait to send (closing the window only hides it; *Quit* is the end).
+    host.onQuitRequest?.(() => void this.quitRequested());
     platform.onNotificationAction((id) => {
       const target = parseChatClick(id);
       if (target !== null) void this.openTarget({ kind: 'chat', ...target }, 'notification');
@@ -1040,6 +1043,8 @@ export class Shell {
         return;
       }
     }
+    // BDA14-L3: the chat's offline queue does not follow to another organization; ask before it goes.
+    if (!(await this.askUnsent('unsentSwitch'))) return;
     const timer = app?.state.activeTimer ?? null;
     if (app !== null && timer !== null) {
       const target = this.contexts.find((item) => item.key === key)?.label ?? key;
@@ -1081,6 +1086,32 @@ export class Shell {
     }
     if (this.context === key) this.announce(this.t('contextSwitched', { name: label }));
     this.renderChrome();
+    this.refreshSwitcher();
+  }
+
+  /**
+   * BDA14-L1: an open quick switcher follows an organization switch (a link or a notification can switch while it is
+   * open): its results are built again for the new organization, the typed text kept.
+   */
+  private refreshSwitcher(): void {
+    if (this.switcher.open) this.renderSwitcher();
+  }
+
+  /**
+   * BDA14-L3: before something drops the chat's offline queue (an organization switch, sign-out, *Quit*), ask: Cancel is
+   * the default. Nothing waiting: `true` at once.
+   */
+  private async askUnsent(action: 'unsentSwitch' | 'unsentSignOut' | 'unsentQuit'): Promise<boolean> {
+    const count = this.chat.unsentCount();
+    if (count === 0) return true;
+    const st = this.st;
+    return this.askDestructive(st('unsentTitle', { count }), st('unsentText', { count }), st(action, { count }));
+  }
+
+  /** The tray's *Quit* with messages waiting (BDA14-L3): asked in the main window, which Rust has shown. */
+  private async quitRequested(): Promise<void> {
+    if (!(await this.askUnsent('unsentQuit'))) return;
+    await this.platform.chat?.quit?.();
   }
 
   /** A link wants another organization (BDA13-I1): the same confirm dialog as the timer's switch question. */
@@ -1247,8 +1278,9 @@ export class Shell {
       }
       const seen = new Set<string>(timer !== null ? [timer.taskId] : []);
       const verb = timer !== null ? st('switchSwitch') : st('switchStart');
+      // BDA14-L1: only tasks of the current organization (the list may still hold the previous one's until it reloads).
       for (const task of [...app.quickTasks(), ...(query.trim() === '' ? [] : app.tasks)]) {
-        if (seen.has(task.id)) continue;
+        if (seen.has(task.id) || !app.inCurrentContext(task.id)) continue;
         seen.add(task.id);
         items.push({ key: `s-${task.id}`, module: 'time', label: task.title, meta: verb, extra: `${verb} ${task.boardTitle ?? task.projectTitle ?? ''}`, icon: 'play', run: () => void app.start(task) });
       }
@@ -1543,8 +1575,12 @@ export class Shell {
     });
     const logout = h('button', { class: 'btn sm danger', id: 'logout', attrs: { type: 'button' } }, st('signOut'));
     logout.addEventListener('click', () => {
-      this.settingsDialog.close();
-      void this.app?.logout();
+      void (async () => {
+        // BDA14-L3: messages waiting to send are dropped with the sign-out: asked first.
+        if (!(await this.askUnsent('unsentSignOut'))) return;
+        this.settingsDialog.close();
+        await this.app?.logout();
+      })();
     });
     const setup = this.setup.needed() ? h('button', { class: 'btn sm primary', id: 'account-finish-setup', attrs: { type: 'button' } }, st('finishSetup')) : null;
     setup?.addEventListener('click', () => {
@@ -1576,7 +1612,10 @@ export class Shell {
   /** Disconnect chat / tasks, after a confirmation (UXA-8); time stays signed in. */
   async disconnectModule(module: 'chat' | 'tasks'): Promise<void> {
     const st = this.st;
-    const ok = await this.askDestructive(st(module === 'chat' ? 'confirmChatTitle' : 'confirmTasksTitle'), st(module === 'chat' ? 'confirmChatText' : 'confirmTasksText'), st('confirmDisconnect'));
+    // BDA14-L3: one question also names the messages still waiting to send (they go with the chat).
+    const unsent = module === 'chat' ? this.chat.unsentCount() : 0;
+    const text = st(module === 'chat' ? 'confirmChatText' : 'confirmTasksText');
+    const ok = await this.askDestructive(st(module === 'chat' ? 'confirmChatTitle' : 'confirmTasksTitle'), unsent > 0 ? `${st('unsentTitle', { count: unsent })} ${text}` : text, st('confirmDisconnect'));
     if (!ok) return;
     if (module === 'chat') await this.chat.disconnect();
     else await this.tasks?.disconnect();

@@ -253,6 +253,33 @@ candidate. Needs TaskBoardBundle **3.4** (`client_api`, `/api/task-board/v1`) an
 (`task-board:read task-board:write`); without them the module shows its "Connect tasks" card and a refused request
 says so.
 
+### Audit fixes before 0.14.0 (BDA14, 2026-11-28)
+
+- **Quick switcher, previous organization's Time tasks (BDA14-L1).** `Ctrl/⌘+K` lists only Time tasks of the current
+  organization; a Time list or search answered after an organization switch is dropped instead of replacing the new
+  organization's tasks; an open switcher is rebuilt when the organization changes (a link or a notification). The
+  stale Time list after a switch also affected 0.12.0 and earlier (display of your own tasks of another of your
+  organizations only, nothing on the server; no advisory).
+- **Undo keeps the send order (BDA14-L2).** An undone *Cancel* of a queued message goes back by its write order (a
+  sequence number per message), so it never lands behind a newer message of the same conversation.
+- **Messages waiting to send are never dropped silently (BDA14-L3).** Switching organization, *Disconnect chat*,
+  signing out or *Quit* from the tray while messages wait in the offline queue asks first ("N messages are waiting to
+  send. Discard them?", Cancel by default; *Disconnect chat* says it in its own question). Closing the window still only
+  hides it to the tray; only *Quit* asks (Rust gets the count only, never the text). A drop with no question (chat
+  authorization lost, an organization refused) is announced: "N unsent messages were discarded." The queue stays in
+  memory only (Q-BD-15).
+- **"You're in" fits narrow windows (BDA14-L5).** Under 900 px the strip shows the short line ("You're in · {org}" /
+  "You're in, {name}."); the *Not tracking* card below already says to pick a task and press Start.
+- **Time `429` retries are capped (BDA14-I2).** At most 3 automatic retries of one action, each waiting the server's
+  `Retry-After` and at least 1, 2, 4 … s; then the strip says "Beacon is still busy" with *Retry*.
+- **Release workflow (BDA14-I3).** `BEACON_URL` is no longer exported; the release fails when `BEACON_SERVER_FIELD` is
+  set or the built UI is not bound to `https://beacon.nowo.tech`.
+- **Tasks board re-render (BDA14-I6, BDA14-L4).** A refocus after a re-render no longer scrolls (`preventScroll`); the
+  flaky e2e check of "a refused move does not move the board" now measures the connected board after the reload in one
+  step, with the same assertion.
+- **Chat jump button on one line at 900 px (BDA14-I7):** "2 new messages" with the down arrow; its accessible name keeps
+  "2 new messages below".
+
 ## [0.12.0] - 2026-11-27
 
 BD-3b, first part (design `docs/design/BEACON_DESKTOP.md` §7.2): chat writes. Needs ChatKitBundle

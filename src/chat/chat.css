@@ -696,3 +696,7 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .shell[data-density='compact'] .side .side-home { --row-h: 24px; font-size: var(--fs-sm); }
 .side .side-home:hover { background: var(--chrome-hover); color: var(--chrome-ink); }
 .side .side-home[aria-current='page'] { background: var(--chrome-active); color: #fff; }
+
+/* BDA14-I7: the sidebar's jump button stays on one line (short label; ellipsis only as a last resort). */
+.side .jump { white-space: nowrap; }
+.side .jump span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

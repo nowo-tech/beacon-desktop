@@ -273,6 +273,12 @@ export interface ChatHost {
   openLink(url: string): Promise<void>;
   /** Unread badge: tray dot, Dock / launcher count, Windows overlay; 0 clears it. */
   setUnreadBadge(count: number): Promise<void>;
+  /** How many messages wait in the offline send queue (BDA14-L3, a count only): the tray's *Quit* asks while above 0. */
+  setUnsent?(count: number): Promise<void>;
+  /** The tray's *Quit* was chosen while messages wait to send: the UI asks, then calls {@link quit} (BDA14-L3). */
+  onQuitRequest?(handler: () => void): void;
+  /** Ends the app (after the person confirmed discarding the waiting messages). */
+  quit?(): Promise<void>;
 }
 
 /**
@@ -482,6 +488,10 @@ export interface BrowserHooks {
   chatRealtime: { server: string; context: string } | null;
   badge: number;
   chatLinks: string[];
+  /** BDA14-L3: the unsent count the UI reported, *Quit* requests from the fake tray, and confirmed quits. */
+  unsent: number;
+  quitRequest(): void;
+  quits: number;
   /** Tasks (BD-3b): the stored tasks token and "Connect tasks" calls. */
   tasksToken: string | null;
   tasksConnectBegins: number;
@@ -512,6 +522,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
   const resumeHandlers: (() => void)[] = [];
   const sessionHandlers: ((event: SessionEvent) => void)[] = [];
   const trayHandlers: ((action: string) => void)[] = [];
+  const quitHandlers: (() => void)[] = [];
   const wakeHandlers: ((reason: WakeReason) => void)[] = [];
   const actionHandlers: ((id: string) => void)[] = [];
   const answerHandlers: ((answer: PromptAnswer) => void)[] = [];
@@ -532,6 +543,13 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     tasksConnectBegins: 0,
     badge: 0,
     chatLinks: [],
+    unsent: 0,
+    // As the tray's "quit" in src-tauri/src/lib.rs: asks the UI only while messages wait, else ends the app.
+    quitRequest: () => {
+      if (hooks.unsent > 0) quitHandlers.forEach((handler) => handler());
+      else hooks.quits += 1;
+    },
+    quits: 0,
     chatHint: (hint) => hintHandlers.forEach((handler) => handler(hint)),
     chatMode: (mode) => modeHandlers.forEach((handler) => handler(mode)),
     idleSeconds: 0,
@@ -648,6 +666,9 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     onRealtime: (handler) => void modeHandlers.push(handler),
     openLink: async (url) => void hooks.chatLinks.push(url),
     setUnreadBadge: async (count) => void (hooks.badge = count),
+    setUnsent: async (count) => void (hooks.unsent = count),
+    onQuitRequest: (handler) => void quitHandlers.push(handler),
+    quit: async () => void (hooks.quits += 1),
   };
   const tasks: TasksHost = {
     token: async () => (secret === null ? null : hooks.tasksToken),
