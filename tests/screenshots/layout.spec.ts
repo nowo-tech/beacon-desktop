@@ -70,8 +70,9 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.locator('#time-week li')).toHaveCount(7);
     await shot(page, `full-my-time-${scheme}`);
 
-    await page.locator('#nav-settings').click();
-    await expect(page.locator('#main-pane #settings')).toBeVisible();
+    // UX batch 6 (UXA-2): the one Settings dialog opens from the rail's gear (the Time sidebar has no Settings entry).
+    await page.locator('#rail-settings').click();
+    await expect(page.locator('#shell-settings')).toBeVisible();
     await shot(page, `full-settings-${scheme}`);
     expect(BEACON).toContain('example.test');
   });

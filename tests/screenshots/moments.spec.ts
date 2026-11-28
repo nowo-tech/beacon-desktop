@@ -72,7 +72,9 @@ for (const scheme of ['light', 'dark'] as const) {
 
     test(`desktop-settings-theme-${scheme}`, async ({ page }) => {
       await signIn(page);
-      await page.locator('#open-settings').click();
+      // UX batch 6 (UXA-2): the one Settings dialog opens from the rail's gear.
+      await page.locator('#rail-settings').click();
+      await page.locator('#settings-tab-appearance').click();
       await expect(page.getByRole('group', { name: 'Theme' })).toBeVisible();
       await shot(page, `desktop-settings-theme-${scheme}`);
     });

@@ -12,7 +12,16 @@ export default defineConfig({
   retries: 2,
   workers: 1,
   reporter: 'list',
-  use: { viewport: { width: 400, height: 640 }, locale: 'en-US', timezoneId: 'UTC' },
+  use: {
+    viewport: { width: 400, height: 640 },
+    locale: 'en-US',
+    timezoneId: 'UTC',
+    // As the e2e config: the guided first run (UX batch 6) is done, Time is the module shown, so the screens are Time's.
+    storageState: {
+      cookies: [],
+      origins: ['http://127.0.0.1:1420', 'http://127.0.0.1:1421'].map((origin) => ({ origin, localStorage: [{ name: 'beacon-desktop-shell', value: '{"setup":"done","module":"time"}' }] })),
+    },
+  },
   projects: [
     { name: 'direct', testMatch: ['direct.spec.ts', 'moments.spec.ts', 'friendly.spec.ts', 'native.spec.ts', 'schedule.spec.ts', 'layout.spec.ts', 'links.spec.ts', 'quickwins.spec.ts', 'meetings.spec.ts'], use: { baseURL: 'http://127.0.0.1:1420' } },
     { name: 'store', testMatch: 'store.spec.ts', use: { baseURL: 'http://127.0.0.1:1421' } },

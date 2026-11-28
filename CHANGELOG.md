@@ -252,6 +252,8 @@ From the UX audit of 2026-11-27 (UXA-1, 2, 4, 24, 25, 30, 36, 37); the owner app
 - **Tasks board re-render (BDA14-I6, BDA14-L4).** A refocus after a re-render no longer scrolls (`preventScroll`); the
   flaky e2e check of "a refused move does not move the board" now measures the connected board after the reload in one
   step, with the same assertion.
+- **Documentation screenshots follow the shell (UX batch 6).** The docs screenshot run marks the guided first run done
+  (as the e2e config) and opens Settings from the rail's gear; the 16 README images show the shell's Time module.
 - **Chat jump button on one line at 900 px (BDA14-I7):** "2 new messages" with the down arrow; its accessible name keeps
   "2 new messages below".
 
