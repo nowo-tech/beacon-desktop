@@ -148,6 +148,10 @@ export class ChatModule {
   private readonly pill: HTMLButtonElement;
   /** The chat home view (UX batch 5): unread, mentions, recent; shown while no conversation is open. */
   private readonly home: HTMLElement;
+  /** The compact window (≤ 760 px): the home view is reduced and the list is one step away (0.14.1). */
+  private readonly narrowQuery: MediaQueryList | null = globalThis.matchMedia?.('(max-width: 760px)') ?? null;
+  /** The open conversation was picked from the compact window's list: Back goes to the list, else home. */
+  private backToList = false;
   /** Unread conversations whose newest page the home view loaded (once per context), for their mentions. */
   private readonly peeked = new Set<string>();
   /** A render of the timeline skipped while the person selects text in it (UXA-26); done when the selection ends. */
@@ -206,6 +210,8 @@ export class ChatModule {
       },
       focusAway: () => (this.openUuid() !== null ? this.scroller.focus({ preventScroll: true }) : this.side.querySelector<HTMLElement>('.conv, #chat-home-link')?.focus()),
       clock: this.clock,
+      // 0.14.1: the band is reserved in tall windows only; below, a message overlays the timeline above the composer.
+      overlay: true,
     });
     this.pauseStrip = new StatusStrip({ id: 'chat-pause', dismissLabel: deps.t('dismissNotice'), announce: (text) => deps.announce(text), clock: this.clock });
     this.ask = h('div', { class: 'ch-ask', id: 'chat-ask' });
@@ -216,8 +222,11 @@ export class ChatModule {
     this.foot = h('div', { class: 'ch-foot', id: 'chat-foot' });
     this.home = h('section', { class: 'ch-home', id: 'chat-home', attrs: { 'aria-labelledby': 'chat-home-title', hidden: true } });
     this.home.addEventListener('keydown', (event) => this.onHomeKey(event));
+    this.narrowQuery?.addEventListener?.('change', () => {
+      if (!this.home.hidden) this.renderHome();
+    });
     // UXA-27: the conversation (or the home view) is the module's `main` landmark.
-    this.main = h('main', { class: 'chat-main', id: 'chat-main', attrs: { 'aria-label': deps.t('moduleChat') } }, this.head, this.ask, this.strip.root, h('div', { class: 'msgs-wrap' }, this.scroller, this.home, this.pill), this.foot);
+    this.main = h('main', { class: 'chat-main', id: 'chat-main', attrs: { 'aria-label': deps.t('moduleChat') } }, this.head, this.ask, h('div', { class: 'msgs-wrap' }, this.strip.root, this.scroller, this.home, this.pill), this.foot);
     this.threadSlot = h('div', { class: 'thread-slot', id: 'thread-slot' });
     this.root = h('div', { class: 'chat', id: 'chat' }, this.side, this.main, this.threadSlot);
     this.sideRows = new Roving(this.side, { items: '.side-scroll .sec-h, .side-scroll .conv, .side-scroll .sec-more', preferred: () => this.side.querySelector<HTMLElement>('.conv[aria-current="true"]') });
@@ -682,6 +691,7 @@ export class ChatModule {
       this.prefs.lastConversation[this.context] = uuid;
       this.savePrefs();
     }
+    this.backToList = this.root.classList.contains('list-open');
     this.root.classList.remove('list-open');
     const promise = sync.open(uuid);
     this.render();
@@ -712,9 +722,12 @@ export class ChatModule {
     await sync.markRead(open).catch(() => undefined);
     sync.openUuid = null;
     sync.closeThread();
-    this.root.classList.add('list-open');
+    // The compact window goes back where the conversation was picked: its list, or the reduced home (0.14.1).
+    const toHome = this.narrow() && !this.backToList;
+    if (!toHome) this.root.classList.add('list-open');
     this.render();
-    this.side.querySelector<HTMLElement>(`[data-conv="${open}"]`)?.focus();
+    if (toHome) this.focusHome();
+    else this.side.querySelector<HTMLElement>(`[data-conv="${open}"]`)?.focus();
   }
 
   stepConversation(direction: 1 | -1, unreadOnly: boolean): void {
@@ -1277,7 +1290,11 @@ export class ChatModule {
         },
       this.wasLive && this.mode === 'polling' && { key: 'reconnecting', text: t('bannerReconnecting'), tone: 'info' },
     ]);
+    const shown = this.strip.current !== null;
     this.strip.show(message);
+    // Overlay mode (short windows): the timeline gets room under its last message for the strip; a reader at the bottom
+    // stays there, so the newest message is never under the strip (0.14.1).
+    if (this.strip.mode === 'overlay' && !shown && this.strip.current !== null && this.stick && !this.scroller.hidden) this.scroller.scrollTop = this.scroller.scrollHeight;
   }
 
   /** The message box, or why there is none (a read-only token, writes off on the server, a read-only conversation). */
@@ -1423,8 +1440,20 @@ export class ChatModule {
 
   // ---- home view (UX batch 5, owner approval 2026-11-27) ----------------------------------------------------------------
 
+  /** The compact window's layout (one pane at a time, `chat.css` ≤ 760 px). */
+  private narrow(): boolean {
+    return this.narrowQuery?.matches === true;
+  }
+
+  /** The compact window: the conversation list in place of the home view ("All conversations"), first row focused. */
+  showList(): void {
+    this.root.classList.add('list-open');
+    (this.side.querySelector<HTMLElement>('.conv[tabindex="0"]') ?? this.side.querySelector<HTMLElement>('.conv, #chat-home-link'))?.focus();
+  }
+
   /** Back to the home view (sidebar "Home"): the open conversation is marked read and left. */
   async goHome(): Promise<void> {
+    this.root.classList.remove('list-open');
     const sync = this.sync;
     const open = sync?.openUuid ?? null;
     if (sync !== null && open !== null) {
@@ -1472,22 +1501,29 @@ export class ChatModule {
       this.home.replaceChildren(...nodes);
       return;
     }
+    // The compact window (0.14.1, owner approval 2026-11-28): a reduced home in place of the bare list. Unread first,
+    // then recent conversations, then mentions when there are any; fewer rows, one line each.
+    const compact = this.narrow();
+    const unreadMax = compact ? COMPACT_UNREAD : HOME_UNREAD;
     const unread = all.filter((row) => row.unread > 0 && !isMuted(row, now)).sort((a, b) => (a.lastMessageAt < b.lastMessageAt ? 1 : a.lastMessageAt > b.lastMessageAt ? -1 : 0));
-    const mentions = store.mentions(HOME_MENTIONS);
+    const mentions = store.mentions(compact ? COMPACT_MENTIONS : HOME_MENTIONS);
     const unreadIds = new Set(unread.map((row) => row.uuid));
     const recent = [...new Set([...this.recent, ...all.map((row) => row.uuid)])]
       .filter((uuid) => !unreadIds.has(uuid))
       .map((uuid) => store.conversation(uuid))
       .filter((row): row is Conversation => row !== null)
-      .slice(0, HOME_RECENT);
+      .slice(0, compact ? COMPACT_RECENT : HOME_RECENT);
     const summary = unread.length === 0 ? t('homeCaughtUp') : unread.length === 1 ? t('homeSummaryOne') : t('homeSummary', { count: unread.length });
-    nodes.push(h('header', { class: 'hm-head' }, title, h('p', { class: 'hm-sub' }, `${this.contextName()} · ${summary}`)));
+    const all_ = compact ? h('button', { class: 'btn sm hm-all', id: 'chat-home-all', attrs: { type: 'button' } }, chatIcon('chat', 'sm'), t('homeAllConversations')) : null;
+    all_?.addEventListener('click', () => this.showList());
+    nodes.push(h('header', { class: 'hm-head' }, h('div', { class: 'hm-head-l' }, title, h('p', { class: 'hm-sub' }, `${this.contextName()} · ${summary}`)), all_));
+    const later: Node[] = [];
     // Unread first: what needs the reader.
     const unreadList = h('ul', { class: 'hm-list', attrs: { 'aria-labelledby': 'hm-unread' } });
-    for (const row of unread.slice(0, HOME_UNREAD)) unreadList.append(h('li', {}, this.homeConversation(row, `u:${row.uuid}`, true)));
+    for (const row of unread.slice(0, unreadMax)) unreadList.append(h('li', {}, this.homeConversation(row, `u:${row.uuid}`, true)));
     const unreadBody: Child =
       unread.length === 0 ? h('div', { class: 'hm-calm' }, homeArt('mascot-small'), h('span', {}, h('b', {}, t('caughtUp')), h('span', {}, t('homeCaughtUpHint')))) : unreadList;
-    nodes.push(this.homeSection('hm-unread', 'chat', t('homeUnread'), unreadBody, unread.length > HOME_UNREAD ? t('homeMore', { count: unread.length - HOME_UNREAD }) : null));
+    nodes.push(this.homeSection('hm-unread', 'chat', t('homeUnread'), unreadBody, unread.length > unreadMax ? t('homeMore', { count: unread.length - unreadMax }) : null));
     // Mentions: who asked for the reader, with the words around it.
     const mentionList = h('ul', { class: 'hm-list', attrs: { 'aria-labelledby': 'hm-mentions' } });
     for (const item of mentions) {
@@ -1510,12 +1546,16 @@ export class ChatModule {
       mentionList.append(h('li', {}, button));
     }
     const mentionBody: Child = mentions.length === 0 ? h('p', { class: 'hm-none' }, t('homeNoMentions')) : mentionList;
-    nodes.push(this.homeSection('hm-mentions', 'at', t('homeMentions'), mentionBody, null));
+    if (!compact || mentions.length > 0) later.push(this.homeSection('hm-mentions', 'at', t('homeMentions'), mentionBody, null));
     if (recent.length > 0) {
       const recentList = h('ul', { class: 'hm-list', attrs: { 'aria-labelledby': 'hm-recent' } });
       for (const row of recent) recentList.append(h('li', {}, this.homeConversation(row, `r:${row.uuid}`, false)));
-      nodes.push(this.homeSection('hm-recent', 'clock', t('homeRecent'), recentList, null));
+      const section = this.homeSection('hm-recent', 'clock', t('homeRecent'), recentList, null);
+      if (compact) later.unshift(section);
+      else later.push(section);
     }
+    nodes.push(...later);
+    this.home.dataset.compact = compact ? 'true' : 'false';
     this.home.replaceChildren(...nodes);
     // One tab stop for the rows (↑ ↓ Home End move, Enter opens): the one that had focus, else the first.
     const rowsShown = [...this.home.querySelectorAll<HTMLElement>('.hm-row')];
@@ -2103,6 +2143,10 @@ const HOME_UNREAD = 8;
 const HOME_MENTIONS = 5;
 const HOME_RECENT = 5;
 const HOME_PEEK = 3;
+/** The compact window's reduced home (0.14.1): fewer rows. */
+const COMPACT_UNREAD = 5;
+const COMPACT_RECENT = 4;
+const COMPACT_MENTIONS = 3;
 
 /** One row of a keyed list: `sig` is everything it shows; the same key and sig keep the node. */
 interface Keyed {

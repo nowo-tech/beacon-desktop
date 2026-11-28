@@ -24,6 +24,8 @@ export interface SetupDeps {
   tasks: TasksModule | null;
   /** Tasks hidden by the server (`403 module_forbidden`): its step is passed over. */
   tasksHidden(): boolean;
+  /** The server does not offer tasks (0.14.1, Beacon before 1.183): the step is not shown at all. */
+  tasksUnavailable?(): boolean;
   /** Steps skipped (kept with the shell's preferences). */
   skipped(): readonly SetupStep[];
   /** Who is signed in and in which organization (UXA-23: the time step names them, not the server address). */
@@ -56,7 +58,7 @@ export class SetupView {
 
   /** The steps of this host (Tasks only where the host has it). */
   steps(): SetupStep[] {
-    return this.deps.tasks === null ? ['chat'] : ['chat', 'tasks'];
+    return this.deps.tasks === null || this.deps.tasksUnavailable?.() === true ? ['chat'] : ['chat', 'tasks'];
   }
 
   /** The step to do now, `null` when everything is connected or skipped. */

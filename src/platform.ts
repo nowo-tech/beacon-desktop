@@ -294,6 +294,14 @@ export interface TasksHost {
   connectBegin(): Promise<void>;
   /** Deletes the tasks token only (time and chat stay connected). */
   disconnect(): Promise<void>;
+  /**
+   * The server logout failed in a way worth one more try (network, `5xx`, `409`; 0.14.1, BDA13-L2): keeps the stored
+   * token for one retry at the next start, usable for nothing else (Rust `tasks_revoke_park`). Called before the token
+   * is deleted; `server` is the signed-in server (the Tauri app knows it already).
+   */
+  parkRevoke?(server: string): Promise<void>;
+  /** At start-up: the one retry of a parked server logout (Rust `tasks_revoke_retry`); then it is forgotten. */
+  retryRevoke?(): Promise<string>;
 }
 
 export interface Platform {
@@ -495,6 +503,8 @@ export interface BrowserHooks {
   /** Tasks (BD-3b): the stored tasks token and "Connect tasks" calls. */
   tasksToken: string | null;
   tasksConnectBegins: number;
+  /** A tasks token parked for one server logout retry (0.14.1). */
+  tasksRevokeParked: { server: string; token: string } | null;
   /** The fake stream sends a hint / changes mode. */
   chatHint(hint: unknown): void;
   chatMode(mode: ChatRealtimeMode): void;
@@ -541,6 +551,7 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
     chatRealtime: null,
     tasksToken: null,
     tasksConnectBegins: 0,
+    tasksRevokeParked: null,
     badge: 0,
     chatLinks: [],
     unsent: 0,
@@ -678,6 +689,17 @@ export function browserPlatform(version: string, fetchImpl: typeof fetch = (i, o
       hooks.tasksConnectBegins += 1;
     },
     disconnect: async () => void (hooks.tasksToken = null),
+    parkRevoke: async (server) => {
+      if (hooks.tasksToken !== null) hooks.tasksRevokeParked = { server, token: hooks.tasksToken };
+    },
+    // As Rust does it: taken out first (one retry at most), then one `POST logout` with that token.
+    retryRevoke: async () => {
+      const parked = hooks.tasksRevokeParked;
+      hooks.tasksRevokeParked = null;
+      if (parked === null) return 'none';
+      const response = await fetchImpl(`${parked.server.replace(/\/+$/, '')}/api/task-board/v1/logout`, { method: 'POST', headers: { Authorization: `Bearer ${parked.token}`, Accept: 'application/json' }, credentials: 'omit', cache: 'no-store', redirect: 'error' }).catch(() => null);
+      return response === null ? 'failed' : response.ok ? 'revoked' : response.status === 404 ? 'gone' : 'failed';
+    },
   };
   return {
     kind: 'browser',

@@ -657,6 +657,9 @@ export function createMockServer(options = {}) {
         const family = body.family ?? 'time';
         const known = family === 'tasks' ? TASKS_SCOPES : family === 'chat' ? (state.config.chatReadOnlyFamily ? ['chat:read'] : CHAT_SCOPES) : state.config.meetingsScope ? [...ALL_SCOPES, MEETINGS_SCOPE] : ALL_SCOPES;
         const scopes = body.scopes ?? [...ALL_SCOPES];
+        // `chatOnly` mimics Beacon before 1.183 (scope families `time` and `chat` only): the `tasks` family is unknown.
+        state.tasksDeviceRequests = (state.tasksDeviceRequests ?? 0) + (family === 'tasks' ? 1 : 0);
+        if (family === 'tasks' && state.config.chatOnly) return error(res, 400, 'invalid_scope', 'Unknown scope family.');
         if (!['time', 'chat', 'tasks'].includes(family) || !Array.isArray(scopes) || scopes.length === 0 || scopes.some((scope) => !known.includes(scope))) {
           return error(res, 400, 'invalid_scope', 'Unknown or empty scope list.');
         }
@@ -771,6 +774,7 @@ export function createMockServer(options = {}) {
           timers: Object.fromEntries(state.timers),
           entries: Object.fromEntries(state.entries),
           tokens: state.tokens.size,
+          tasksDeviceRequests: state.tasksDeviceRequests ?? 0,
         });
       case 'POST token/revoke':
         state.tokens.clear();

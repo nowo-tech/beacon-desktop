@@ -54,6 +54,8 @@ export interface TasksModuleDeps {
   onConnection(connected: boolean): void;
   /** `403 module_forbidden`: hide (true) or show (false) the module; the token is kept. */
   onForbidden(forbidden: boolean): void;
+  /** What the server offers changed (`offered`): the shell shows or hides the module (0.14.1). */
+  onAvailability?(): void;
   /** The "Connect" card was drawn (its device-flow state changed): the shell's guided first run follows (UX batch 6). */
   onConnectRender?(): void;
   startTimer(task: TaskTimerRef): Promise<void>;
@@ -86,6 +88,14 @@ type NoticeKind = 'write' | 'rate' | 'info';
 export const NOTICE_MS = 8000;
 
 const PREFS_KEY = 'beacon-desktop-tasks-view';
+/**
+ * Whether a server offers the `tasks` scope family, by server origin (0.14.1): `true` / `false` as Beacon last answered
+ * (`device/code` for the family, or a stored tasks token). The family is registered per Beacon install, and the
+ * device-code request names no organization, so the origin is the whole key. No account data.
+ */
+export const OFFER_KEY = 'beacon-desktop-tasks-offer';
+/** How long the start-up probe of the `tasks` family may take before the module keeps what it knew. */
+export const PROBE_TIMEOUT_MS = 3000;
 export const POLL_SHOWN_MS = 20_000;
 export const POLL_MINE_MS = 60_000;
 export const POLL_HIDDEN_MS = 300_000;
@@ -104,6 +114,30 @@ function loadPrefs(storage: Storage | undefined): ViewPrefs {
   }
 }
 
+function loadOffers(storage: Storage | undefined): Record<string, boolean> {
+  try {
+    const raw = JSON.parse(storage?.getItem(OFFER_KEY) ?? 'null') as unknown;
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    return Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'));
+  } catch {
+    return {};
+  }
+}
+
+/** The origin of a server URL (the key of {@link OFFER_KEY}), `null` for anything that is not one. */
+function originOf(server: string): string | null {
+  try {
+    return new URL(server).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** A server without the `tasks` scope family: `400 invalid_scope` on `device/code` (Beacon before 1.183), or `404`. */
+function refusesFamily(error: unknown): boolean {
+  return (error instanceof DeviceFlowError && error.reason === 'invalid_scope') || (error instanceof ApiError && (error.code === 'invalid_scope' || error.status === 404));
+}
+
 /** A queued write whose context is gone (BDA13-V1): nothing is sent, nothing shown. */
 class StaleWrite extends Error {}
 
@@ -117,6 +151,8 @@ export class TasksModule {
   connected = false;
   /** `403 module_forbidden`: the module is hidden, the token kept. */
   forbidden = false;
+  /** Servers probed in this run (at most once per app start, 0.14.1). */
+  private readonly probed = new Set<string>();
   me: TasksMe | null = null;
   api: TasksApi | null = null;
   connect: ConnectState = { kind: 'idle', message: null };
@@ -193,6 +229,8 @@ export class TasksModule {
       onDismiss: (message) => this.dismissedMessage(message),
       focusAway: () => this.focusAfterBanner(),
       clock: this.clock,
+      // 0.14.1: the band is reserved in tall windows only; below, a message overlays the bottom of the page.
+      overlay: true,
     });
     this.body = h('div', { class: 'tk-body', id: 'tasks-body' });
     // UXA-27: the module's content is its `main` landmark (one visible at a time: the other modules' are hidden).
@@ -217,6 +255,64 @@ export class TasksModule {
 
   private today(): string {
     return localDate(this.now());
+  }
+
+  // ---- what the server offers (0.14.1) ------------------------------------------------------------------------------
+
+  /**
+   * Whether the signed-in server is known **not** to offer tasks (Beacon before 1.183: no `tasks` scope family). The
+   * shell then hides the module up front: tab, rail entry, `Ctrl/Cmd+2`, switcher entries and the first-run step.
+   * Unknown (never asked) counts as offered, as before.
+   */
+  get unavailable(): boolean {
+    const origin = originOf(this.deps.server() ?? '');
+    return origin !== null && loadOffers(this.deps.storage)[origin] === false;
+  }
+
+  private remember(origin: string, offered: boolean): void {
+    const offers = loadOffers(this.deps.storage);
+    if (offers[origin] === offered) return;
+    offers[origin] = offered;
+    try {
+      this.deps.storage?.setItem(OFFER_KEY, JSON.stringify(offers));
+    } catch {
+      // Storage unavailable: asked again at the next start.
+    }
+    this.deps.onAvailability?.();
+  }
+
+  /**
+   * Learns whether the server offers tasks, at most once per app start and server: a stored tasks token says yes; a
+   * server known to offer them is not asked; else one chained `device/code` request for the `tasks` family answers
+   * (`invalid_scope` / `404`: not offered; a code: offered, and the unused code simply expires). A network error or a
+   * slow answer ({@link PROBE_TIMEOUT_MS}) keeps what was known. Never throws.
+   */
+  async discover(): Promise<void> {
+    const server = this.deps.server();
+    const origin = originOf(server ?? '');
+    if (origin === null || this.probed.has(origin)) return;
+    this.probed.add(origin);
+    try {
+      if ((await this.deps.host.token()) !== null) {
+        this.remember(origin, true);
+        return;
+      }
+      if (loadOffers(this.deps.storage)[origin] === true) return;
+      const api = this.deps.timeApi();
+      if (api === null) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<'timeout'>((resolve) => {
+        timer = setTimeout(() => resolve('timeout'), PROBE_TIMEOUT_MS);
+      });
+      try {
+        const answer = await Promise.race([api.tasksDeviceCode('Beacon Desktop').then(() => 'offered' as const), timeout]);
+        if (answer === 'offered' && this.deps.server() === server) this.remember(origin, true);
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (error) {
+      if (refusesFamily(error) && this.deps.server() === server) this.remember(origin, false);
+    }
   }
 
   // ---- connection ---------------------------------------------------------------------------------------------------
@@ -273,8 +369,35 @@ export class TasksModule {
     this.written.clear();
   }
 
-  /** "Disconnect tasks" (Settings): the tasks token only; time and chat stay. */
+  /** How long a best-effort server logout may take (ms). */
+  logoutTimeoutMs = 3000;
+
+  /**
+   * Revokes the tasks token on the server before it is deleted here (TaskBoard 3.7.0 `POST logout`, audit BDA13-L2), as
+   * the chat does: best effort, short timeout. A server before 3.7.0 (`404`) has nothing to revoke. A network error,
+   * `5xx`, `409` or no answer in time parks the token for one retry at the next start (the host keeps it for that
+   * request only). Never throws and never blocks the local disconnect or sign-out.
+   */
+  async revokeOnServer(): Promise<void> {
+    try {
+      const server = this.deps.server();
+      const token = this.api === null && server !== null && this.connected ? await this.deps.host.token() : null;
+      const api = this.api ?? (server !== null && token !== null ? new TasksApi({ baseUrl: server, token, context: null, fetchImpl: this.deps.fetchImpl }) : null);
+      if (api === null || server === null) return;
+      if ((await api.logout(this.logoutTimeoutMs)) === 'retry') await this.deps.host.parkRevoke?.(server);
+    } catch {
+      // Best effort: the token is deleted locally anyway.
+    }
+  }
+
+  /** At start-up, once: the retry of a server logout parked by the previous run (the host forgets it after). */
+  async retryParkedLogout(): Promise<void> {
+    await this.deps.host.retryRevoke?.().catch(() => undefined);
+  }
+
+  /** "Disconnect tasks" (Settings): revoked on the server (best effort), then deleted here; time and chat stay. */
   async disconnect(): Promise<void> {
+    await this.revokeOnServer();
     await this.deps.host.disconnect();
     this.setDisconnected(null);
   }
@@ -325,10 +448,15 @@ export class TasksModule {
       const token = await this.deps.host.token();
       if (token === null) throw new Error('not stored');
       this.connect = { kind: 'idle', message: null };
+      const origin = originOf(server);
+      if (origin !== null) this.remember(origin, true);
       this.deps.announce(this.t('connectDone'));
       await this.start(server, token);
     } catch (error) {
       if (abort.signal.aborted && !(error instanceof DeviceFlowError && error.reason !== 'cancelled')) return;
+      // Not offered here (0.14.1): remembered, so the module is hidden from now on; this answer still says why.
+      const origin = originOf(server);
+      if (refusesFamily(error) && origin !== null) this.remember(origin, false);
       const message =
         error instanceof DeviceFlowError
           ? error.reason === 'expired'

@@ -126,6 +126,14 @@ svg.i.lg { width: 20px; height: 20px; }
 .titlebar .tb-search kbd { background: transparent; color: var(--chrome-ink-2); border-color: rgb(255 255 255 / 18%); }
 .tb-search[hidden] { display: none; }
 .tb-right { display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
+/* "Finish setup" (0.14.1): a quiet chip after the organization; the label goes in the compact window (icon dot stays). */
+.tb-setup { display: inline-flex; align-items: center; flex: none; height: 28px; border: 1px solid rgb(255 255 255 / 22%); border-radius: 14px; overflow: hidden; }
+:is(.titlebar, .rail) .tb-setup-go { display: inline-flex; align-items: center; gap: 6px; height: 100%; min-height: 0; padding: 0 6px 0 10px; border: 0; background: transparent; color: var(--chrome-ink); font: inherit; font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; cursor: pointer; min-width: 28px; justify-content: center; }
+:is(.titlebar, .rail) .tb-setup-x { display: grid; place-items: center; width: 28px; height: 100%; min-height: 0; padding: 0; border: 0; border-left: 1px solid rgb(255 255 255 / 14%); background: transparent; color: var(--chrome-ink-2); cursor: pointer; }
+:is(.titlebar, .rail) :is(.tb-setup-go, .tb-setup-x):hover { background: var(--chrome-hover); color: var(--chrome-ink); }
+:is(.titlebar, .rail) .tb-setup :focus-visible { outline: 2px solid var(--focus-chrome); outline-offset: -2px; }
+.tb-setup-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--signal-dot); flex: none; }
+.rail .rail-setup { display: none; }
 .titlebar .tb-btn { display: inline-grid; place-items: center; width: 28px; height: 28px; color: var(--chrome-ink-2); }
 .titlebar .tb-btn:hover { background: var(--chrome-hover); color: var(--chrome-ink); }
 .timer-pill { display: flex; align-items: center; gap: 2px; height: 28px; min-width: 0; border-radius: var(--r-sm); background: rgb(255 255 255 / 6%); border: 1px solid rgb(255 255 255 / 10%); margin-right: 4px; }
@@ -232,7 +240,13 @@ svg.i.lg { width: 20px; height: 20px; }
 :where(#mod-chat, #mod-tasks) .btn-ghost { height: 30px; min-width: 30px; padding: 0 8px; color: var(--ink-2); display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: var(--fs-sm); font-weight: 500; }
 :where(#mod-chat, #mod-tasks) .btn-ghost:hover { background: var(--hover); color: var(--ink); }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
-.msgs-wrap { position: relative; flex: 1 1 auto; min-height: 0; display: grid; }
+.msgs-wrap { position: relative; flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+/* The status strip's slot is the first row (36 px in tall windows, nothing when it overlays: 0.14.1). */
+.msgs-wrap > .msgs, .msgs-wrap > .ch-home { grid-row: 2; grid-column: 1; }
+/* A message overlaying the timeline (short windows): room under the last message, focus kept clear, the pill lifted. */
+.msgs-wrap:has(> .status-strip[data-mode='overlay'][data-tone]) > .msgs { padding-bottom: 44px; scroll-padding-bottom: 44px; }
+.msgs-wrap:has(> .status-strip[data-mode='overlay'][data-tone]) > .ch-home { padding-bottom: 64px; scroll-padding-bottom: 44px; }
+#mod-chat .msgs-wrap:has(> .status-strip[data-mode='overlay'][data-tone]) .new-pill { bottom: 48px; }
 .msgs { overflow-y: auto; min-height: 0; padding: 8px 0 12px; overflow-anchor: none; overscroll-behavior: contain; }
 .msgs:focus-visible { outline: 2px solid var(--focus); outline-offset: -3px; }
 .msg-list { list-style: none; margin: 0; padding: 0; }
@@ -469,6 +483,8 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
   .thread { position: absolute; right: 0; top: 0; bottom: 0; z-index: 20; box-shadow: var(--shadow-lg); max-width: 100%; }
 }
 @media (max-width: 760px) {
+  .titlebar .tb-setup { display: none; }
+  .rail .rail-setup { display: flex; align-items: center; }
   .tb-main { grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; padding: 0 6px 0 var(--sp-2); }
   .brand span:last-child, .tb-search kbd, .tp-task { display: none; }
   .tb-search span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -480,8 +496,11 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
   .rail-tabs { flex-direction: row; gap: 8px; }
   .chat { grid-template-columns: minmax(0, 1fr); }
   .chat .side { display: none; }
-  .chat.list-open .side, .chat:has(.chat-main[data-open='false']) .side { display: flex; }
-  .chat.list-open .chat-main, .chat:has(.chat-main[data-open='false']) .chat-main { display: none; }
+  /* 0.14.1: with no conversation open the compact window shows its reduced home; "All conversations" opens the list. */
+  .chat.list-open .side { display: flex; }
+  .chat.list-open .chat-main { display: none; }
+  #mod-chat .ch-home { padding: 14px 12px 20px; gap: 16px; }
+  #mod-chat .ch-home .hm-calm .mascot { display: none; }
   .ch-head .ch-back { display: inline-flex; }
   .ch-topic, .ch-tools .members { display: none; }
   .thread { width: 100% !important; }
@@ -669,6 +688,9 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .composer.scrolled .c-field { box-shadow: inset 0 10px 8px -8px color-mix(in srgb, var(--ink) 24%, transparent); }
 
 /* The chat home view: unread, mentions, recent (owner approval 2026-11-27, replaces "Pick a conversation"). */
+.hm-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.hm-head-l { min-width: 0; }
+#mod-chat .hm-all { flex: none; display: inline-flex; align-items: center; gap: 6px; }
 .msgs[hidden], .ch-home[hidden] { display: none; }
 .ch-home { overflow-y: auto; min-height: 0; padding: 20px 24px 28px; display: flex; flex-direction: column; gap: 22px; overscroll-behavior: contain; }
 .hm-head h1 { margin: 0; font: 700 var(--fs-lg)/1.25 var(--font-display); color: var(--ink); }

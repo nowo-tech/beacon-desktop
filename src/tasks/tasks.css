@@ -27,7 +27,10 @@
 .tasks-mod .qa-ico { color: var(--ink-3); display: grid; }
 .tasks-mod .qa-preview { display: flex; gap: 4px; overflow: hidden; }
 /* One message at a time, one line (UXA-15): the most severe, with Retry where it helps and a close button. */
-.tasks-mod .tk-body { min-height: 0; display: grid; }
+.tasks-mod .tk-body { min-height: 0; display: grid; grid-row: 4; }
+/* 0.14.1: the status strip overlays the page's bottom in short windows (feedback.css); focus kept clear of it. */
+.tasks-mod .page { position: relative; }
+.tasks-mod .page:has(> .status-strip[data-mode='overlay'][data-tone]) .tk-body :where(*) { scroll-padding-bottom: 44px; }
 .tasks-mod .skel-row { background: var(--surface-3); }
 .tasks-mod .muted { color: var(--ink-3); font-size: var(--fs-sm); margin: 0; }
 .tasks-mod .muted.small { font-size: var(--fs-xs); margin-top: 6px; }
