@@ -579,7 +579,7 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 .titlebar .wc-close:hover, .titlebar .wc-close:active { background: #c42b1c; color: #ffffff; }
 .titlebar .wc-btn:focus-visible { outline-offset: -3px; }
 .wc-glyph { fill: none; stroke: currentColor; stroke-width: 1; shape-rendering: crispEdges; }
-.win-controls[data-os='linux'] { align-items: center; gap: 8px; padding: 0 var(--sp-2) 0 4px; }
+.win-controls[data-os='linux'] { align-items: center; gap: 8px; padding: 0 10px 0 4px; } /* window chrome geometry, not on the spacing grid (UXA-45) */
 .titlebar .win-controls[data-os='linux'] .wc-btn { width: 24px; height: 24px; border-radius: 50%; background: rgb(255 255 255 / 9%); }
 .titlebar .win-controls[data-os='linux'] .wc-btn:hover { background: rgb(255 255 255 / 16%); }
 .titlebar .win-controls[data-os='linux'] .wc-close:hover { background: #c42b1c; }

@@ -1562,7 +1562,7 @@ mod tests {
         declared.sort();
         assert_eq!(both, declared);
         // The same list as `generate_handler!`.
-        let source = include_str!("lib.rs");
+        let source = include_str!("lib.rs").replace("\r\n", "\n"); // Windows checkouts may have CRLF
         let start = source.find("generate_handler![").unwrap();
         let end = start + source[start..].find(']').unwrap();
         let mut registered: Vec<&str> = source[start + 18..end]
@@ -1613,7 +1613,7 @@ mod tests {
     /// One tray icon per process: built in one place, guarded, and the webview cannot create another one.
     #[test]
     fn the_tray_icon_is_created_once() {
-        let source = include_str!("lib.rs");
+        let source = include_str!("lib.rs").replace("\r\n", "\n"); // Windows checkouts may have CRLF
         let builder = ["TrayIcon", "Builder::"].concat();
         assert_eq!(source.matches(&builder).count(), 1, "one tray builder");
         let calls = ["build_tray", "(app)?"].concat();
@@ -1641,7 +1641,7 @@ mod tests {
     /// The single-instance plugin comes first, before any plugin that could start something.
     #[test]
     fn single_instance_is_the_first_plugin() {
-        let source = include_str!("lib.rs");
+        let source = include_str!("lib.rs").replace("\r\n", "\n"); // Windows checkouts may have CRLF
         let run = source.find("pub fn run()").unwrap();
         let first = run + source[run..].find(".plugin(").unwrap();
         assert!(source[first..].starts_with(".plugin(tauri_plugin_single_instance::init("));
@@ -1685,7 +1685,7 @@ mod tests {
         }
         // Closing the main window still only hides it (the tray keeps the app); never destroy.
         assert!(!main.contains(&"core:window:allow-destroy".to_string()));
-        let source = include_str!("lib.rs");
+        let source = include_str!("lib.rs").replace("\r\n", "\n"); // Windows checkouts may have CRLF
         assert!(source.contains(
             "WindowEvent::CloseRequested { api, .. } if window.label() == \"main\" => {\n                api.prevent_close();"
         ));
