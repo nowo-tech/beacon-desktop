@@ -186,6 +186,53 @@ describe('shell and chat module', () => {
     ui.platform.hooks.declineSignIn = false;
   });
 
+  it('shows and copies the validated approval page, with the browser hint and a polite "Link copied" (0.12.1)', async () => {
+    const ui = await signedIn();
+    ui.$<HTMLButtonElement>('#tab-chat').click();
+    ui.$<HTMLButtonElement>('#chat-connect').click();
+    await until(() => ui.$('#chat-user-code') !== null, 'the chat code');
+    const shown = ui.$('#chat-url').textContent ?? '';
+    expect(shown).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/device/);
+    expect(ui.$('#chat-browser-hint').textContent).toBe('Open it in the browser where you are signed in to Beacon.');
+    expect(ui.$('#chat-copy-link').getAttribute('aria-describedby')).toBe('chat-browser-hint');
+    const note = ui.$('#chat-link-copied');
+    expect(note.getAttribute('aria-live')).toBe('polite');
+    expect(note.textContent).toBe('');
+    ui.$<HTMLButtonElement>('#chat-copy-link').click();
+    await until(() => ui.$('#chat-link-copied').textContent === 'Link copied', 'the copied note');
+    expect(ui.platform.hooks.copied.at(-1)).toBe(shown);
+    // A refused clipboard says nothing.
+    ui.$('#chat-link-copied').textContent = '';
+    ui.platform.hooks.copyFails = true;
+    ui.$<HTMLButtonElement>('#chat-copy-link').click();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(ui.$('#chat-link-copied').textContent).toBe('');
+    ui.platform.hooks.copyFails = false;
+    await env.control('device/approve', { userCode: ui.$('#chat-user-code').textContent });
+    await until(() => ui.$('.side .conv') !== null, 'the conversations');
+  });
+
+  it('says why Connect chat failed: expired time session (with the action), too many attempts, network (0.12.1)', async () => {
+    const ui = await signedIn();
+    ui.$<HTMLButtonElement>('#tab-chat').click();
+    await env.control('config', { failNext: { status: 429, error: 'rate_limited', retryAfter: 42 } });
+    ui.$<HTMLButtonElement>('#chat-connect').click();
+    await until(() => ui.$('.cc-error') !== null, 'the 429');
+    expect(ui.$('.cc-error').textContent).toBe('Too many attempts. Wait 42 s and try again.');
+    expect(ui.$('#chat-reconnect-time')).toBeNull();
+    await env.control('config', { failNext: { status: 503, error: 'server_error' } });
+    ui.$<HTMLButtonElement>('#chat-connect').click();
+    await until(() => ui.$('.cc-error')?.textContent?.includes('Check your network') === true, 'the 5xx');
+    await env.control('config', { failNext: { status: 401, error: 'invalid_token' } });
+    ui.$<HTMLButtonElement>('#chat-connect').click();
+    await until(() => ui.$('#chat-reconnect-time') !== null, 'the 401');
+    expect(ui.$('.cc-error').textContent).toBe('Your time tracking session expired. Connect it again, then connect chat.');
+    expect(ui.$('#chat-connect')).toBeNull();
+    ui.$<HTMLButtonElement>('#chat-reconnect-time').click();
+    await until(() => ui.app.state.session === null, 'the sign-out');
+    await until(() => ui.$('#server') !== null, 'the sign-in screen');
+  });
+
   it('opens a conversation, its thread, keyboard navigation, history, read marks and Esc', async () => {
     const ui = await connected();
     await inOrg(ui);

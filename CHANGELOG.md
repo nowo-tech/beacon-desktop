@@ -96,6 +96,30 @@ Pre-release audit BDA13 of the 0.13.0 candidate (nothing here affects 0.12.0 or 
   to revoke it on the server yet (chat has `POST …/chat/v1/logout`); it stays valid until it expires. To end it at
   once, revoke the device in Beacon (Account → Security). The app will call the route once TaskBoard offers one.
 
+## [0.12.1] - 2026-11-27
+
+Sign-in and "Connect chat" when the browser that opens is not the one signed in to Beacon (the default browser
+opened the approval page in a browser without the Beacon session, so the code could not be approved there).
+
+### Added
+
+- **The approval page as text, Copy link and a hint** on both device-code screens (sign-in to time tracking and
+  *Connect chat*): the page is shown as selectable text, a **Copy link** button sits next to *Copy code*, and under it
+  "Open it in the browser where you are signed in to Beacon" (English and Spanish). Only the page already validated for
+  opening is shown and copied (https on the signed-in server's host, without user info or secret parameters, as
+  *Copy link* everywhere else), through the clipboard plugin. "Link copied" is announced in a polite live region
+  (time: the status line; chat: the connect card).
+
+### Fixed
+
+- **Connect chat says why it could not start** (`POST device/code` of the chained flow): `401` → the time tracking
+  session expired, with **Connect time tracking again** (signs out of time tracking; sign in, then connect chat);
+  `429` → "Too many attempts. Wait N s", N from `Retry-After` (seconds or HTTP date, capped at 30 minutes); the generic
+  "Check your network" text is kept for network errors and `5xx`. The time sign-in has its own error catalogue, which
+  already said "too many attempts" with the wait for `429`; its device code is requested before any session exists,
+  so `401` does not apply there.
+- The *Connect chat* card no longer says "Read-only in this version" (sending arrived in 0.12.0).
+
 ## [0.12.0] - 2026-11-27
 
 BD-3b, first part (design `docs/design/BEACON_DESKTOP.md` §7.2): chat writes. Needs ChatKitBundle

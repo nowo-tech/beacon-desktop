@@ -162,6 +162,16 @@ export class Shell {
       timeApi: () => this.app?.timeApi() ?? null,
       server: () => this.app?.state.session?.server ?? null,
       openVerification: (url) => void this.app?.openVerification(url),
+      verificationLink: (url) => this.app?.verificationLink(url) ?? null,
+      copyText: async (text) => {
+        try {
+          await this.platform.copyText(text);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      reconnectTime: () => void this.app?.reconnectTime(),
       copy: (text) => this.copy(text),
       announce: (text) => this.announce(text),
       onContexts: (contexts, current, remember) => {
