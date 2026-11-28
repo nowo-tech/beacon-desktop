@@ -1,6 +1,6 @@
 {
   "name": "time-track-desktop",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "private": true,
   "description": "Beacon Desktop, formerly TimeTrack desktop (Tauri 2) for symfony-beacon (TimeTrackBundle 1.10 client API, 1.9 compatible).",
   "license": "MIT",
