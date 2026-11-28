@@ -48,8 +48,8 @@ test.describe('first run', () => {
       await control('device/approve', { userCode: await page.locator('#setup-code').textContent() });
       await expect(page.locator('#setup-step-tasks')).toHaveAttribute('aria-current', 'step');
       await expect(page.locator('#setup-step-chat')).toHaveClass(/done/);
-      await page.locator('#setup-connect').click();
-      await expect(page.locator('#setup-code')).toBeVisible();
+      // 0.14.1: the Tasks code is asked for as soon as Chat is approved (no click).
+      await expect(page.locator('#setup-step-tasks #setup-code')).toBeVisible();
       await control('device/approve', { userCode: await page.locator('#setup-code').textContent() });
       await expect(card).toBeHidden();
       await expect(page.locator('#mod-chat')).toBeVisible();

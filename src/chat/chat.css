@@ -643,6 +643,9 @@ a.ref:hover { border-color: var(--ink-3); background: var(--surface-2); }
 /* UXA-9: below 1100 px the search becomes its icon (same Ctrl+K) and the brand its mark, before any name is cut. */
 @media (max-width: 1100px) {
   .tb-main { grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
+  /* "Finish setup" gives its room to the organization's name: its dot and × stay, the label is for screen readers. */
+  .titlebar .tb-setup-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .titlebar .tb-setup-go { padding: 0; }
   .titlebar .brand > span:last-child, .titlebar .tb-search kbd { display: none; }
   .titlebar .tb-search span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .titlebar .tb-search { width: 32px; padding: 0; justify-content: center; }
